@@ -2,10 +2,8 @@
 //!
 //! The wire values live in `lyrel-protocol`; this crate owns the sampler and
 //! injects it into the full local Host at construction. Requests share one
-//! sampler per server process. Only the CPU and RAM APIs are refreshed;
-//! process enumeration is never enabled. A request worker performs the
-//! blocking platform work at most once a second, without a sampling thread
-//! or polling work when no client wants metrics.
+//! sampler per server process. CPU, RAM, GPU and network counters are read
+//! on demand without a polling thread.
 use std::io;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -14,11 +12,16 @@ use sysinfo::{MemoryRefreshKind, System};
 
 pub use lyrel_protocol::host::metrics::*;
 
+pub(super) mod gpu;
+pub(crate) mod network;
+
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 const IDLE_RESET: Duration = Duration::from_secs(10);
 
 struct Sampler {
     system: System,
+    gpu: gpu::GpuSampler,
+    network: network::Sampler,
     snapshot: HostMetrics,
     refreshed: Instant,
 }
@@ -42,6 +45,8 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
         system.refresh_cpu_usage();
         *shared = Some(Sampler {
             system,
+            gpu: gpu::GpuSampler::open(),
+            network: network::Sampler::new(now),
             snapshot: HostMetrics::new(
                 hostname,
                 lyrel_protocol::daemon::control::server_instance(),
@@ -73,7 +78,7 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
                 "the host OS did not return valid whole-machine CPU/RAM data".into(),
             )
         } else {
-            MetricsState::Sample(HostSample::new(
+            let sample = HostSample::new(
                 cpu,
                 used,
                 total,
@@ -82,7 +87,19 @@ pub(crate) fn sample_local() -> io::Result<HostMetrics> {
                     .unwrap_or_default()
                     .as_millis()
                     .min(u128::from(u64::MAX)) as u64,
-            ))
+            );
+            // A missing GPU reading downgrades only the GPU slot; the CPU
+            // and RAM numbers above stay on screen.
+            let sample = match sampler.gpu.sample() {
+                #[cfg(windows)]
+                gpu::GpuReading::Busy(percent) => sample.with_gpu(percent),
+                gpu::GpuReading::Unavailable(reason) => sample.with_gpu_unavailable(reason),
+            };
+            let sample = match sampler.network.sample(now) {
+                Some(throughput) => sample.with_network(throughput),
+                None => sample,
+            };
+            MetricsState::Sample(sample)
         };
         sampler.snapshot.set_state(state);
         sampler.refreshed = now;

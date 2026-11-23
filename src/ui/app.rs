@@ -231,6 +231,7 @@ pub struct LyrelApp {
     _bounds_watch: Subscription,
     _git_status_watch: Subscription,
     _pane_liveness_watch: Subscription,
+    _caffeine_watch: Subscription,
     _appearance_watch: Subscription,
     pub(crate) search: SearchState,
     /// Preset that was live when the search's theme picker started previewing.
@@ -240,12 +241,11 @@ pub struct LyrelApp {
     pub(crate) session: SessionLifecycle,
     pub(crate) renaming: Option<Renaming>,
     pub(crate) worktree_prompt: Option<crate::ui::worktree_prompt::WorktreePrompt>,
-    /// The shared worktree picker, while open. One instance serves both
-    /// Git entrances — the Changes header and the status bar's indicator —
-    /// because both entrances are the same choice, not two pickers (#351).
-    pub(crate) worktree_picker: Option<crate::ui::worktree_picker::WorktreePicker>,
+    /// The worktree removal confirmation, while it shows. Both Git menus —
+    /// the Changes panel's branch menu and the status bar's checkout menu —
+    /// open it for the checkout their removal entry names (#352).
+    pub(crate) worktree_removal: Option<crate::ui::worktree_picker::WorktreeRemoval>,
     pub(crate) status_checkout_focus: gpui_kit::FocusHandle,
-    pub(crate) changes_worktree_focus: gpui_kit::FocusHandle,
     pub(crate) maximized: Option<Entity<TerminalView>>,
     pub(crate) mod_hint_badges: bool,
     /// Generation that owns the pending badge fade-out, independent of later
@@ -281,6 +281,10 @@ pub struct LyrelApp {
     _file_tree_events: Subscription,
     _file_tree_observer: Subscription,
     pub(crate) panel_search: crate::ui::panel_search::PanelSearchState,
+    /// The Activity Monitor's per-pane UI state — filter field, sibling
+    /// sort, and the expanded/selected sets. The snapshot itself lives in
+    /// `right_panel`, shared with Info's Ports section.
+    pub(crate) monitor: crate::ui::panel_monitor::MonitorState,
     pub(crate) editor: Entity<lyrel_workbench_editor::code_editor::EditorPanelState>,
     _editor_events: Subscription,
     _editor_observer: Subscription,
@@ -301,6 +305,10 @@ pub struct LyrelApp {
     pub(crate) right_panel_nav_return: Option<gpui_kit::FocusHandle>,
     pub(crate) right_panel_nav_wait: Cell<u8>,
     pub(crate) right_panel_nav_renders: Cell<u8>,
+    /// The Session History tool's view state: which directory it follows and
+    /// the listing bound to it. The list's keyboard stop lives beside it.
+    pub(crate) session_history: crate::ui::session_history::SessionHistoryPanel,
+    pub(crate) session_history_focus: gpui_kit::FocusHandle,
     pub(crate) sidebar_collapsed: bool,
     /// Panel boundary slides in flight, one slot per `PanelBoundary`. A toggle
     /// flips the settled state immediately and parks the visual seam's journey
@@ -383,7 +391,14 @@ pub struct LyrelApp {
     pub(crate) group_rename: Option<GroupRename>,
     window_title: std::cell::RefCell<String>,
     pub(crate) status_clock: Entity<crate::ui::status_bar::Clock>,
-    pub(crate) status_metrics: Option<Entity<crate::ui::host_metrics::HostMetricsView>>,
+    /// The shared host-metrics sampler this window demands; held only while
+    /// the title bar or the monitor shows its host (#373).
+    pub(crate) metric_view: Option<Entity<crate::ui::host_metrics::HostMetricsView>>,
+    /// The Lyrel component-usage sampler the monitor's resource section
+    /// demands; held only while that section is on screen (#377). The title
+    /// bar never holds it, so it never pays for process sampling.
+    pub(crate) lyrel_usage_view: Option<Entity<crate::ui::lyrel_usage::LyrelUsageView>>,
+    pub(crate) disk_view: Option<Entity<crate::ui::host_disk::HostDiskView>>,
     pub(crate) notification_bell: Entity<crate::ui::notification_history::NotificationBell>,
     pub(crate) program_attention: crate::ui::program_attention::ProgramAttention,
     pub(crate) status_document_focus: Option<(TabId, bool)>,
@@ -1702,7 +1717,7 @@ impl LyrelApp {
         );
     }
 
-    fn focus_leaf(&self, leaf: &PaneSlot, window: &mut Window, cx: &mut App) {
+    pub(crate) fn focus_leaf(&self, leaf: &PaneSlot, window: &mut Window, cx: &mut App) {
         let handle = leaf.focus_handle(cx);
         window.focus(&handle, cx);
     }
@@ -1731,6 +1746,11 @@ impl LyrelApp {
             }
             PendingLaunch::Prepared(command) => {
                 crate::ui::agent_launch::run_prepared_when_ready(&slot, command, cx)
+            }
+            PendingLaunch::HistoryPrepared(command, prepared) => {
+                let mut prepared = *prepared;
+                prepared.command = Some(command);
+                self.run_history_prepared_when_ready(slot.clone(), prepared, window, cx)
             }
             PendingLaunch::Resume {
                 agent,
@@ -2477,26 +2497,34 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.split_slot(axis, spawn, window, cx);
+        self.split_slot(axis, spawn, None, window, cx);
     }
 
     /// [`Self::split_into`], answering with the pane it placed, or `None`
-    /// when nothing was placed.
+    /// when nothing was placed. `cwd` overrides the directory the split would
+    /// inherit from its source pane — history restoration passes the saved
+    /// session's source directory so the new pane lands where the session
+    /// belongs, not wherever the busy pane happened to be.
     pub(crate) fn split_slot(
         &mut self,
         axis: Axis,
         spawn: Option<SpawnAs>,
+        cwd: Option<std::path::PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<PaneSlot> {
-        let request = self
-            .tabs
-            .get(self.tabs.active_index())?
-            .prepare_split(spawn, window, cx)?;
+        let workspace_override = cwd.as_ref().map(|_| self.window_workspace(cx));
+        let request = self.tabs.get(self.tabs.active_index())?.prepare_split(
+            spawn,
+            cwd.as_deref(),
+            window,
+            cx,
+        )?;
         if !self.guard_local_spawn(window, cx) {
             return None;
         }
         let (tab_id, target, spawn, cwd, workspace) = request.into_parts();
+        let workspace = workspace_override.unwrap_or(workspace);
         let new = match spawn {
             SpawnAs::Ssh(spec) => {
                 Self::new_terminal_native(self.font_size, self.workspace, cwd, spec, window, cx)
@@ -2602,6 +2630,8 @@ impl LyrelApp {
                         cx,
                     );
                 }
+                // A split pane went away with its agents; re-evaluate the hold.
+                crate::ui::caffeine::CaffeineState::agents_changed(cx);
                 self.focus_active(window, cx);
                 self.save_session(cx);
                 cx.notify();
@@ -3532,6 +3562,9 @@ impl LyrelApp {
             .flatten();
         let sidebar_had_focus = self.sidebar_nav_focus.is_focused(window);
         self.tabs.remove(index);
+        // The closed tab's Working agents went with it; automatic mode
+        // re-evaluates once this update unwinds.
+        crate::ui::caffeine::CaffeineState::agents_changed(cx);
         if navigation_on_closing {
             self.sidebar_nav_target = navigation_successor;
             self.sidebar_nav_settle(cx);
@@ -4430,8 +4463,8 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.cancel_worktree_picker(window, cx);
-        if self.worktree_picker.is_some() {
+        self.cancel_worktree_removal(window, cx);
+        if self.worktree_removal.is_some() {
             // Keep the confirmation visible while Git is removing a checkout.
             return;
         }
@@ -4851,9 +4884,21 @@ impl LyrelApp {
                 cx,
             ),
             CopySessionId(id) => cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(id)),
-            HideSession { agent, session_id } => self.update_config(cx, |cfg| {
-                cfg.hidden_agent_sessions
-                    .insert(crate::core::agent_history::session_key(agent, &session_id));
+            HideSession {
+                agent,
+                session_id,
+                cwd,
+                host,
+                scope,
+            } => self.update_config(cx, |cfg| {
+                let identity = crate::ui::session_history::SessionIdentity {
+                    host,
+                    agent,
+                    id: session_id,
+                    cwd,
+                    scope,
+                };
+                crate::ui::session_history::hide_session(cfg, &identity);
             }),
         }
     }

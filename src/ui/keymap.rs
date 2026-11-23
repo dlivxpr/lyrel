@@ -970,6 +970,8 @@ fn shipped_bindings() -> Vec<(&'static str, &'static str)> {
         ("ShowRightPanelSearch", ""),
         ("ShowRightPanelChanges", ""),
         ("ShowRightPanelGitHub", ""),
+        ("ShowRightPanelSessions", ""),
+        ("ShowRightPanelMonitor", ""),
         ("FocusRightPanelNavigation", ""),
         ("EditorSave", "secondary-s"),
         ("EditorSaveAs", "secondary-shift-s"),
@@ -1323,6 +1325,14 @@ fn authored_entry(action: &str) -> Option<(CommandGroup, String)> {
         "ShowRightPanelGitHub" => (
             CommandGroup::View,
             t(L10nKey::CmdRightPanelGitHub).to_string(),
+        ),
+        "ShowRightPanelSessions" => (
+            CommandGroup::View,
+            t(L10nKey::CmdRightPanelSessions).to_string(),
+        ),
+        "ShowRightPanelMonitor" => (
+            CommandGroup::View,
+            t(L10nKey::CmdRightPanelMonitor).to_string(),
         ),
         "FocusRightPanelNavigation" => (
             CommandGroup::View,
@@ -2178,6 +2188,8 @@ fn make_binding(action: &str, keystroke: &str, cx: &App) -> Option<KeyBinding> {
         "ShowRightPanelFiles" => load_binding(keystroke, ShowRightPanelFiles, None, cx),
         "ShowRightPanelSearch" => load_binding(keystroke, ShowRightPanelSearch, None, cx),
         "ShowRightPanelGitHub" => load_binding(keystroke, ShowRightPanelGitHub, None, cx),
+        "ShowRightPanelSessions" => load_binding(keystroke, ShowRightPanelSessions, None, cx),
+        "ShowRightPanelMonitor" => load_binding(keystroke, ShowRightPanelMonitor, None, cx),
         "FocusRightPanelNavigation" => load_binding(keystroke, FocusRightPanelNavigation, None, cx),
         "ScmCommit" => load_binding(keystroke, ScmCommit, action_context(action), cx),
         "ScmCommitAmend" => load_binding(keystroke, ScmCommitAmend, action_context(action), cx),
@@ -2411,6 +2423,8 @@ mod tests {
             "ShowRightPanelFiles",
             "ShowRightPanelSearch",
             "ShowRightPanelGitHub",
+            "ShowRightPanelSessions",
+            "ShowRightPanelMonitor",
         ] {
             assert!(bindable.contains(action), "{action} has nowhere to bind to");
             assert!(

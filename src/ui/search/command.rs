@@ -184,10 +184,14 @@ pub enum CommandKind {
     },
     CopySessionId(String),
     /// Leave a past session out of the Sessions tab from now on. Its files
-    /// are the agent's and stay where they are.
+    /// are the agent's and stay where they are. The host, cwd and scope name
+    /// the exact row, so hiding one same-id session never hides its siblings.
     HideSession {
         agent: CLIAgent,
         session_id: String,
+        cwd: Option<std::path::PathBuf>,
+        host: lyrel_ui_base::host_ops::HostId,
+        scope: Option<lyrel_core::host::session_operations::SessionScope>,
     },
     ConnectSavedProfile(Uuid),
     EditSavedProfile(Uuid),
@@ -274,6 +278,8 @@ impl CommandKind {
             ShowRightPanel(RightPanelTab::Files) => "right-panel-files",
             ShowRightPanel(RightPanelTab::Search) => "right-panel-search",
             ShowRightPanel(RightPanelTab::GitHub) => "right-panel-github",
+            ShowRightPanel(RightPanelTab::Sessions) => "right-panel-sessions",
+            ShowRightPanel(RightPanelTab::Monitor) => "right-panel-monitor",
             ClearTerminal => "clear-scrollback",
             FindInTerminal => "find",
             ToggleComposer => "composer",
@@ -438,6 +444,8 @@ impl CommandKind {
                 RightPanelTab::Files => "ShowRightPanelFiles",
                 RightPanelTab::Search => "ShowRightPanelSearch",
                 RightPanelTab::GitHub => "ShowRightPanelGitHub",
+                RightPanelTab::Sessions => "ShowRightPanelSessions",
+                RightPanelTab::Monitor => "ShowRightPanelMonitor",
             },
             ClearTerminal => "ClearScrollback",
             FindInTerminal => "FindInTerminal",
@@ -786,6 +794,10 @@ impl Item {
                 L10nKey::CmdRightPanelGitHub,
                 ShowRightPanel(RightPanelTab::GitHub),
             ),
+            Item::localized(
+                L10nKey::CmdRightPanelMonitor,
+                ShowRightPanel(RightPanelTab::Monitor),
+            ),
             Item::localized(L10nKey::CmdChangeTheme, OpenThemePicker),
             Item::localized(L10nKey::CmdResetFontSize, ResetFontSize),
             Item::localized(L10nKey::CmdEnterFullScreen, ToggleFullscreen),
@@ -966,6 +978,9 @@ impl Item {
                 CommandKind::HideSession {
                     agent: *agent,
                     session_id: session_id.clone(),
+                    cwd: cwd.clone(),
+                    host: *host,
+                    scope: scope.clone(),
                 },
             )
             .with_subtitle(t(L10nKey::SessionActionHideSubtitle)),

@@ -56,6 +56,12 @@ pub(crate) enum PendingLaunch {
     Command(String, Option<crate::core::cli_agent::CLIAgent>),
     /// Already scoped by a session operation; type it without re-encoding.
     Prepared(String),
+    /// A history restoration's prepared line: typed as-is, but only after the
+    /// landed pane proves idle; the prepared identity backs the give-up error.
+    HistoryPrepared(
+        String,
+        Box<lyrel_core::host::session_operations::PreparedSession>,
+    ),
     Resume {
         agent: Option<crate::core::cli_agent::CLIAgent>,
         session: Option<String>,
@@ -362,7 +368,9 @@ impl PendingPane {
         let launch = if restored {
             PendingLaunch::None
         } else if let Some(command) = self.spawn.run_on_land.clone() {
-            if self.prepared_launch {
+            if let Some(prepared) = self.history_prepared.take() {
+                PendingLaunch::HistoryPrepared(command, prepared)
+            } else if self.prepared_launch {
                 PendingLaunch::Prepared(command)
             } else {
                 PendingLaunch::Command(command, self.launch_agent)

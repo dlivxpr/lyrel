@@ -221,6 +221,13 @@ impl LyrelApp {
             cx.observe_global::<crate::ui::pane_liveness::PaneLivenessCache>(|_this, cx| {
                 cx.notify();
             });
+        // Caffeine is process-wide; every window repaints its cup when the
+        // shared mode or the live hold changes.
+        cx.default_global::<crate::ui::caffeine::CaffeineState>();
+        let caffeine_watch =
+            cx.observe_global::<crate::ui::caffeine::CaffeineState>(|_this, cx| {
+                cx.notify();
+            });
         // The rules the terminal asks below the workbench through: what a
         // workspace's panes attach over, and whether another client is
         // driving it. Installed once per process; the terminal side only ever
@@ -352,6 +359,7 @@ impl LyrelApp {
         // and what the files say through the content search.
         let panel_search =
             crate::ui::panel_search::PanelSearchState::new(file_search.clone(), window, cx);
+        let monitor = crate::ui::panel_monitor::MonitorState::new(window, cx);
         let mut app = Self {
             tabs: TabSet::new(tabs, active),
             pending_notification_source: None,
@@ -370,15 +378,15 @@ impl LyrelApp {
             _bounds_watch: bounds_watch,
             _git_status_watch: git_status_watch,
             _pane_liveness_watch: pane_liveness_watch,
+            _caffeine_watch: caffeine_watch,
             _appearance_watch: appearance_watch,
             search: SearchState::default(),
             theme_preview_restore: None,
             session: SessionLifecycle::default(),
             renaming: None,
             worktree_prompt: None,
-            worktree_picker: None,
+            worktree_removal: None,
             status_checkout_focus: cx.focus_handle().tab_stop(true),
-            changes_worktree_focus: cx.focus_handle().tab_stop(true),
             maximized: None,
             mod_hint_badges: false,
             mod_hint_fade_generation: None,
@@ -401,6 +409,7 @@ impl LyrelApp {
             _file_tree_events: file_tree_events,
             _file_tree_observer: file_tree_observer,
             panel_search,
+            monitor,
             editor,
             _editor_events: editor_events,
             _editor_observer: editor_observer,
@@ -417,6 +426,8 @@ impl LyrelApp {
             right_panel_nav_return: None,
             right_panel_nav_wait: Cell::new(0),
             right_panel_nav_renders: Cell::new(0),
+            session_history: crate::ui::session_history::SessionHistoryPanel::default(),
+            session_history_focus: cx.focus_handle().tab_stop(true),
             sidebar_collapsed,
             panel_slides: Default::default(),
             sidebar_scroll: gpui_kit::ScrollHandle::new(),
@@ -447,7 +458,9 @@ impl LyrelApp {
             group_rename: None,
             window_title: std::cell::RefCell::new(String::new()),
             status_clock: cx.new(crate::ui::status_bar::Clock::new),
-            status_metrics: None,
+            metric_view: None,
+            lyrel_usage_view: None,
+            disk_view: None,
             notification_bell: cx.new(crate::ui::notification_history::NotificationBell::new),
             program_attention: Default::default(),
             status_document_focus: None,
@@ -474,11 +487,18 @@ impl LyrelApp {
                 cx.global_mut::<crate::ui::scm::data::ScmData>()
                     .release_window(app_id.as_u64());
             }
+            // A closed window takes its panes' agents with it. Deferred so
+            // the aggregation reads the registry after this window is gone:
+            // with none Working, automatic mode releases the request even
+            // when the app itself stays alive behind the tray icon.
+            crate::ui::caffeine::CaffeineState::agents_changed(cx);
         })
         .detach();
         cx.on_app_quit(|app, cx| {
             app.save_session(cx);
             crate::core::window_state::WindowState::from_bounds(app.window_bounds).save();
+            // The power request's lifetime ends with the desktop.
+            crate::ui::caffeine::CaffeineState::release_for_quit(cx);
             async move {}
         })
         .detach();
@@ -519,6 +539,15 @@ impl LyrelApp {
                         if working || !this.working_dot_on {
                             this.working_dot_on = !this.working_dot_on || !working;
                             cx.notify();
+                        }
+                        // Caffeine's automatic mode uses this tick as its
+                        // backstop: a route dropping under a pane emits no
+                        // session event, and the hold must follow the truth
+                        // within one blink while the app keeps running.
+                        if cx.global::<crate::ui::caffeine::CaffeineState>().mode()
+                            == crate::ui::caffeine::CaffeineMode::WhileAgentsWork
+                        {
+                            crate::ui::caffeine::CaffeineState::agents_changed(cx);
                         }
                     })
                     .is_err()

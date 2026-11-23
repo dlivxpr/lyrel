@@ -46,6 +46,9 @@ libc = "0.2.191"
 # Shared PTY producers and the pinned native-SSH fixture for the integration
 # and live-endpoint targets.
 lyrel-test-support = { path = "../lyrel-test-support" }
+# The host network test pins multicast to a counted, non-loopback interface.
+socket2 = "0.6.5"
+sysinfo = { version = "=0.40.1", default-features = false, features = ["network"] }
 
 [target.'cfg(windows)'.dev-dependencies]
 windows-sys = { version = "0.61.2", features = [

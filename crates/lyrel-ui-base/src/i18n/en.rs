@@ -573,6 +573,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SearchSectionSessionsRecent => "Recent",
         L10nKey::AppSessionNotResumable => "{name} cannot resume a session by id.",
         L10nKey::AppSessionDirectoryGone => "The session's directory no longer exists: {path}",
+        L10nKey::AppSessionOpenUnconfirmed => {
+            "A pane already runs session {id}, but its store could not be confirmed from here. Resume it in that pane instead of starting a second writer."
+        }
         L10nKey::SearchSessionActions => "Choose what to do with this session…",
         L10nKey::SessionActionsHint => "actions",
         L10nKey::SessionActionResume => "Resume",
@@ -658,6 +661,26 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CloseTabsBody => "The shells in them end too.",
         L10nKey::Keep => "Keep",
         L10nKey::SettingsNavAppearance => "Appearance",
+        L10nKey::SettingsNavToolbar => "Toolbar",
+        L10nKey::ToolbarTitleBar => "Title bar",
+        L10nKey::ToolbarStatusBar => "Status bar",
+        L10nKey::ToolbarCpu => "CPU utilization",
+        L10nKey::ToolbarRam => "RAM usage",
+        L10nKey::ToolbarGpu => "GPU utilization",
+        L10nKey::ToolbarSettingsEntry => "Settings button",
+        L10nKey::ToolbarHost => "Host",
+        L10nKey::ToolbarPath => "Path",
+        L10nKey::ToolbarGit => "Git branch and change counts",
+        L10nKey::ToolbarRunning => "Running status",
+        L10nKey::ToolbarCaffeineDescription => {
+            "Hiding this control stops keeping the computer awake."
+        }
+        L10nKey::ToolbarClock => "Clock",
+        L10nKey::ToolbarNotifications => "Notifications",
+        L10nKey::ToolbarKeywords => {
+            "title bar status bar visibility CPU RAM GPU host path Git caffeine clock notifications"
+        }
+        L10nKey::ToolbarOpen => "Open toolbar settings",
         L10nKey::SettingsNavTerminal => "Terminal",
         L10nKey::SettingsNavInput => "Keyboard & Mouse",
         L10nKey::SettingsNavSsh => "SSH",
@@ -665,6 +688,79 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsNavKeybindings => "Keyboard shortcuts",
         L10nKey::SettingsNavAbout => "About",
         L10nKey::SettingsNavUsage => "Usage",
+        L10nKey::SettingsNavSessions => "Sessions",
+        L10nKey::SessionsSettingsKeywords => {
+            "agent session history hide hidden delete directory storage native id resume"
+        }
+        L10nKey::SessionsOpen => "Open sessions",
+        L10nKey::SessionsSubtitle => "Browse, hide and unhide saved agent sessions",
+        L10nKey::SessionsSearchPlaceholder => "Search title or ID",
+        L10nKey::SessionsAllAgents => "All agents",
+        L10nKey::SessionsActivityLead => "Last active",
+        L10nKey::SessionsActivityAny => "Any time",
+        L10nKey::SessionsActivityLastSevenDays => "Last 7 days",
+        L10nKey::SessionsActivityLastThirtyDays => "Last 30 days",
+        L10nKey::SessionsActivityOlderThirtyDays => "Older than 30 days",
+        L10nKey::SessionsActivityCustom => "Custom range",
+        L10nKey::SessionsDirectoryLead => "Directory",
+        L10nKey::SessionsAllDirectories => "All directories",
+        L10nKey::SessionsTabHidden => "Hidden",
+        L10nKey::SessionsCountFmt => "{count}",
+        L10nKey::SessionsSelectAll => "Select all results",
+        L10nKey::SessionsEmpty => "No sessions match these filters.",
+        L10nKey::SessionsEmptyHidden => "No hidden sessions.",
+        L10nKey::SessionsScanning => "Scanning…",
+        L10nKey::SessionsDetailAgent => "Agent",
+        L10nKey::SessionsDetailDirectory => "Working directory",
+        L10nKey::SessionsDetailLastActive => "Last active",
+        L10nKey::SessionsDetailStorage => "Storage",
+        L10nKey::SessionsDetailSessionId => "Session ID",
+        L10nKey::SessionsCopyId => "Copy ID",
+        L10nKey::SessionsHide => "Hide in Lyrel",
+        L10nKey::SessionsUnhide => "Show Again in Lyrel",
+        L10nKey::SessionsDefaultProfile => "Default profile",
+        L10nKey::SessionsSelectedCountFmt => "Selected {count} sessions",
+        L10nKey::SessionsCancelSelection => "Clear selection",
+        L10nKey::SessionsBlockedCountFmt => "{count} cannot be deleted yet",
+        L10nKey::SessionsBlockerRunning => "Session running",
+        L10nKey::SessionsBlockerSourceUnsupported => "Source does not support deletion",
+        L10nKey::SessionsBlockerStoreUnconfirmed => "Storage could not be confirmed",
+        L10nKey::SessionsBlockerOpenCodeCascade => {
+            "Native delete interrupts active sessions and cascades without a verifiable target set"
+        }
+        L10nKey::SessionsBlockerKimiUnfenced => {
+            "Native delete has no expected-identity fence and can fail open"
+        }
+        L10nKey::SessionsBlockerPiNoLease => "Native delete has no cross-process write lease",
+        L10nKey::SessionsBlockerOmpNoLease => {
+            "Native delete has no write lease; recursive artifact scope is configurable"
+        }
+        L10nKey::SessionsDetailEmpty => "Select a session title to see its details.",
+        L10nKey::SessionsDeleteSelectedFmt => "Delete {count}",
+        L10nKey::SessionsDeletePreparing => "Rechecking targets on their owning host…",
+        L10nKey::SessionsDeleteConfirmTitle => "Confirm session deletion",
+        L10nKey::SessionsDeleteConfirmScope => {
+            "The confirmed targets and their native cascades will be removed on the owning host. This cannot be undone."
+        }
+        L10nKey::SessionsDeleteConsentIrreversible => {
+            "I understand these native records are removed permanently and cannot be undone"
+        }
+        L10nKey::SessionsDeleteConsentStore => {
+            "I have checked the listed sources, targets and affected native records"
+        }
+        L10nKey::SessionsDeleteConfirmFmt => "Delete {count}",
+        L10nKey::SessionsDeleteCascadeFmt => "{count} native records",
+        L10nKey::SessionsDeleteExcluded => "Excluded from deletion",
+        L10nKey::SessionsDeleteReasonActive => "Held by an active writer",
+        L10nKey::SessionsDeleteReasonStale => "Changed or no longer exists",
+        L10nKey::SessionsDeleteReasonProvider => "Provider operation failed",
+        L10nKey::SessionsDeleteExecuting => "Deleting confirmed targets…",
+        L10nKey::SessionsDeleteResultTitle => "Deletion result",
+        L10nKey::SessionsDeleteResultFmt => {
+            "Deleted {deleted} · Skipped {skipped} · Failed {failed}"
+        }
+        L10nKey::SessionsDeleteDone => "Done",
+        L10nKey::SessionsDeleteFailed => "The deletion could not run",
         L10nKey::UsageSearchKeywords => {
             "Kimi Code Command Code DeepSeek StepFun Xiaomi MiMo balance plan Credits quota reset API key accounts rename refresh credentials usage private platform session cookie browser profile LocalStorage userToken access_token enhancement Firefox Safari Keychain Full Disk Access DPAPI App-Bound Encryption"
         }
@@ -2544,6 +2640,85 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::PanelFilesTitle => "Files",
         L10nKey::PanelSearchTitle => "Search",
         L10nKey::PanelGitHubTitle => "GitHub",
+        L10nKey::PanelSessionsTitle => "Session History",
+        L10nKey::PanelMonitorTitle => "Activity Monitor",
+        L10nKey::MonitorScopeCurrentPane => "Current pane",
+        L10nKey::MonitorFilterPlaceholder => "Filter by name or PID",
+        L10nKey::MonitorColName => "Name",
+        L10nKey::MonitorColPid => "PID",
+        L10nKey::MonitorColCpu => "CPU",
+        L10nKey::MonitorColMemory => "Memory",
+        L10nKey::MonitorColGpu => "GPU",
+        L10nKey::MonitorColNetwork => "Network",
+        L10nKey::MonitorSortTree => "Tree order",
+        L10nKey::MonitorSortCpu => "By CPU",
+        L10nKey::MonitorSortMemory => "By memory",
+        L10nKey::MonitorChildCount => "{count} subprocesses",
+        L10nKey::MonitorExpand => "Expand",
+        L10nKey::MonitorCollapse => "Collapse",
+        L10nKey::MonitorNoPane => "No active pane.",
+        L10nKey::MonitorNoPaneHint => "Open a tab to watch its processes here.",
+        L10nKey::MonitorProcsEmpty => "No processes to show.",
+        L10nKey::MonitorProcsEmptyHint => "This pane has no processes to list.",
+        L10nKey::MonitorProcsUnavailable => "Processes are unavailable on this machine.",
+        L10nKey::MonitorProcsUnavailableHint => {
+            "The host that owns this pane cannot report its processes."
+        }
+        L10nKey::MonitorProcsHeuristic => "Showing this machine's side of the connection.",
+        L10nKey::MonitorProcsHeuristicHint => {
+            "Processes running on the remote host are not visible here."
+        }
+        L10nKey::MonitorProcsHeuristicRemote => "Sampled on the remote host over SSH.",
+        L10nKey::MonitorProcsHeuristicRemoteHint => {
+            "These processes cannot be verified from here, so ending them is unavailable."
+        }
+        L10nKey::MonitorProcsUnconfirmed => {
+            "This daemon cannot confirm where the pane's session runs."
+        }
+        L10nKey::MonitorProcsUnconfirmedHint => {
+            "Update the daemon to enable ending processes from here."
+        }
+        L10nKey::MonitorActionEndProcess => "End Process",
+        L10nKey::MonitorActionEndProcessTree => "End Process Tree",
+        L10nKey::MonitorConfirmEndTitle => "End {name}?",
+        L10nKey::MonitorConfirmEndProcessBody => {
+            "End {name} (PID {pid})? The process identity and this pane's ownership are re-verified before anything is signaled."
+        }
+        L10nKey::MonitorConfirmEndTreeBody => {
+            "End {name} (PID {pid}) and the {count} processes under it?\n{scope}\nEach identity and this pane's ownership are re-verified before anything is signaled."
+        }
+        L10nKey::MonitorEndRefused => "Could not confirm the process: {reason}",
+        L10nKey::MonitorEndIncomplete => {
+            "The process tree is too large to confirm its full scope here, so nothing was ended."
+        }
+        L10nKey::MonitorEndReport => "Ended {count} processes.",
+        L10nKey::MonitorEndReportPartial => "Ended {count} processes.\n{details}",
+        L10nKey::MonitorEndUnsupported => {
+            "The daemon answering this pane is too old to end processes. Update it and try again."
+        }
+        L10nKey::MonitorEndOwnerChanged => {
+            "The pane or its host connection changed. No processes were signaled."
+        }
+        L10nKey::MonitorEndOutcomeUnknown => {
+            "The daemon did not report a result. Refresh the process list before trying again."
+        }
+        L10nKey::MonitorEndAlreadyExited => "Already exited",
+        L10nKey::MonitorEndStale => "Process identity changed",
+        L10nKey::MonitorEndNotOwned => "No longer belongs to the pane",
+        L10nKey::MonitorEndUnverifiable => "Process identity could not be verified",
+        L10nKey::MonitorEndFailed => "Termination could not be confirmed",
+        L10nKey::MonitorResourcesTitle => "Resource trends",
+        L10nKey::MonitorRangeTwoMinutes => "2 min",
+        L10nKey::MonitorRangeQuarterHour => "15 min",
+        L10nKey::MonitorRangeHour => "1 hour",
+        L10nKey::MonitorColDisk => "Disk",
+        L10nKey::MonitorDiskHint => "Directory size / volume total",
+        L10nKey::MonitorDiskScanning => "Scanning…",
+        L10nKey::MonitorDiskPartial => "Partial",
+        L10nKey::MonitorDiskUnavailable => "Disk scan unavailable",
+        L10nKey::MonitorDiskFailed => "Disk scan failed: {reason}",
+        L10nKey::MonitorDiskDetail => "{dir} · {used} / {total}",
+        L10nKey::MonitorDiskPartialDetail => "{dir} · at least {used} / {total} ({reason})",
         L10nKey::ToolHostAdd => "Add Tool",
         L10nKey::ToolHostClose => "Close {tool}",
         L10nKey::PanelNoSession => "No active session.",
@@ -2553,6 +2728,22 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::PanelNoWorkingDirectory => "No working directory.",
         L10nKey::PanelNoWorkingDirectoryHint => "This pane has not reported one yet.",
         L10nKey::PanelLoading => "Loading…",
+        L10nKey::PanelSessionsFollowCwd => "Follow Current Directory",
+        L10nKey::PanelSessionsChooseDirectory => "Choose directory",
+        L10nKey::PanelSessionsWorktrees => "Worktrees",
+        L10nKey::PanelSessionsEmpty => "No saved sessions in this directory.",
+        L10nKey::PanelSessionsEmptyHint => {
+            "Run an agent here and its saved conversations will show up."
+        }
+        L10nKey::PanelSessionsDisconnected => "This host is disconnected.",
+        L10nKey::PanelSessionsDisconnectedHint => {
+            "Reconnect to browse the saved sessions on that machine."
+        }
+        L10nKey::PanelSessionsUnsupported => "This host cannot list saved sessions.",
+        L10nKey::PanelSessionsUnsupportedHint => {
+            "Its Lyrel server predates session history support."
+        }
+        L10nKey::PanelSessionsPartial => "Some session sources could not be listed.",
         L10nKey::PanelNotAGitRepo => "Not a git repository.",
         L10nKey::PanelNotAGitRepoHint => "cd into one and this tab lists its uncommitted changes.",
         L10nKey::PanelNoChanges => "No uncommitted changes.",
@@ -2738,10 +2929,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
             "Created the worktree at {path} without opening a terminal tab."
         }
         L10nKey::ScmWorktrees => "Worktrees",
-        L10nKey::WorktreePickerTitle => "Switch Worktree",
-        L10nKey::WorktreePickerPlaceholder => "Search by directory, branch or path",
         L10nKey::WorktreePickerCurrent => "current",
-        L10nKey::WorktreePickerEmpty => "No matching checkout",
         L10nKey::WorktreePickerFailed => "Couldn't list worktrees: {error}",
         L10nKey::WorktreePickerRemove => "Remove from Disk",
         L10nKey::WorktreePickerRemoveTitle => "Remove checkout from disk?",
@@ -2779,7 +2967,6 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::WorktreePickerRemovedDetached => "Removed {path}. Recovery reference {ref}.",
         L10nKey::WorktreePickerRemoveFailed => "Couldn't remove the checkout: {error}",
         L10nKey::StatusGitWorktree => "Checkout menu",
-        L10nKey::StatusCheckoutChooseWorktree => "Switch worktree",
         L10nKey::StatusCheckoutBranchInPlace => "Switch branch in this checkout",
         L10nKey::StatusCheckoutCheckUpstream => "Check branch against upstream",
         L10nKey::StatusCheckoutNoUpstream => "No upstream branch",
@@ -2791,6 +2978,14 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatusCheckoutCopy => "Copy",
         L10nKey::StatusCheckoutCopyPath => "Copy checkout path",
         L10nKey::StatusCheckoutCopyBranch => "Copy branch name",
+        L10nKey::StatusCaffeineTitle => "Caffeine",
+        L10nKey::StatusCaffeineModeOff => "Off",
+        L10nKey::StatusCaffeineModeAlwaysOn => "Always On",
+        L10nKey::StatusCaffeineModeWhileAgentsWork => "While Agents Work",
+        L10nKey::StatusCaffeineFooterOff => "Sleeps per system power settings",
+        L10nKey::StatusCaffeineFooterHolding => "Keeping this computer awake",
+        L10nKey::StatusCaffeineFooterWaiting => "Waiting for an agent to start working",
+        L10nKey::StatusCaffeineFooterError => "Couldn't keep the computer awake: {error}",
         L10nKey::HomeTimeJustNow => "just now",
         L10nKey::HomeTimeMinutesAgo => "{count} min ago",
         L10nKey::HomeTimeHourAgo => "1 hour ago",
@@ -2836,6 +3031,25 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::HostMetricsFailed => "Host sampling failed: {reason}",
         L10nKey::HostMetricsError => "Host sampling failed",
         L10nKey::HostMetricsSample => "{host} · Whole-host CPU · RAM {used} / {total} GiB",
+        L10nKey::HostMetricsNetworkSample => "{host} · Network receive {rx} · transmit {tx}",
+        L10nKey::HostMetricsRam => "RAM",
+        L10nKey::LyrelUsageLocal => "Local",
+        L10nKey::LyrelUsageRemote => "Remote · {host}",
+        L10nKey::LyrelUsageDesktop => "Desktop app",
+        L10nKey::LyrelUsageDaemon => "Session daemon",
+        L10nKey::LyrelUsageServer => "Lyrel server",
+        L10nKey::LyrelUsageIncludesRemote => "Includes remote",
+        L10nKey::LyrelUsageExpand => "Expand Lyrel usage",
+        L10nKey::LyrelUsageCollapse => "Collapse Lyrel usage",
+        L10nKey::LyrelUsageWaiting => "Waiting for Lyrel sample",
+        L10nKey::LyrelUsageUnavailable => "Lyrel usage unavailable",
+        L10nKey::LyrelUsageSample => "{host} · Lyrel CPU {cpu} · RAM {mem} · GPU {gpu}",
+        L10nKey::LyrelUsageComponent => "{name} · CPU {cpu} · RAM {mem}",
+        L10nKey::LyrelProcessNetwork => "Net ↓ / ↑",
+        L10nKey::LyrelProcessMetricUnsupported => {
+            "This host cannot attribute this metric to a process"
+        }
+        L10nKey::LyrelProcessMetricFailed => "Could not read the process counters",
         L10nKey::RemoteProfileGone => "deleted profile",
         L10nKey::RemoteRestartTitle => "Restart lyrel's server on \"{machine}\"?",
         L10nKey::RemoteRestartBody => {
@@ -3070,6 +3284,8 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdRightPanelFiles => "Right Panel: Files",
         L10nKey::CmdRightPanelSearch => "Right Panel: Search",
         L10nKey::CmdRightPanelGitHub => "Right Panel: GitHub",
+        L10nKey::CmdRightPanelSessions => "Right Panel: Session History",
+        L10nKey::CmdRightPanelMonitor => "Right Panel: Activity Monitor",
         L10nKey::CmdFocusRightPanelNavigation => "Focus Right Panel Navigation",
         L10nKey::CmdChangeTheme => "Change Theme",
         L10nKey::CmdResetFontSize => "Reset Font Size",

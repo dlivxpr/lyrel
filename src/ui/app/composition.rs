@@ -302,6 +302,7 @@ impl LyrelApp {
             self.right_panel_open(cx),
             can_split,
             self.new_tab_button("titlebar-add", cx),
+            self.render_titlebar_metrics(window, cx),
             cx,
             |command| {
                 cx.listener(move |this, _, window, cx| match command {
@@ -434,7 +435,15 @@ impl LyrelApp {
         // open or not — a port that appears while the panel is shut is exactly
         // the one worth forwarding unasked.
         self.sync_port_watch(window, cx);
-        self.sync_status_metrics(window, cx);
+        // Keeps the Session History tool bound to the context pane's host and
+        // directory while that tool is open.
+        self.sync_session_history(window, cx);
+        // Keeps one shared sampler alive for the title bar and the monitor.
+        self.sync_host_metrics(window, cx);
+        // Keeps the Lyrel component-usage sampler alive only while the
+        // monitor's resource section is on screen.
+        self.sync_lyrel_usage(window, cx);
+        self.sync_host_disk(window, cx);
         let lifted = crate::ui::pane_drag::lifted(&self.pane_drag).is_some();
         if (!window.is_window_active()
             || (lifted && (!cx.has_active_drag() || self.dragged_parking_pane(cx).is_none())))
@@ -488,10 +497,8 @@ impl LyrelApp {
             cx.set_active_drag_cursor_style(held, window);
         }
         let detach_caret = self.detach_caret(window, cx);
-        self.begin_worktree_picker_frame(window, cx);
         let main_layout = self.render_work_area(window, cx);
         let status_bar = self.render_status_bar(window, cx);
-        self.finish_worktree_picker_frame(window, cx);
 
         let window_bg = crate::ui::theme::workspace_background(cx);
         let bg_image = window_background_image_layer(cx);

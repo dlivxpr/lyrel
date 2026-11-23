@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::daemon::protocol::{PaneProcs, PortEntry, PortProbe, ProcEntry};
 
@@ -275,8 +275,8 @@ fn current_uid() -> u32 {
     0
 }
 
-struct Row {
-    ppid: u32,
+pub(super) struct Row {
+    pub(super) ppid: u32,
     pgid: u32,
     /// The effective uid of the process, which is what decides whether this
     /// daemon may look at its sockets. 0 on platforms that have no such thing,
@@ -467,25 +467,112 @@ fn process_table() -> HashMap<u32, Row> {
 
 #[cfg(windows)]
 fn process_table() -> HashMap<u32, Row> {
-    crate::daemon::winproc::snapshot()
-        .into_iter()
-        .map(|p| {
-            (
-                p.pid,
-                Row {
-                    ppid: p.parent,
-                    pgid: 0,
-                    uid: 0,
-                    name: p.name,
-                },
-            )
-        })
-        .collect()
+    checked_windows_process_table().unwrap_or_default()
+}
+
+#[cfg(windows)]
+pub(super) fn checked_windows_process_table() -> Option<HashMap<u32, Row>> {
+    Some(
+        crate::daemon::winproc::checked_snapshot()?
+            .into_iter()
+            .map(|p| {
+                (
+                    p.pid,
+                    Row {
+                        ppid: p.parent,
+                        pgid: 0,
+                        uid: 0,
+                        name: p.name,
+                    },
+                )
+            })
+            .collect(),
+    )
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
 fn process_table() -> HashMap<u32, Row> {
     HashMap::new()
+}
+
+/// The complete subtree under `root` from the full process table: every
+/// member as `(pid, name)`, ordered deepest-first so a caller signaling them
+/// never signals a parent before its children. The second return is `false`
+/// when the walk hit `MAX_TREE` and the list is not known to be the whole
+/// subtree — a termination scope built on it must not be confirmed.
+///
+/// The list always names `root` itself, even when the walk is incomplete:
+/// an incomplete scope cannot be confirmed as a whole, but it must still
+/// identify the process the action targets, or the caller could not even
+/// fall back to ending the target alone.
+///
+/// Unlike [`walk`] this is not a display walk: it starts at the selected
+/// process rather than the pane's shell, and it does not stop at
+/// `MAX_DEPTH`, because the scope of an End Process action has to name every
+/// process it will cover, not just the ones the panel has rows for.
+pub(super) fn complete_subtree(
+    root: u32,
+    #[cfg(windows)] table: &HashMap<u32, Row>,
+) -> (Vec<(u32, String)>, bool) {
+    #[cfg(not(windows))]
+    let table = &process_table();
+    complete_subtree_from(root, table)
+}
+
+/// [`complete_subtree`] over an injected table: the unit tests build tables
+/// too large (or too cyclic) to convene from live processes.
+fn complete_subtree_from(root: u32, table: &HashMap<u32, Row>) -> (Vec<(u32, String)>, bool) {
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (pid, row) in table {
+        children.entry(row.ppid).or_default().push(*pid);
+    }
+    for kids in children.values_mut() {
+        kids.sort_unstable();
+    }
+    // Post-order over an explicit stack: push (node, expanded?) pairs, emit a
+    // node only after its children. The `seen` set — checked only on the
+    // first pop — keeps a parent cycle from looping the walk the way
+    // `walk_survives_a_cycle_in_the_table` guards the display path; the
+    // emission pop carries `expanded == true` and must not pass through that
+    // guard, or every node would be skipped on the very pass that emits it.
+    let mut out: Vec<(u32, String)> = Vec::new();
+    let mut seen: HashSet<u32> = HashSet::new();
+    let mut complete = true;
+    let mut stack: Vec<(u32, bool)> = vec![(root, false)];
+    while let Some((pid, expanded)) = stack.pop() {
+        if out.len() >= MAX_TREE {
+            complete = false;
+            break;
+        }
+        if expanded {
+            if let Some(row) = table.get(&pid) {
+                out.push((pid, row.name.clone()));
+            }
+            continue;
+        }
+        if !seen.insert(pid) {
+            continue;
+        }
+        if table.get(&pid).is_none() {
+            continue;
+        }
+        stack.push((pid, true));
+        if let Some(kids) = children.get(&pid) {
+            for kid in kids.iter().rev() {
+                if !seen.contains(kid) {
+                    stack.push((*kid, false));
+                }
+            }
+        }
+    }
+    if !complete && !out.iter().any(|(pid, _)| *pid == root) {
+        // The cap cut the walk before the root's own emission. The scope
+        // still has to name what the action targets.
+        if let Some(row) = table.get(&root) {
+            out.push((root, row.name.clone()));
+        }
+    }
+    (out, complete)
 }
 
 /// Whether `pid` runs under `ancestor`: is it, or is one of its parents.
@@ -1240,6 +1327,35 @@ mod tests {
             .collect();
         let got = walk(&table, 100, None);
         assert!(got.len() <= MAX_TREE, "bounded, not infinite");
+    }
+
+    /// #372. A scope list that hit the tree cap before the post-order reached
+    /// the root still names the root itself: an incomplete scope must not be
+    /// confirmed as a whole, but it can still fall back to ending the target
+    /// alone — which is impossible if the list lost the target's identity.
+    #[test]
+    fn complete_subtree_names_the_root_even_when_the_walk_is_incomplete() {
+        let mut table: HashMap<u32, Row> = [(1, row(0, "bash"))].into_iter().collect();
+        // Enough children that the walk emits MAX_TREE of them before the
+        // stack ever works back up to the root's own emission.
+        for i in 0..(MAX_TREE as u32 + 8) {
+            table.insert(10 + i, row(1, "worker"));
+        }
+
+        let (members, complete) = complete_subtree_from(1, &table);
+        assert!(
+            !complete,
+            "the cap was hit: the list is not the whole subtree"
+        );
+        assert_eq!(
+            members.len(),
+            MAX_TREE + 1,
+            "capped descendants plus the root"
+        );
+        assert!(
+            members.iter().any(|(pid, _)| *pid == 1),
+            "the incomplete scope still names the process the action targets"
+        );
     }
 
     /// #731. The walk is depth-first over children in ascending pid order, so

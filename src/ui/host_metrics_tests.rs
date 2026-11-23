@@ -6,12 +6,15 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{TestAppContext, VisualTestContext, px, size};
+use lyrel_core::core::config::RightPanelTab;
 use lyrel_core::daemon::control::{ControlClient, ControlHello};
+use lyrel_core::host::metrics::NetworkThroughput;
 
 use crate::ui::app::test_window::harness_with_tabs;
 use lyrel_ui_base::actions::{
     EditorNewFile, RestorePanePip, SelectNextTab, ToggleDocumentFill, TogglePanePip,
 };
+use lyrel_ui_base::i18n;
 use lyrel_ui_base::session::{
     RemoteRef, RemoteTarget, WindowView, WindowViews, WorkspaceId, WorkspaceStore,
 };
@@ -59,10 +62,261 @@ fn settle(vcx: &mut VisualTestContext) {
     vcx.run_until_parked();
 }
 
-fn has_sample(vcx: &mut VisualTestContext) -> bool {
+/// One reading stamped exactly where the test wants it on the timeline.
+fn sample_at(at_millis: u64, cpu: f32, used_gib: u64, total_gib: u64) -> HostSample {
+    HostSample::new(
+        cpu,
+        used_gib * 1_073_741_824,
+        total_gib * 1_073_741_824,
+        at_millis,
+    )
+}
+
+#[test]
+fn history_aggregates_peaks_per_slot_and_leaves_unsampled_slots_blank() {
+    let mut history = SampleHistory::default();
+    // A 15-minute window divides into 15-second slots: two readings in one
+    // slot keep the peak, and a slot nobody reached stays blank.
+    history.push(sample_at(0, 5., 8, 16), "instance-a");
+    history.push(sample_at(0, 95., 8, 16), "instance-a");
+    let anchor = history
+        .latest()
+        .map(|arrival| arrival.arrived_millis)
+        .unwrap();
+    let buckets = history.buckets(MetricsRange::QuarterHour, anchor);
+    assert_eq!(buckets.len(), BUCKET_COUNT);
+    // The readings are the freshest thing in the window, so they occupy the
+    // last slot — and two readings in one slot keep the peak.
+    let peak = buckets[BUCKET_COUNT - 1].expect("the last slot holds the readings");
+    assert_eq!(peak.cpu, 95., "a long view keeps the peak, not the average");
+    assert!(
+        buckets[..BUCKET_COUNT - 1].iter().all(Option::is_none),
+        "unsampled time must stay blank instead of reading as a quiet zero"
+    );
+
+    // Memory rides in the same slots, percentages against the total.
+    let memory = buckets[BUCKET_COUNT - 1]
+        .map(|bucket| bucket.memory)
+        .unwrap_or_default();
+    assert_eq!(memory, 50.);
+}
+
+#[test]
+fn history_drops_readings_older_than_the_widest_window() {
+    let mut history = SampleHistory::default();
+    // Arrival stamps advance with the GUI clock, not the wire's clock.
+    history.push(sample_at(0, 10., 8, 16), "instance-a");
+    history.push(sample_at(0, 20., 8, 16), "instance-a");
+    history.push(sample_at(0, 30., 8, 16), "instance-a");
+    assert!(history.arrivals.len() >= 2, "the span limit is inclusive");
+    assert_eq!(
+        history.arrivals.front().map(|a| a.arrived_millis)
+            <= history.arrivals.back().map(|a| a.arrived_millis),
+        true,
+        "readings are kept in arrival order for the span trim"
+    );
+    // A zero total is not a memory reading and never enters the history.
+    history.push(HostSample::new(1., 1, 0, 2_000), "instance-a");
+    assert_eq!(history.arrivals.len(), 3);
+}
+
+#[test]
+fn a_new_daemon_instance_drops_the_predecessors_samples() {
+    let mut history = SampleHistory::default();
+    history.push(sample_at(0, 10., 8, 16), "old-daemon");
+    assert_eq!(history.arrivals.len(), 1);
+    history.push(sample_at(0, 20., 8, 16), "new-daemon");
+    assert_eq!(
+        history.arrivals.len(),
+        1,
+        "a peer instance change must not present its predecessor's samples"
+    );
+    assert_eq!(
+        history.instance.as_deref(),
+        Some("new-daemon"),
+        "the history is restamped by the answering daemon's identity"
+    );
+}
+
+#[test]
+fn gpu_readout_shows_a_percent_a_reason_or_an_honest_dash() {
+    let snapshot = |sample| HostMetrics::new("gpu-host", "instance", MetricsState::Sample(sample));
+
+    let ready = readout(
+        &State::Ready(snapshot(sample_at(0, 10., 8, 16).with_gpu(42.25))),
+        false,
+    );
+    assert_eq!(ready.gpu_text(), "42%");
+    assert_eq!(ready.gpu_status(), None);
+
+    // The platform could not supply a reading: the value is the down marker
+    // and the slot's state word is the sampler's own reason.
+    let unavailable = readout(
+        &State::Ready(snapshot(
+            sample_at(0, 10., 8, 16).with_gpu_unavailable("no GPU engine performance counters"),
+        )),
+        false,
+    );
+    assert_eq!(unavailable.gpu_text(), "—");
+    assert_eq!(
+        unavailable.gpu_status().map(|status| status.to_string()),
+        Some("no GPU engine performance counters".to_owned()),
+        "the GPU slot explains the miss with the sampler's reason"
+    );
+
+    // A daemon that predates GPU sampling still parses: the slot shows the
+    // down marker without inventing a reason.
+    let legacy = readout(&State::Ready(snapshot(sample_at(0, 10., 8, 16))), false);
+    assert_eq!(legacy.gpu_text(), "—");
+    assert_eq!(legacy.gpu_status(), None);
+
+    // Whole-sample pending words are shared with the GPU slot.
+    let waiting = readout(&State::Waiting, false);
+    assert_eq!(waiting.gpu_text(), "…");
+    assert!(waiting.gpu_status().is_some());
+}
+
+#[test]
+fn history_buckets_keep_gpu_peaks_and_blank_slots_without_gpu() {
+    let mut history = SampleHistory::default();
+    history.push(sample_at(0, 5., 8, 16).with_gpu(30.), "instance-a");
+    history.push(sample_at(0, 50., 8, 16).with_gpu(90.), "instance-a");
+    history.push(sample_at(0, 60., 8, 16), "instance-a");
+    let anchor = history.latest().unwrap().arrived_millis;
+    let buckets = history.buckets(MetricsRange::QuarterHour, anchor);
+    assert_eq!(buckets[BUCKET_COUNT - 1].unwrap().gpu, Some(90.));
+    let mut history = SampleHistory::default();
+    history.push(sample_at(0, 5., 8, 16), "instance-a");
+    let anchor = history.latest().unwrap().arrived_millis;
+    let buckets = history.buckets(MetricsRange::TwoMinutes, anchor);
+    assert_eq!(buckets[BUCKET_COUNT - 1].unwrap().gpu, None);
+}
+
+#[test]
+fn history_keeps_network_peaks_without_letting_missing_readings_zero_them() {
+    let mut history = SampleHistory::default();
+    history.push(
+        sample_at(0, 5., 8, 16).with_network(NetworkThroughput::new(1_000., 500.)),
+        "instance-a",
+    );
+    // A second reading out-peaks the first.
+    history.push(
+        sample_at(0, 95., 8, 16).with_network(NetworkThroughput::new(3_000., 1_500.)),
+        "instance-a",
+    );
+    // A CPU/RAM-only sample — a tick whose network reading was missing — must
+    // not zero the peaks the real readings set.
+    history.push(sample_at(0, 50., 8, 16), "instance-a");
+    let anchor = history
+        .latest()
+        .map(|arrival| arrival.arrived_millis)
+        .unwrap();
+    let buckets = history.buckets(MetricsRange::QuarterHour, anchor);
+    let peak_rx = buckets
+        .iter()
+        .flatten()
+        .map(|bucket| bucket.network_rx)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let peak_tx = buckets
+        .iter()
+        .flatten()
+        .map(|bucket| bucket.network_tx)
+        .fold(f32::NEG_INFINITY, f32::max);
+    assert_eq!(
+        peak_rx, 3_000.,
+        "the network peak survives a tick whose reading was missing"
+    );
+    assert_eq!(peak_tx, 1_500.);
+    // The network-less tick is still a kept sample: only its network field
+    // was missing, not the CPU/RAM reading it carried.
+    assert_eq!(history.arrivals.len(), 3);
+}
+
+#[test]
+fn rate_text_uses_link_rate_units_and_trims_the_decimal() {
+    assert_eq!(rate_text(0.), "0 B/s");
+    assert_eq!(rate_text(512.), "512 B/s");
+    assert_eq!(rate_text(240_000.), "240 KB/s");
+    assert_eq!(rate_text(56_500.), "56.5 KB/s");
+    assert_eq!(rate_text(2_100_000.), "2.1 MB/s");
+    assert_eq!(rate_text(3.5e9), "3.5 GB/s");
+}
+
+/// A ready snapshot whose sample may carry the negotiated network field.
+fn sample_state(with_network: bool) -> State {
+    let mut sample = serde_json::json!({
+        "cpu_percent": 12.0,
+        "memory_used_bytes": 8,
+        "memory_total_bytes": 16,
+        "sampled_at_millis": 1_700_000_000_000_u64,
+    });
+    if with_network {
+        sample["network"] = serde_json::json!({
+            "rx_bytes_per_sec": 2_100_000.0,
+            "tx_bytes_per_sec": 240_000.0,
+        });
+    }
+    State::Ready(
+        serde_json::from_value(serde_json::json!({
+            "hostname": "metrics-network-test",
+            "instance": "metrics-network-instance",
+            "state": {"sample": sample},
+        }))
+        .unwrap(),
+    )
+}
+
+#[test]
+fn network_rates_render_per_state_and_never_as_quiet_zeros() {
+    // A supporting peer with a reading: both rates formatted, no state word,
+    // and the hover detail names the host with both values.
+    let ready = readout(&sample_state(true), true);
+    assert!(ready.network_ready());
+    assert_eq!(ready.network_rx_text(), "↓ 2.1 MB/s");
+    assert_eq!(ready.network_tx_text(), "↑ 240 KB/s");
+    assert_eq!(ready.network_status, None);
+    assert!(
+        ready.network_detail.contains("metrics-network-test")
+            && ready.network_detail.contains("2.1 MB/s")
+            && ready.network_detail.contains("240 KB/s"),
+        "the hover detail carries host and both rates: {}",
+        ready.network_detail
+    );
+
+    // Supporting peer, reading missing (fresh baseline, counter reset): the
+    // waiting family, explicitly not a zero.
+    let waiting = readout(&sample_state(false), true);
+    assert!(!waiting.network_ready());
+    assert_eq!(waiting.network_rx_text(), "↓ …");
+    assert_eq!(waiting.network_tx_text(), "↑ …");
+    assert_eq!(waiting.network_status, Some(t(L10nKey::HostMetricsWaiting)));
+
+    // A peer without the capability never carries the field: unsupported,
+    // not an endless wait.
+    let unsupported = readout(&sample_state(false), false);
+    assert!(!unsupported.network_ready());
+    assert_eq!(unsupported.network_rx_text(), "↓ —");
+    assert_eq!(unsupported.network_tx_text(), "↑ —");
+    assert_eq!(
+        unsupported.network_status,
+        Some(t(L10nKey::HostMetricsUnavailable))
+    );
+
+    // Whole-sampler states drag both series into their marker family.
+    let pending = readout(&State::Connecting, false);
+    assert_eq!(pending.network_rx_text(), "↓ …");
+    let down = readout(&State::Disconnected, true);
+    assert_eq!(down.network_rx_text(), "↓ —");
+    assert_eq!(
+        down.network_status,
+        Some(t(L10nKey::HostMetricsDisconnected))
+    );
+}
+
+fn has_titlebar_sample(vcx: &mut VisualTestContext) -> bool {
     vcx.update(|window, _| {
         window
-            .try_find("status-cpu")
+            .try_find("titlebar-metric-cpu-value")
             .and_then(|cpu| cpu.label().map(str::to_owned))
             .is_some_and(|label| label.ends_with('%'))
     })
@@ -73,7 +327,7 @@ pub(crate) fn wait_sample(vcx: &mut VisualTestContext, wanted: bool) {
     loop {
         vcx.executor().advance_clock(Duration::from_secs(1));
         settle(vcx);
-        if has_sample(vcx) == wanted {
+        if has_titlebar_sample(vcx) == wanted {
             return;
         }
         assert!(
@@ -84,22 +338,368 @@ pub(crate) fn wait_sample(vcx: &mut VisualTestContext, wanted: bool) {
     }
 }
 
-pub(crate) fn assert_metrics_status(
-    vcx: &mut VisualTestContext,
-    key: lyrel_ui_base::i18n::L10nKey,
-) {
+/// The title-bar metric's state word, asserted while no stale sample hides
+/// it. Shared with the LocalLink lifecycle tests.
+pub(crate) fn assert_metrics_status(vcx: &mut VisualTestContext, key: i18n::L10nKey) {
     vcx.update(|window, _| window.refresh());
     settle(vcx);
     vcx.update(|window, _| {
         assert_eq!(
-            window.find("status-host-metrics").label(),
-            Some(lyrel_ui_base::i18n::t(key)),
+            window.find("titlebar-metric-cpu").label(),
+            Some(i18n::t(key)),
         );
     });
     assert!(
-        !has_sample(vcx),
+        !has_titlebar_sample(vcx),
         "a pending link displayed an old host sample"
     );
+}
+
+#[gpui_kit::test]
+fn titlebar_metrics_track_the_context_host_and_click_opens_monitor(cx: &mut TestAppContext) {
+    let server = HostServer::new();
+    let (app, mut vcx, _pane_streams) = harness_with_tabs(cx, 2);
+    vcx.update(|window, cx| {
+        crate::ui::windows::WindowRegistry::init(cx);
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            app.read(cx).workspace,
+            window.window_handle(),
+            app.downgrade(),
+        );
+        LocalLink::install_client_for_test(cx, server.client.clone());
+    });
+    wait_sample(&mut vcx, true);
+    let hostname =
+        std::thread::spawn(move || server.client.host_metrics().unwrap().hostname().to_owned())
+            .join()
+            .unwrap();
+
+    // Both metrics render with the host's own reading in their detail.
+    vcx.update(|window, _| {
+        for id in [
+            "titlebar-metric-cpu",
+            "titlebar-metric-ram",
+            "titlebar-metric-gpu",
+        ] {
+            let metric = window.find(id);
+            assert!(metric.visible(), "{id} must render in the chrome");
+            assert!(
+                metric.label().unwrap().contains(&hostname),
+                "{id} must name the context pane's host"
+            );
+        }
+        assert!(window.find("titlebar-metric-cpu-chart").visible());
+        assert!(window.find("titlebar-metric-ram-chart").visible());
+        assert!(window.find("titlebar-metric-gpu-chart").visible());
+    });
+
+    // The former bottom-bar indicators are gone.
+    vcx.update(|window, _| {
+        assert!(window.try_find("status-host-metrics").is_none());
+    });
+
+    // One shared sampler answers the title bar, and clicking either metric
+    // opens the Activity Monitor on those same samples.
+    vcx.update(|window, cx| window.click("titlebar-metric-cpu", cx));
+    settle(&mut vcx);
+    assert!(app.read_with(&vcx, |app, _| {
+        app.right_panel_tab == RightPanelTab::Monitor && app.right_panel_visible
+    }));
+    vcx.update(|window, _| {
+        assert!(window.find("monitor-tile-cpu").visible());
+        assert!(window.find("monitor-tile-ram").visible());
+        assert!(window.find("monitor-tile-gpu").visible());
+        assert!(window.find("monitor-range-selector").visible());
+        assert_eq!(
+            window.find("monitor-tile-cpu").label(),
+            window.find("titlebar-metric-cpu").label(),
+            "title bar and monitor must present the same sample"
+        );
+        assert_eq!(
+            window.find("monitor-range-120").label(),
+            Some(i18n::t(L10nKey::MonitorRangeTwoMinutes)),
+            "the approved windows start at 2 minutes"
+        );
+    });
+    assert_eq!(
+        vcx.update(|_, cx| {
+            cx.default_global::<MetricsViews>()
+                .0
+                .values()
+                .filter(|view| view.upgrade().is_some())
+                .count()
+        }),
+        1,
+        "title bar and monitor share the one live sampler — no competing loops"
+    );
+}
+
+#[gpui_kit::test]
+fn monitor_network_tile_groups_receive_and_send_on_the_shared_samples(cx: &mut TestAppContext) {
+    let server = HostServer::new();
+    let (app, mut vcx, _pane_streams) = harness_with_tabs(cx, 2);
+    vcx.update(|window, cx| {
+        crate::ui::windows::WindowRegistry::init(cx);
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            app.read(cx).workspace,
+            window.window_handle(),
+            app.downgrade(),
+        );
+        LocalLink::install_client_for_test(cx, server.client.clone());
+    });
+    wait_sample(&mut vcx, true);
+
+    // The real daemon negotiates the network capability, and its genuine
+    // sample carries off-host rates (possibly idle zeros, never absent).
+    let client = server.client.clone();
+    let (hostname, wire) = std::thread::spawn(move || {
+        let metrics = client.host_metrics().unwrap();
+        let hostname = metrics.hostname().to_owned();
+        let wire = match metrics.state() {
+            MetricsState::Sample(sample) => sample
+                .network()
+                .map(|network| (network.rx_bytes_per_sec(), network.tx_bytes_per_sec())),
+            other => panic!("the wired sample never arrived: {other:?}"),
+        };
+        (hostname, wire)
+    })
+    .join()
+    .unwrap();
+    let wire = wire.expect("the negotiated sample carries a network reading");
+    assert!(
+        wire.0.is_finite() && wire.0 >= 0. && wire.1.is_finite() && wire.1 >= 0.,
+        "genuine off-host rates: {wire:?}"
+    );
+
+    vcx.update(|window, cx| window.click("titlebar-metric-cpu", cx));
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        assert!(window.find("monitor-tile-cpu").visible());
+        assert!(
+            window.find("monitor-tile-network").visible(),
+            "the network tile renders in the resource section"
+        );
+        assert!(
+            window
+                .find("monitor-tile-network")
+                .label()
+                .unwrap()
+                .contains(&hostname),
+            "the network tile names the context pane's host"
+        );
+        // Both series are on screen with rate formatting, and the overlay
+        // chart is present because a genuine reading exists.
+        let rx = window
+            .find("monitor-tile-network-rx")
+            .label()
+            .unwrap()
+            .to_owned();
+        let tx = window
+            .find("monitor-tile-network-tx")
+            .label()
+            .unwrap()
+            .to_owned();
+        assert!(rx.starts_with('↓') && rx.ends_with("/s"), "rx reads {rx:?}");
+        assert!(tx.starts_with('↑') && tx.ends_with("/s"), "tx reads {tx:?}");
+        assert!(window.find("monitor-tile-network-chart").visible());
+        // The distinct waiting/unsupported words stay off screen while a
+        // real reading is present.
+        assert_ne!(
+            window.find("monitor-tile-network").label(),
+            Some(i18n::t(L10nKey::HostMetricsUnavailable))
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn monitor_history_survives_being_offscreen(cx: &mut TestAppContext) {
+    let server = HostServer::new();
+    let (app, mut vcx, _pane_streams) = harness_with_tabs(cx, 1);
+    vcx.update(|window, cx| {
+        crate::ui::windows::WindowRegistry::init(cx);
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            app.read(cx).workspace,
+            window.window_handle(),
+            app.downgrade(),
+        );
+        LocalLink::install_client_for_test(cx, server.client.clone());
+    });
+    wait_sample(&mut vcx, true);
+
+    // Open the monitor, let history accumulate, then put the metrics fully
+    // offscreen: the panel's tab closed and the document surface replacing
+    // terminal chrome (and with it the title-bar strip).
+    vcx.update(|window, cx| window.click("titlebar-metric-ram", cx));
+    settle(&mut vcx);
+    for _ in 0..3 {
+        vcx.executor().advance_clock(Duration::from_secs(1));
+        settle(&mut vcx);
+    }
+    let before = vcx.update(|_, cx| {
+        cx.default_global::<MetricsHistories>()
+            .0
+            .get(&HostId::LOCAL)
+            .map_or(0, |history| history.arrivals.len())
+    });
+    assert!(before > 0, "sampling must accumulate before the check");
+
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.close_right_panel_tab(RightPanelTab::Monitor, window, cx);
+    });
+    vcx.dispatch_action(EditorNewFile);
+    vcx.dispatch_action(ToggleDocumentFill);
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        assert!(window.try_find("titlebar-metrics").is_none());
+        assert!(window.try_find("monitor-tile-cpu").is_none());
+    });
+
+    // Demand-driven polling: with nobody showing the host, the sampler view
+    // is released and its loop stops — but the run-scoped history survives.
+    for _ in 0..3 {
+        vcx.executor().advance_clock(Duration::from_secs(1));
+        settle(&mut vcx);
+    }
+    let frozen = vcx.update(|_, cx| {
+        cx.default_global::<MetricsHistories>()
+            .0
+            .get(&HostId::LOCAL)
+            .map_or(0, |history| history.arrivals.len())
+    });
+    assert_eq!(
+        frozen, before,
+        "a temporarily offscreen view stops polling but must not destroy history"
+    );
+
+    // Back on screen: the history is still there and sampling resumes,
+    // leaving an honest local-time gap where nothing was collected.
+    vcx.update(|window, cx| window.click("editor-panel-close", cx));
+    settle(&mut vcx);
+    vcx.update(|window, cx| window.click("titlebar-metric-cpu", cx));
+    settle(&mut vcx);
+    for _ in 0..2 {
+        vcx.executor().advance_clock(Duration::from_secs(1));
+        settle(&mut vcx);
+    }
+    let resumed = vcx.update(|_, cx| {
+        cx.default_global::<MetricsHistories>()
+            .0
+            .get(&HostId::LOCAL)
+            .map_or(0, |history| history.arrivals.len())
+    });
+    assert!(
+        resumed > frozen,
+        "coming back on screen resumes sampling on the retained history"
+    );
+}
+
+#[gpui_kit::test]
+fn narrow_windows_drop_charts_first_then_the_whole_strip(cx: &mut TestAppContext) {
+    let server = HostServer::new();
+    let (app, mut vcx, _pane_streams) = harness_with_tabs(cx, 1);
+    vcx.update(|window, cx| {
+        crate::ui::windows::WindowRegistry::init(cx);
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            app.read(cx).workspace,
+            window.window_handle(),
+            app.downgrade(),
+        );
+        LocalLink::install_client_for_test(cx, server.client.clone());
+    });
+    wait_sample(&mut vcx, true);
+
+    for (width, charts, strip) in [
+        (1440., true, true),
+        (790., false, true),
+        (760., false, true),
+        (720., false, true),
+        (500., false, false),
+    ] {
+        vcx.simulate_resize(size(px(width), px(720.)));
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            assert_eq!(
+                window.try_find("titlebar-metrics").is_some(),
+                strip,
+                "width {width}: strip presence"
+            );
+            if strip {
+                assert_eq!(
+                    window.try_find("titlebar-metric-cpu-chart").is_some(),
+                    charts,
+                    "width {width}: charts are what narrow windows drop first"
+                );
+                assert!(
+                    window.find("titlebar-metric-cpu-value").visible(),
+                    "width {width}: readings survive the charts"
+                );
+                assert!(
+                    window.find("titlebar-metric-gpu-value").visible(),
+                    "width {width}: the GPU reading survives the charts like the others"
+                );
+                // The strip begins after the left command group and ends
+                // before the right one: no chart or tile may sit over a
+                // command tile at the widths the old fixed threshold let
+                // through.
+                let metrics = window.find("titlebar-metrics").bounds();
+                let left_group_end = window.find("titlebar-add").bounds();
+                let right_command = window.find("titlebar-split-right").bounds();
+                assert!(
+                    metrics.left() >= left_group_end.right(),
+                    "width {width}: the metrics strip covers the left command group"
+                );
+                assert!(
+                    metrics.left() - left_group_end.right() >= px(40.),
+                    "width {width}: the drag band shrank below the chrome budget"
+                );
+                assert!(
+                    metrics.right() <= right_command.left(),
+                    "width {width}: the metrics strip covers the right command group"
+                );
+            }
+            // The chrome around the strip never yields: native-adjacent
+            // controls and the drag area stay put at every width.
+            for id in [
+                "titlebar-split-right",
+                "titlebar-split-down",
+                "titlebar-right-panel",
+            ] {
+                assert!(window.find(id).visible(), "width {width}: {id}");
+            }
+        });
+    }
+
+    // The budget is in rems: a larger interface loses the compact strip
+    // earlier than the default rem would at the same pixel width.
+    app.update_in(&mut vcx, |_, _, cx| {
+        cx.global_mut::<lyrel_ui_base::config::Config>()
+            .ui_font_size = 20.;
+        cx.notify();
+    });
+    vcx.simulate_resize(size(px(730.), px(720.)));
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        assert!(
+            window.try_find("titlebar-metrics").is_some(),
+            "a 730px window still has room for compact readings at a 20px rem"
+        );
+        assert!(
+            window.try_find("titlebar-metric-cpu-chart").is_none(),
+            "charts do not fit at this rem either"
+        );
+    });
+    vcx.simulate_resize(size(px(690.), px(720.)));
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        assert!(
+            window.try_find("titlebar-metrics").is_none(),
+            "a 690px window at a 20px rem has no room for the strip"
+        );
+    });
 }
 
 #[gpui_kit::test]
@@ -127,7 +727,7 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     vcx.update(|window, _| {
         assert!(
             window
-                .find("status-host-metrics")
+                .find("titlebar-metric-cpu")
                 .label()
                 .unwrap()
                 .contains(&hostname)
@@ -141,19 +741,19 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     vcx.update(|window, _| {
         assert!(
             window
-                .find("status-host-metrics")
+                .find("titlebar-metric-cpu")
                 .label()
                 .unwrap()
                 .contains(&hostname)
         );
     });
-    assert!(has_sample(&mut vcx));
+    assert!(has_titlebar_sample(&mut vcx));
     vcx.dispatch_action(RestorePanePip);
     settle(&mut vcx);
     assert!(app.read_with(&vcx, |app, cx| {
         app.tabs[app.tabs.active_index()].pip_slot(cx).is_none()
     }));
-    for (width, font) in [(1440., 16.), (720., 20.)] {
+    for (width, font) in [(1440., 16.), (760., 20.)] {
         vcx.simulate_resize(size(px(width), px(720.)));
         app.update_in(&mut vcx, |_, _, cx| {
             cx.global_mut::<lyrel_ui_base::config::Config>()
@@ -162,12 +762,11 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
         });
         settle(&mut vcx);
         vcx.update(|window, _| {
-            assert!(window.find("status-cpu").visible());
-            assert!(window.find("status-memory").visible());
-            let bar = window.find("workbench-status").bounds();
-            let metrics = window.find("status-host-metrics").bounds();
-            assert!(metrics.right() <= bar.right());
-            assert!(metrics.bottom() <= bar.bottom());
+            assert!(window.find("titlebar-metric-cpu").visible());
+            assert!(window.find("titlebar-metric-ram").visible());
+            let metrics = window.find("titlebar-metrics").bounds();
+            assert!(metrics.right() <= window.viewport_size().width);
+            assert!(metrics.top() >= px(0.));
         });
     }
 
@@ -175,7 +774,7 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     vcx.dispatch_action(EditorNewFile);
     vcx.dispatch_action(ToggleDocumentFill);
     settle(&mut vcx);
-    vcx.update(|window, _| assert!(window.try_find("status-host-metrics").is_none()));
+    vcx.update(|window, _| assert!(window.try_find("titlebar-metrics").is_none()));
     vcx.update(|window, cx| window.click("editor-panel-close", cx));
     wait_sample(&mut vcx, true);
 
@@ -201,7 +800,7 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     });
     settle(&mut vcx);
     assert!(
-        !has_sample(&mut vcx),
+        !has_titlebar_sample(&mut vcx),
         "remote workspace relabeled the local host sample"
     );
     app.update_in(&mut vcx, |app, window, cx| {
@@ -300,14 +899,17 @@ fn remote_workspace_metrics_never_relabel_another_hosts_sample(cx: &mut TestAppC
         app.switch_workspace(Some(b), window, cx)
     });
     settle(&mut vcx);
-    assert!(!has_sample(&mut vcx), "B briefly displayed A's old numbers");
+    assert!(
+        !has_titlebar_sample(&mut vcx),
+        "B briefly displayed A's old numbers"
+    );
     let server_b = RemoteServer::new(&target_b);
     server_b.install(&mut vcx);
     wait_sample(&mut vcx, true);
     server_a.host.client().close();
     settle(&mut vcx);
     assert!(
-        has_sample(&mut vcx),
+        has_titlebar_sample(&mut vcx),
         "A's disconnect cleared B's measurement"
     );
 
@@ -316,7 +918,7 @@ fn remote_workspace_metrics_never_relabel_another_hosts_sample(cx: &mut TestAppC
     });
     settle(&mut vcx);
     assert!(
-        !has_sample(&mut vcx),
+        !has_titlebar_sample(&mut vcx),
         "a disconnected A retained B's sample"
     );
     let reconnected_a = RemoteServer::new(&target_a);
@@ -328,7 +930,7 @@ fn remote_workspace_metrics_never_relabel_another_hosts_sample(cx: &mut TestAppC
     });
     settle(&mut vcx);
     assert!(
-        !has_sample(&mut vcx),
+        !has_titlebar_sample(&mut vcx),
         "local workspace reused A despite no local daemon connection"
     );
     let local_server = HostServer::new();
@@ -413,4 +1015,44 @@ fn metrics_completion_uses_daemon_identity_without_replaying_old_link_errors(
             );
         });
     }
+}
+
+/// The 760–790px band that used to paint the chart over the left command
+/// group now buys compact readings. Keep the drag band and native controls.
+#[test]
+fn the_titlebar_budget_drops_charts_then_the_whole_strip() {
+    assert_eq!(titlebar_metrics_layout(1440., 16., 3, false), Some(true));
+    for width in [760., 775., 790.] {
+        assert_eq!(
+            titlebar_metrics_layout(width, 16., 3, false),
+            Some(false),
+            "width {width}: charts must give way before the command group"
+        );
+    }
+    assert_eq!(titlebar_metrics_layout(720., 16., 3, false), Some(false));
+    assert_eq!(titlebar_metrics_layout(500., 16., 3, false), None);
+
+    assert_eq!(titlebar_metrics_layout(730., 20., 3, false), Some(false));
+    assert_eq!(titlebar_metrics_layout(690., 20., 3, false), None);
+    assert_eq!(titlebar_metrics_layout(600., 16., 1, false), Some(true));
+    assert_eq!(titlebar_metrics_layout(760., 16., 1, false), Some(true));
+    assert_eq!(titlebar_metrics_layout(760., 16., 0, false), None);
+}
+
+#[test]
+fn titlebar_ram_and_monitor_pair_carry_their_unit() {
+    let gib = 1_073_741_824_u64;
+    let state = State::Ready(HostMetrics::new(
+        "metrics-host",
+        "metrics-daemon",
+        MetricsState::Sample(HostSample::new(
+            12.,
+            (13.1_f64 * gib as f64) as u64,
+            32 * gib,
+            1_700_000_000_000,
+        )),
+    ));
+    let reading = readout(&state, false);
+    assert_eq!(reading.memory_text(), "13.1 GB");
+    assert_eq!(reading.memory_total_text().as_deref(), Some("/ 32 GB"));
 }

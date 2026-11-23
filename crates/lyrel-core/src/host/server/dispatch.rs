@@ -129,7 +129,20 @@ fn run_request(
 
     Ok(match req {
         ControlRequest::Ping => (ReplyOk::Pong, Vec::new()),
-        ControlRequest::HostMetrics => (ReplyOk::HostMetrics(h.host_metrics()?), Vec::new()),
+        ControlRequest::HostMetrics => {
+            let mut metrics = h.host_metrics()?;
+            // Lyrel's own usage rides the same answer as an ignorable field
+            // (#377): a host that cannot attribute it leaves it absent, and a
+            // client that never heard of it drops it on decode. The reading
+            // is sampled on demand, sharing the request's cadence.
+            if let Ok(usage) = h.lyrel_usage() {
+                metrics.set_lyrel_usage(Some(usage));
+            }
+            (ReplyOk::HostMetrics(metrics), Vec::new())
+        }
+        ControlRequest::DirectoryScan { path } => {
+            (ReplyOk::DiskUsage(h.disk_usage(&p(&path))?), Vec::new())
+        }
 
         ControlRequest::ReadDir { dir, root } => {
             let root = root.map(|r| p(&r));
@@ -251,7 +264,12 @@ fn run_request(
         }
 
         ControlRequest::Shells => (ReplyOk::Shells(h.shells()?), Vec::new()),
-        ControlRequest::AgentSessions => (ReplyOk::AgentSessions(h.agent_sessions()?), Vec::new()),
+        ControlRequest::AgentSessions { directory } => (
+            ReplyOk::AgentSessions(
+                h.agent_sessions(directory.as_deref().map(std::path::Path::new))?,
+            ),
+            Vec::new(),
+        ),
         ControlRequest::SessionOperation { request } => (
             ReplyOk::SessionOperation(Box::new(h.session_operation(&request))),
             Vec::new(),
@@ -270,6 +288,10 @@ fn run_request(
         ),
         ControlRequest::HermesStatistics { request } => (
             ReplyOk::HermesStatistics(Box::new(h.hermes_statistics(&request))),
+            Vec::new(),
+        ),
+        ControlRequest::SessionBatch { request } => (
+            ReplyOk::SessionBatch(Box::new(h.session_batch(&request))),
             Vec::new(),
         ),
 
@@ -612,6 +634,28 @@ fn run_request(
             ),
             Vec::new(),
         ),
+        ControlRequest::PaneEndProcessPlan {
+            pane_id,
+            pid,
+            started,
+        } => {
+            let panes = conn.panes.as_ref().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Unsupported, "this server serves no panes")
+            })?;
+            let plan = panes
+                .pane_end_process_plan(pane_id, pid, started)
+                .map_err(|message| io::Error::new(io::ErrorKind::NotFound, message))?;
+            (ReplyOk::EndProcessPlan(plan), Vec::new())
+        }
+        ControlRequest::PaneEndProcess { pane_id, scope } => {
+            let panes = conn.panes.as_ref().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Unsupported, "this server serves no panes")
+            })?;
+            (
+                ReplyOk::EndProcessReport(panes.pane_end_process(pane_id, &scope)),
+                Vec::new(),
+            )
+        }
         ControlRequest::Routes => (
             ReplyOk::Routes(crate::daemon::ssh::SshManager::global().routes()),
             Vec::new(),

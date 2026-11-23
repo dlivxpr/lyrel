@@ -67,6 +67,37 @@ pub trait PaneDirectory: Send + Sync {
     /// is this process and not the client's own daemon: the client asks over
     /// the control link precisely because the processes are here.
     fn pane_procs(&self, pane_id: u64) -> crate::daemon::protocol::PaneProcs;
+    /// The verified scope ending one of the pane's processes would cover —
+    /// the #372 confirmation path. `Err` carries the daemon's reason the
+    /// identity could not be vouched for; unlike `pane_procs`, a refusal
+    /// here is information, not absence. Directories that serve no local
+    /// panes refuse: their far side is exactly what this request exists to
+    /// avoid acting on.
+    fn pane_end_process_plan(
+        &self,
+        _pane_id: u64,
+        _pid: u32,
+        _started: Option<u64>,
+    ) -> Result<crate::daemon::protocol::EndProcessPlan, String> {
+        Err("this directory does not serve process termination".to_string())
+    }
+    /// Terminate exactly the confirmed identities and report one outcome per
+    /// identity, including the ones refused as drifted. The default refuses
+    /// every identity, mirroring `pane_end_process_plan`.
+    fn pane_end_process(
+        &self,
+        _pane_id: u64,
+        scope: &[crate::daemon::protocol::ProcIdentity],
+    ) -> Vec<crate::daemon::protocol::EndProcessOutcome> {
+        scope
+            .iter()
+            .map(|id| crate::daemon::protocol::EndProcessOutcome {
+                pid: id.pid,
+                name: String::new(),
+                state: crate::daemon::protocol::EndProcessState::NotOwned,
+            })
+            .collect()
+    }
     /// Stop a pane for a tab going to sleep: the processes go, the pane's last
     /// screen stays on disk for the wake to open with. Unlike closing a pane,
     /// which drops that screen because nobody will ask for it again.

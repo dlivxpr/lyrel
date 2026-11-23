@@ -6,6 +6,7 @@ use gpui_kit::{App, Axis, EntityId, Window};
 use lyrel_core::core::machine::{Axis as TreeAxis, PaneNode, Tab as TreeTab, TabPresentation};
 use lyrel_ui_base::session::{WorkspaceId, WorkspaceStore};
 use std::collections::HashMap;
+use std::path::Path;
 fn pane_from_existing(node: &PaneNode, slots: &mut HashMap<u64, PaneSlot>) -> Option<Pane> {
     match node {
         PaneNode::Leaf { pane } => slots.remove(pane).map(Pane::Leaf),
@@ -25,6 +26,7 @@ impl Tab {
     pub(crate) fn prepare_split(
         &self,
         spawn: Option<SpawnAs>,
+        cwd_override: Option<&Path>,
         window: &Window,
         cx: &App,
     ) -> Option<SplitRequest> {
@@ -52,11 +54,14 @@ impl Tab {
             SpawnAs::Shell(_) => view.workspace().cloned(),
             SpawnAs::Ssh(_) => None,
         };
+        let cwd = cwd_override
+            .map(Path::to_path_buf)
+            .or_else(|| inherited_start_dir(opened, view.cwd(), view.remote_context().is_some()));
         Some(SplitRequest {
             tab: self.id(),
             target: target.entity_id(),
             spawn,
-            cwd: inherited_start_dir(opened, view.cwd(), view.remote_context().is_some()),
+            cwd,
             workspace,
         })
     }

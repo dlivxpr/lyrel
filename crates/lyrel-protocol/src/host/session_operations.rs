@@ -15,9 +15,8 @@ use crate::core::cli_agent::CLIAgent;
 use crate::core::shell_quote::{Quoting, quote_for_shell, quoting_for};
 use crate::host::{Host, guard_off_ui};
 
+pub mod batch;
 pub(crate) mod hermes;
-#[cfg(test)]
-mod hermes_tests;
 mod kimi;
 pub mod opencode;
 

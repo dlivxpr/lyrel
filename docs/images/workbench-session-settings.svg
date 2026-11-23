@@ -37,7 +37,7 @@
       <rect x="501" y="55" width="234" height="28" rx="6"/><rect x="14" y="101" width="50" height="25" rx="5"/>
       <rect x="14" y="163" width="396" height="46" rx="6"/><rect x="442" y="280" width="128" height="28" rx="6"/>
     </g>
-    <text x="620" y="29">dev-linux</text><text x="720" y="29" text-anchor="end" fill="var(--muted)">▾</text>
+    <text x="620" y="29">本机</text><text x="720" y="29" text-anchor="end" fill="var(--muted)">▾</text>
     <text x="25" y="74" fill="var(--muted)">搜索标题或 ID</text><text x="214" y="74">全部智能体 ▾</text>
     <text x="337" y="74"><tspan fill="var(--muted)">最近活动</tspan>　早于 30 天 ▾</text>
     <text x="512" y="74"><tspan fill="var(--muted)">目录</tspan>　所有目录 ▾</text>

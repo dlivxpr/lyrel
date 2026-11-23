@@ -86,6 +86,14 @@ pub struct AgentSessionChanged;
 
 impl gpui_kit::EventEmitter<AgentSessionChanged> for TerminalView {}
 
+/// The pane's observed agent status moved (Working/Waiting/Done/Idle), where
+/// [`AgentSessionChanged`] names an identity move. What a keep-awake
+/// controller aggregates; transitions fire here even when the session is the
+/// same one.
+pub struct AgentStatusChanged;
+
+impl gpui_kit::EventEmitter<AgentStatusChanged> for TerminalView {}
+
 /// A meaningful current-progress change; never a command/agent completion.
 pub struct ProgressChanged;
 impl gpui_kit::EventEmitter<ProgressChanged> for TerminalView {}
@@ -1135,8 +1143,38 @@ impl TerminalView {
         }))
     }
 
+    /// Whether this pane is a verified idle Shell that history restoration
+    /// may reuse: the shell integration reports a live prompt, nothing runs
+    /// in the pane, no agent owns it, and no unsubmitted input sits on the
+    /// line. Anything less certain — a program in flight, a TUI on the
+    /// alternate screen, no integration reporting, keys the typeahead still
+    /// owes, text the local prompt editor is still holding — reads as "not
+    /// idle", and the caller opens a new pane instead of typing into this
+    /// one.
+    pub fn idle_shell_ready_for_reuse(&self) -> bool {
+        if self.terminal.exited
+            || self.agent().is_some()
+            || self.busy().is_some()
+            || self.on_alt_screen()
+        {
+            return false;
+        }
+        self.terminal.at_prompt() && !self.has_pending_prompt_input()
+    }
+
     pub fn agent_result_unread(&self) -> bool {
         self.agent_activity.unread()
+    }
+
+    /// Whether the shell's line holds anything unsubmitted — typed text or a
+    /// taint the typeahead still owes a wipe for, or text the local prompt
+    /// editor is still holding (its bytes may not have reached the shell
+    /// yet, but they belong to the user's line, not to a restorer). Read by
+    /// history restoration before a pane is reused; held input belongs to
+    /// the user and is preserved by leaving the pane alone.
+    pub fn has_pending_prompt_input(&self) -> bool {
+        self.input.has_pending_typeahead()
+            || (self.input.enabled() && !self.input.editor().text().is_empty())
     }
 
     pub fn mark_agent_result_unread(&mut self, refocus_incoming: bool, cx: &mut App) {

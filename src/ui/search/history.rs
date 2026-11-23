@@ -1,4 +1,11 @@
-//! Host-scoped session discovery, cached rows, and late-result fencing.
+//! Search Everywhere's Sessions tab: the host-scoped session discovery
+//! rendered as searchable rows.
+//!
+//! The discovery itself — building each provider's scan requests and merging
+//! what the owning Host found — is shared with the right panel's Session
+//! History tool and Sessions settings in [`crate::ui::session_history`], so
+//! every consumer lists the same sessions and the same per-source errors.
+//! This module only shapes the result into search rows.
 
 use std::path::PathBuf;
 
@@ -35,18 +42,38 @@ impl SessionHistory {
     }
 
     pub(crate) fn cached_items(&self, cx: &App) -> (Vec<Item>, usize) {
-        self.items(last_sessions(self.host), cx)
+        self.items(crate::ui::session_history::cached_sessions(self.host), cx)
     }
 
     pub(super) fn items(&self, found: Vec<PastSession>, cx: &App) -> (Vec<Item>, usize) {
         let now = lyrel_core::core::config::unix_now();
-        let hidden = &cx.global::<Config>().hidden_agent_sessions;
+        let cfg = cx.global::<Config>();
+        let host = self.host;
         let here = &self.here;
         let home = &self.home;
+        // `here` is a directory on this query's host; its records are judged
+        // by that host's path semantics, not by the client's platform.
+        let host_separator = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, self.host)
+            .map_or(std::path::MAIN_SEPARATOR, |host| host.separator());
         let (mut mine, mut rest): (Vec<_>, Vec<_>) = found
             .into_iter()
-            .filter(|s| !hidden.contains(&crate::core::agent_history::session_key(s.agent, &s.id)))
-            .partition(|s| here.is_some() && s.cwd.as_ref() == here.as_ref());
+            .filter(|s| {
+                !crate::ui::session_history::is_session_hidden(
+                    cfg,
+                    &crate::ui::session_history::SessionIdentity::of(host, s),
+                )
+            })
+            .partition(|s| {
+                here.as_deref().is_some_and(|here| {
+                    s.cwd.as_deref().is_some_and(|cwd| {
+                        crate::core::agent_history::directory_matches_with(
+                            cwd,
+                            here,
+                            host_separator,
+                        )
+                    })
+                })
+            });
         let here_section: Option<gpui_kit::SharedString> = here.as_ref().map(|dir| {
             t_fmt(
                 L10nKey::SearchSectionSessionsHere,
@@ -144,226 +171,38 @@ impl SessionQuery {
     pub(super) fn start(self, generation: u64, window: &mut Window, cx: &mut Context<SearchView>) {
         let history = self.history;
         let host_id = history.host;
-        use lyrel_core::host::session_operations::{
-            SessionOperation, SessionOperationKind, SessionScope,
-        };
-        let opencode = crate::core::cli_agent::CLIAgent::OpenCode;
-        let mut opencode_scopes = Vec::new();
-        let hermes = crate::core::cli_agent::CLIAgent::Hermes;
-        let mut hermes_scopes = Vec::new();
-        let mut hermes_errors = Vec::new();
-        for leaf in self.panes {
-            let pane = leaf.read(cx);
-            if pane.host_id() == host_id
-                && pane.agent() == Some(hermes)
-                && let Some(state) = pane.agent_session()
-                && let Some(cwd) = pane.host_cwd()
-                && let Some(scope) = state.readout.session_scope.clone()
-                && let Some(launch_argv) =
-                    lyrel_core::host::session_operations::launch_context(hermes, &state)
-                && !hermes_scopes
-                    .iter()
-                    .any(|request: &SessionOperation| request.scope == scope)
-            {
-                hermes_scopes.push(SessionOperation {
-                    expected_host: host_id.0,
-                    agent: hermes,
-                    kind: SessionOperationKind::Resume,
-                    source_id: String::new(),
-                    cwd,
-                    launch_argv,
-                    scope,
-                });
-            }
-            if pane.host_id() != host_id || pane.agent() != Some(opencode) {
-                continue;
-            }
-            let Some(state) = pane.agent_session() else {
-                continue;
-            };
-            let Some(cwd) = pane.host_cwd() else {
-                continue;
-            };
-            let Some(mut scope) = state.readout.session_scope.clone() else {
-                continue;
-            };
-            let Some(launch_argv) =
-                lyrel_core::host::session_operations::launch_context(opencode, &state)
-            else {
-                continue;
-            };
-            if let Some(context) = &mut scope.opencode {
-                context.launch_argv = launch_argv.clone();
-            }
-            if opencode_scopes
-                .iter()
-                .any(|request: &SessionOperation| request.scope == scope)
-            {
-                continue;
-            }
-            opencode_scopes.push(SessionOperation {
-                expected_host: host_id.0,
-                agent: opencode,
-                kind: SessionOperationKind::Resume,
-                source_id: String::new(),
-                cwd,
-                launch_argv,
-                scope,
-            });
-        }
-        // A normal default/configured scope remains discoverable without an open TUI.
-        let default_launch = crate::core::cli_agent::parse_command_argv(
-            &opencode.launch_command(&cx.global::<Config>().agent_launch),
-        );
+        // A normal default/configured scope remains discoverable without an
+        // open TUI; the directory it validates against is the pane's spawn
+        // directory, then this host's home.
         let default_cwd = history
             .default_cwd
             .clone()
             .or_else(|| history.home.clone())
             .unwrap_or_default();
-        if self.agents.contains(&opencode)
-            && let Ok(launch_argv) = default_launch
-        {
-            opencode_scopes.push(SessionOperation {
-                expected_host: host_id.0,
-                agent: opencode,
-                kind: SessionOperationKind::Resume,
-                source_id: String::new(),
-                cwd: default_cwd.clone(),
-                launch_argv,
-                scope: SessionScope::default(),
-            });
-        }
-        if self.agents.contains(&hermes) {
-            match crate::core::cli_agent::parse_command_argv(
-                &hermes.launch_command(&cx.global::<Config>().agent_launch),
-            ) {
-                Ok(launch_argv) => hermes_scopes.push(SessionOperation {
-                    expected_host: host_id.0,
-                    agent: hermes,
-                    kind: SessionOperationKind::Resume,
-                    source_id: String::new(),
-                    cwd: default_cwd,
-                    launch_argv,
-                    scope: SessionScope::default(),
-                }),
-                Err(message) => hermes_errors.push(
-                    lyrel_core::host::session_operations::SessionOperationError {
-                        kind: lyrel_core::host::session_operations::SessionErrorKind::Unsupported,
-                        message: format!("Hermes history launch context: {message}"),
-                        retained: None,
-                    },
-                ),
-            }
-        }
+        let scan = crate::ui::session_history::plan_scan(
+            host_id,
+            &self.panes,
+            &self.agents,
+            &default_cwd,
+            &cx.global::<Config>().agent_launch.clone(),
+            cx,
+        );
         HostOps::run_in(
             self.host,
             window,
             cx,
-            move |h| {
-                let mut found = h.agent_sessions();
-                let mut errors = hermes_errors;
-                for request in opencode_scopes {
-                    match h.opencode_sessions(&request) {
-                        Ok(sessions) => {
-                            if let Ok(found) = &mut found {
-                                for session in sessions {
-                                    let same =
-                                        |existing: &crate::core::agent_history::PastSession| {
-                                            existing.agent == session.agent
-                                                && existing.id == session.id
-                                                && existing
-                                                    .scope
-                                                    .as_ref()
-                                                    .and_then(|s| s.opencode.as_ref())
-                                                    .map(|s| (&s.server, &s.connection_argv))
-                                                    == session
-                                                        .scope
-                                                        .as_ref()
-                                                        .and_then(|s| s.opencode.as_ref())
-                                                        .map(|s| (&s.server, &s.connection_argv))
-                                        };
-                                    if !found.iter().any(same) {
-                                        found.push(session);
-                                    }
-                                }
-                            }
-                        }
-                        Err(error) => errors.push(error),
-                    }
-                }
-                for request in hermes_scopes {
-                    match h.hermes_sessions(&request) {
-                        Ok(sessions) => {
-                            if let Ok(found) = &mut found {
-                                for session in sessions {
-                                    if !found.iter().any(|existing| {
-                                        existing.agent == session.agent
-                                            && existing.id == session.id
-                                            && existing.scope == session.scope
-                                    }) {
-                                        found.push(session);
-                                    }
-                                }
-                            }
-                        }
-                        Err(error) => errors.push(error),
-                    }
-                }
-                if let Ok(found) = &mut found {
-                    found.sort_by_key(|s| std::cmp::Reverse(s.updated));
-                }
-                (found, errors)
-            },
-            move |view, (found, errors), window, cx| {
+            move |host| crate::ui::session_history::collect_sessions(host, scan),
+            move |view, listing, window, cx| {
                 if !view.accepts_session_query(generation) {
                     return;
                 }
-                for error in errors {
+                for error in listing.errors {
                     cx.emit(SearchEvent::SessionError(error));
                 }
-                let found = match found {
-                    Ok(found) => found,
-                    Err(e) => {
-                        log::warn!("listing agent sessions: {e}");
-                        return;
-                    }
-                };
-                remember_sessions(host_id, found.clone());
-                let (sessions, here) = history.items(found, cx);
+                crate::ui::session_history::remember_sessions(host_id, listing.sessions.clone());
+                let (sessions, here) = history.items(listing.sessions, cx);
                 view.set_sessions(sessions, here, window, cx);
             },
         );
     }
-}
-
-/// What each host's last session scan found: what the Sessions tab shows
-/// while the next scan runs, so it does not open empty.
-static LAST_SESSIONS: std::sync::LazyLock<
-    std::sync::Mutex<
-        std::collections::HashMap<
-            lyrel_ui_base::host_ops::HostId,
-            Vec<crate::core::agent_history::PastSession>,
-        >,
-    >,
-> = std::sync::LazyLock::new(Default::default);
-
-fn last_sessions(
-    host: lyrel_ui_base::host_ops::HostId,
-) -> Vec<crate::core::agent_history::PastSession> {
-    LAST_SESSIONS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&host)
-        .cloned()
-        .unwrap_or_default()
-}
-
-fn remember_sessions(
-    host: lyrel_ui_base::host_ops::HostId,
-    found: Vec<crate::core::agent_history::PastSession>,
-) {
-    LAST_SESSIONS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(host, found);
 }

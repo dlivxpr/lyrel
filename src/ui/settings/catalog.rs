@@ -12,6 +12,11 @@ pub(super) fn settings_search_entries() -> &'static [SearchEntry] {
     use SettingsSection::*;
     &[
         SearchEntry {
+            section: Toolbar,
+            title: SettingsNavToolbar,
+            keywords: ToolbarKeywords,
+        },
+        SearchEntry {
             section: Skills,
             title: SettingsNavSkills,
             keywords: SkillsPageDescription,
@@ -20,6 +25,11 @@ pub(super) fn settings_search_entries() -> &'static [SearchEntry] {
             section: Statistics,
             title: StatisticsTitle,
             keywords: StatisticsKeywords,
+        },
+        SearchEntry {
+            section: Sessions,
+            title: SettingsNavSessions,
+            keywords: SessionsSettingsKeywords,
         },
         SearchEntry {
             section: Usage,

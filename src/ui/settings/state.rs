@@ -88,6 +88,19 @@ impl SettingsWindow {
 
         let shortcuts = shortcuts::ShortcutEditor::new(window, cx);
 
+        let sessions = sessions::SessionsState::new(window, cx);
+        for input in [
+            sessions.search.clone(),
+            sessions.start.clone(),
+            sessions.end.clone(),
+        ] {
+            subs.push(cx.subscribe_in(&input, window, |this, _, ev, _w, cx| {
+                if matches!(ev, InputEvent::Change) {
+                    this.sessions_filter_edited(cx);
+                }
+            }));
+        }
+
         let navigation =
             navigation::SettingsNavigation::new(settings_search, self.last_settings_location);
         let usage = cx.new(|cx| {
@@ -135,6 +148,7 @@ impl SettingsWindow {
             agent_touched: std::collections::HashSet::new(),
             agent_busy: std::collections::HashSet::new(),
             statistics: crate::ui::settings::statistics::StatisticsState::new(window, cx),
+            sessions,
             _subs: subs,
         });
         let search_focus = self

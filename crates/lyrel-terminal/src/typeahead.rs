@@ -67,6 +67,14 @@ impl Typeahead {
         self.pasted
     }
 
+    /// Non-destructive read of whether a record is owed. The wipe contract
+    /// treats a taint as owed even with no text left (`drain` yields an empty
+    /// string); this is the same question without taking the record. Callers
+    /// deciding whether a shell line is safe to write read this first.
+    pub fn is_pending(&self) -> bool {
+        self.tainted || !self.text.is_empty()
+    }
+
     pub fn drain(&mut self) -> Option<String> {
         std::mem::take(self).flush()
     }

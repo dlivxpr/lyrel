@@ -9,6 +9,8 @@
 //!   `LocalHost::new`),
 //! - [`metrics`] — the sysinfo-backed whole-host sampler behind the wire
 //!   values,
+//! - [`lyrel_usage`] — the sysinfo-backed sampler for Lyrel's own daemon
+//!   process, behind the component-usage wire values,
 //! - [`sqlite`] — the read-only `rusqlite` browsing engine,
 //! - [`remote`] — the SSH transport,
 //! - [`server`] — the control/pane server machinery,
@@ -19,7 +21,9 @@ pub mod conformance;
 
 pub use lyrel_protocol::host::*;
 
+pub mod disk;
 pub mod local;
+pub mod lyrel_usage;
 pub mod metrics;
 pub mod remote;
 pub mod server;

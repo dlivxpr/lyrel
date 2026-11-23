@@ -37,12 +37,14 @@ mod inputs;
 pub(crate) mod kit;
 mod navigation;
 mod sections;
+mod sessions;
 mod shell;
 mod shortcuts;
 pub(crate) mod skills;
 mod ssh;
 mod state;
 pub(crate) mod statistics;
+mod toolbar;
 pub(crate) mod usage;
 
 #[cfg(test)]
@@ -226,6 +228,7 @@ fn window_overrides_active(config: &Config, backdrop_is_local: bool) -> bool {
 pub(crate) enum SettingsSection {
     General,
     Appearance,
+    Toolbar,
     Terminal,
     KeyboardMouse,
     Ssh,
@@ -233,20 +236,23 @@ pub(crate) enum SettingsSection {
     Skills,
     Statistics,
     Keybindings,
+    Sessions,
     Usage,
     About,
 }
 
 impl SettingsSection {
-    pub(crate) const ALL: [SettingsSection; 10] = [
+    pub(crate) const ALL: [SettingsSection; 12] = [
         SettingsSection::General,
         SettingsSection::Appearance,
+        SettingsSection::Toolbar,
         SettingsSection::Terminal,
         SettingsSection::KeyboardMouse,
         SettingsSection::Ssh,
         SettingsSection::Agents,
         SettingsSection::Skills,
         SettingsSection::Statistics,
+        SettingsSection::Sessions,
         SettingsSection::Usage,
         SettingsSection::About,
     ];
@@ -262,12 +268,14 @@ impl SettingsSection {
         match self {
             Self::General => L10nKey::SettingsNavGeneral,
             Self::Appearance => L10nKey::SettingsNavAppearance,
+            Self::Toolbar => L10nKey::SettingsNavToolbar,
             Self::Terminal => L10nKey::SettingsNavTerminal,
             Self::KeyboardMouse => L10nKey::SettingsNavInput,
             Self::Ssh => L10nKey::SettingsNavSsh,
             Self::Agents => L10nKey::SettingsNavAgents,
             Self::Skills => L10nKey::SettingsNavSkills,
             Self::Statistics => L10nKey::StatisticsTitle,
+            Self::Sessions => L10nKey::SettingsNavSessions,
             Self::Usage => L10nKey::SettingsNavUsage,
             Self::Keybindings => L10nKey::SettingsNavKeybindings,
             Self::About => L10nKey::SettingsNavAbout,
@@ -278,12 +286,14 @@ impl SettingsSection {
         match self {
             Self::General => "icons/settings/general.svg",
             Self::Appearance => "icons/settings/appearance.svg",
+            Self::Toolbar => "icons/panel-left.svg",
             Self::Terminal => "icons/settings/terminal.svg",
             Self::KeyboardMouse | Self::Keybindings => "icons/settings/keyboard.svg",
             Self::Ssh => "icons/settings/ssh.svg",
             Self::Agents => "icons/settings/integrations.svg",
             Self::Skills => "icons/settings/integrations.svg",
             Self::Statistics => "icons/settings/integrations.svg",
+            Self::Sessions => "icons/settings/terminal.svg",
             Self::Usage => "icons/settings/integrations.svg",
             Self::About => "icons/settings/about.svg",
         }
@@ -293,12 +303,14 @@ impl SettingsSection {
         match self {
             SettingsSection::General => "settings:general",
             SettingsSection::Appearance => "settings:appearance",
+            SettingsSection::Toolbar => "settings:toolbar",
             SettingsSection::Terminal => "settings:terminal",
             SettingsSection::KeyboardMouse => "settings:keyboard-mouse",
             SettingsSection::Ssh => "settings:ssh",
             SettingsSection::Agents => "settings:agents",
             SettingsSection::Skills => "settings:skills",
             SettingsSection::Statistics => "settings:statistics",
+            SettingsSection::Sessions => "settings:sessions",
             SettingsSection::Usage => "settings:usage",
             SettingsSection::Keybindings => "settings:keybindings",
             SettingsSection::About => "settings:about",
@@ -379,6 +391,7 @@ pub(crate) struct SettingsState {
     /// Agents with an install or removal in flight.
     pub(crate) agent_busy: std::collections::HashSet<crate::core::agent_hooks::HookAgent>,
     pub(crate) statistics: statistics::StatisticsState,
+    pub(crate) sessions: sessions::SessionsState,
     pub(crate) _subs: Vec<Subscription>,
 }
 

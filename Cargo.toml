@@ -162,6 +162,10 @@ windows-sys = { version = "0.61", features = [
     # module the binding needs — nothing here pulls in dbghelp.
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Threading",
+    # `SetThreadExecutionState` (Caffeine's idle-sleep hold in `ui::caffeine`):
+    # the process-wide ES_CONTINUOUS | ES_SYSTEM_REQUIRED request, deliberately
+    # without ES_DISPLAY_REQUIRED so display sleep and lock stay on system policy.
+    "Win32_System_Power",
     "Win32_System_Console",
     "Win32_UI_Input_Ime",
     "Win32_UI_Input_KeyboardAndMouse",
@@ -309,7 +313,7 @@ default-members = [".", "crates/lyrel-ui-base", "crates/lyrel-terminal", "crates
 edition = "2024"
 # 所有一起发布的 workspace 成员通过 version.workspace 继承此版本。
 # 发布时只修改这一处，不将应用版本与 IPC 协议版本混用。
-version = "0.4.0"
+version = "0.4.1"
 
 [workspace.dependencies]
 encoding_rs = "0.8.44"

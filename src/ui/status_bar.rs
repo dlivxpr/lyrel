@@ -13,20 +13,6 @@ use lyrel_ui_base::i18n::{L10nKey, t};
 
 mod checkout_menu;
 
-#[cfg(test)]
-pub(super) fn choose_status_worktree(cx: &mut gpui_kit::VisualTestContext) {
-    use gpui_kit::MouseButton;
-    use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
-
-    cx.update(|window, cx| {
-        window.render_frame(cx);
-        let item = window.find_by_label(t(L10nKey::StatusCheckoutChooseWorktree));
-        let position = item.bounds().center();
-        window.pointer_down(position, MouseButton::Left, cx);
-        window.pointer_up(position, MouseButton::Left, cx);
-    });
-}
-
 pub(crate) struct Clock {
     text: SharedString,
 }
@@ -141,6 +127,7 @@ impl LyrelApp {
     }
 
     pub(crate) fn render_status_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let toolbar = cx.global::<lyrel_ui_base::config::Config>().toolbar;
         let document_context = self.status_document_context(window, cx);
         let document = document_context.is_some();
         let location = match document_context {
@@ -212,7 +199,8 @@ impl LyrelApp {
                 pane.git_status(cx)?,
             ))
         });
-        let path = path.filter(|_| document || checkout.is_none());
+        let checkout = checkout.filter(|_| toolbar.git);
+        let path = path.filter(|_| toolbar.path && (document || checkout.is_none()));
         let foreground = cx.theme().foreground;
         let divider = cx.theme().border;
         let muted = cx.theme().muted_foreground;
@@ -225,7 +213,7 @@ impl LyrelApp {
                 .h(rems(0.85))
                 .bg(divider)
         };
-        let program = (!document)
+        let program = (toolbar.running && !document)
             .then(|| {
                 leaf.as_ref().and_then(|leaf| {
                     leaf.read(cx).with_program_status(|status| {
@@ -240,19 +228,23 @@ impl LyrelApp {
             .flex_1()
             .min_w_0()
             .gap_1()
-            .child(
-                Button::new("status-host")
-                    .ghost()
-                    .xsmall()
-                    // Button defaults to shrink=0; instance styles are applied
-                    // last, and its native label already owns ellipsis.
-                    .flex_shrink_1()
-                    .min_w(rems(1.5))
-                    .max_w(rems(10.))
-                    .label(host.clone())
-                    .tooltip(host)
-                    .on_click(|_, window, cx| window.dispatch_action(Box::new(ToggleSwitcher), cx)),
-            )
+            .when(toolbar.host, |row| {
+                row.child(
+                    Button::new("status-host")
+                        .ghost()
+                        .xsmall()
+                        // Button defaults to shrink=0; instance styles are applied
+                        // last, and its native label already owns ellipsis.
+                        .flex_shrink_1()
+                        .min_w(rems(1.5))
+                        .max_w(rems(10.))
+                        .label(host.clone())
+                        .tooltip(host)
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(ToggleSwitcher), cx)
+                        }),
+                )
+            })
             .when_some(path, |row, path| {
                 let copied = path.clone();
                 row.child(
@@ -357,28 +349,35 @@ impl LyrelApp {
             .bg(crate::ui::theme::workspace_surface_color(cx))
             .text_xs()
             .text_color(cx.theme().muted_foreground)
-            .child(
-                Button::new("status-settings")
-                    .ghost()
-                    .xsmall()
-                    .icon(Icon::empty().path("icons/settings/general.svg"))
-                    .accessibility_label(t(L10nKey::CmdSettings))
-                    .tooltip(t(L10nKey::CmdSettings))
-                    .on_click(|_, window, cx| window.dispatch_action(Box::new(OpenSettings), cx)),
-            )
+            .when(toolbar.settings, |row| {
+                row.child(
+                    Button::new("status-settings")
+                        .ghost()
+                        .xsmall()
+                        .icon(Icon::empty().path("icons/settings/general.svg"))
+                        .accessibility_label(t(L10nKey::CmdSettings))
+                        .tooltip(t(L10nKey::CmdSettings))
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(OpenSettings), cx)
+                        }),
+                )
+            })
             .child(context)
             .children(program)
             // Document state lives in the editor panel's own bottom bar now;
-            // the global bar only carries window context.
+            // the global bar only carries window context, and host CPU/RAM
+            // moved to the title bar (#373).
             .child(
                 h_flex()
                     .flex_none()
                     .gap_1()
-                    .when(!document, |controls| {
-                        controls.child(self.render_host_metrics(cx))
+                    .when(toolbar.caffeine, |row| {
+                        row.child(self.render_caffeine(window, cx))
                     })
-                    .child(self.status_clock.clone())
-                    .child(self.notification_bell.clone()),
+                    .when(toolbar.clock, |row| row.child(self.status_clock.clone()))
+                    .when(toolbar.notifications, |row| {
+                        row.child(self.notification_bell.clone())
+                    }),
             )
             .into_any_element()
     }
@@ -387,10 +386,12 @@ impl LyrelApp {
 #[cfg(test)]
 mod tests {
     use crate::ui::app::test_window::harness_with_pane;
-    use gpui_kit::test::TestWindowExt as _;
+    use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
     use gpui_kit::{TestAppContext, VisualTestContext, px, size};
     use lyrel_ui_base::actions::{EditorNewFile, ToggleCodePanel, ToggleDocumentFill};
     use lyrel_ui_base::config::Config;
+    use lyrel_ui_base::i18n::L10nKey;
+    use lyrel_ui_base::i18n::t;
 
     fn settle(cx: &mut VisualTestContext) {
         cx.run_until_parked();
@@ -464,21 +465,17 @@ mod tests {
             settle(&mut vcx);
             vcx.update(|window, cx| {
                 assert_global_controls_in_bounds(window);
-                let bar = window.find("workbench-status").bounds();
-                let metrics = window.find("status-host-metrics").bounds();
                 let clock = window.find("status-clock").bounds();
-                for id in ["status-host-metrics", "status-cpu", "status-memory"] {
-                    let control = window.find(id);
-                    assert!(control.visible(), "{id} must remain visible");
-                    assert!(control.bounds().left() >= bar.left());
-                    assert!(control.bounds().right() <= clock.left());
-                }
+                assert!(
+                    window.try_find("status-host-metrics").is_none(),
+                    "host metrics moved to the title bar (#373)"
+                );
                 let host = window.find("status-host");
                 assert!(host.label().unwrap().contains(hostname));
                 assert!(host.visible());
                 let path_bounds = window.find("status-path").bounds();
                 assert!(path_bounds.left() >= host.bounds().right());
-                assert!(path_bounds.right() <= metrics.left());
+                assert!(path_bounds.right() <= clock.left());
                 assert!(path_bounds.size.width >= window.rem_size() * 1.25);
                 if font == 24. {
                     if width == 1440. {
@@ -784,7 +781,9 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn status_git_counts_open_changes_and_the_branch_opens_the_picker(cx: &mut TestAppContext) {
+    fn status_git_counts_open_changes_and_the_branch_menu_offers_worktrees(
+        cx: &mut TestAppContext,
+    ) {
         use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
         use lyrel_ui_base::host_ops::HostId;
 
@@ -828,7 +827,7 @@ mod tests {
             );
             assert!(window.try_find("status-path").is_none());
         });
-        // …and open Changes — not the picker.
+        // …and open Changes — never the removal confirmation.
         vcx.update(|window, cx| window.click("status-git-counts", cx));
         settle(&mut vcx);
         app.read_with(&vcx, |app, _| {
@@ -838,18 +837,24 @@ mod tests {
                 lyrel_core::core::config::RightPanelTab::Scm
             );
             assert!(
-                app.worktree_picker.is_none(),
-                "the counts action never opens the worktree picker"
+                app.worktree_removal.is_none(),
+                "the counts action never touches the worktree removal"
             );
         });
 
-        // The branch control opens the checkout menu, not the picker yet.
+        // The branch control opens the checkout menu, which offers the
+        // shared 工作树 submenu the Changes panel's branch menu appends too.
         vcx.update(|window, cx| window.click("status-git-branch", cx));
         settle(&mut vcx);
-        assert!(app.read_with(&vcx, |app, _| app.worktree_picker.is_none()));
-        super::choose_status_worktree(&mut vcx);
-        settle(&mut vcx);
-        assert!(app.read_with(&vcx, |app, _| app.worktree_picker.is_some()));
+        assert!(app.read_with(&vcx, |app, _| app.worktree_removal.is_none()));
+        vcx.update(|window, _| {
+            assert!(
+                window
+                    .try_find_by_label(&t(L10nKey::ScmWorktrees))
+                    .is_some(),
+                "the checkout menu offers the 工作树 submenu"
+            );
+        });
     }
 
     #[gpui_kit::test]

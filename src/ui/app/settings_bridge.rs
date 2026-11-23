@@ -1,6 +1,7 @@
 //! 工作区与独立设置窗口的接线：工作区保留 pane、文件和焦点操作，设置只发送明确意图。
 use super::*;
 use crate::ui::settings_window::{SessionSources, SettingsContext, SettingsEvent, SettingsWindow};
+use crate::ui::windows::WindowRegistry;
 
 type SettingsFollowUp =
     Box<dyn FnOnce(&mut SettingsWindow, &mut Window, &mut Context<SettingsWindow>)>;
@@ -14,6 +15,8 @@ impl LyrelApp {
         let shells = cx.weak_entity();
         let profiles = shells.clone();
         let sources = shells.clone();
+        let live_sessions = shells.clone();
+        let session_scan = shells.clone();
         // Production hands the real keychain to the settings pages; GUI tests
         // take the in-memory store so no settings test can touch the OS one.
         #[cfg(not(test))]
@@ -72,6 +75,22 @@ impl LyrelApp {
                     .map(|app| app.read(cx).settings_session_sources(host, cx))
                     .unwrap_or_default()
             }),
+            live_sessions: Rc::new(move |cx| {
+                let owner = live_sessions.upgrade();
+                let mut sessions = Vec::new();
+                for app in WindowRegistry::live_apps(cx).filter(|app| Some(app) != owner.as_ref()) {
+                    app.read(cx).collect_live_sessions(cx, &mut sessions);
+                }
+                if let Some(owner) = owner {
+                    owner.read(cx).collect_live_sessions(cx, &mut sessions);
+                }
+                sessions
+            }),
+            session_scan: Rc::new(move |host, cx| {
+                session_scan
+                    .upgrade()
+                    .map(|app| app.read(cx).settings_session_scan(host, cx))
+            }),
         }
     }
 
@@ -124,6 +143,68 @@ impl LyrelApp {
             ));
         }
         sources
+    }
+
+    /// The agent sessions open in this workspace's panes, named by the same
+    /// identity the session listings use — the settings Sessions page marks a
+    /// listed session "running" through this, never by reading the pane tree.
+    fn collect_live_sessions(
+        &self,
+        cx: &App,
+        out: &mut Vec<crate::ui::session_history::SessionIdentity>,
+    ) {
+        use crate::ui::session_history::SessionIdentity;
+        for leaf in self.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
+            let pane = leaf.read(cx);
+            if pane.terminal.exited {
+                continue;
+            }
+            let Some(agent) = pane.agent() else {
+                continue;
+            };
+            let Some(state) = pane.agent_session() else {
+                continue;
+            };
+            let Some(id) = state.session_id.clone() else {
+                continue;
+            };
+            out.push(SessionIdentity {
+                host: pane.host_id(),
+                agent,
+                id,
+                cwd: state.cwd.clone(),
+                scope: state.readout.session_scope.clone(),
+            });
+        }
+    }
+
+    /// The host-scoped scan plan for the settings Sessions page: the same
+    /// plan the Session History tool and Search Everywhere run, over this
+    /// workspace's panes and offered agents. The settings window only ever
+    /// holds the plan — the scan itself runs on the owning Host.
+    fn settings_session_scan(
+        &self,
+        host: HostId,
+        cx: &App,
+    ) -> crate::ui::session_history::SessionScan {
+        let panes: Vec<Entity<TerminalView>> = self
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.pane.terminals())
+            .collect();
+        let agents = self.offered_agents(cx);
+        // No context-pane access from the settings window: the default scope
+        // validates against the host's home, the same fallback Search's
+        // session query uses.
+        let default_cwd = crate::ui::desktop_lookups::home_for_host(cx, host).unwrap_or_default();
+        crate::ui::session_history::plan_scan(
+            host,
+            &panes,
+            &agents,
+            &default_cwd,
+            &cx.global::<Config>().agent_launch.clone(),
+            cx,
+        )
     }
 
     fn attach_settings(
@@ -206,6 +287,14 @@ impl LyrelApp {
                         );
                     }
                     SettingsEvent::RebindKeymap => crate::ui::keymap::rebind(cx),
+                    SettingsEvent::SessionsDeleted { host, removed } => {
+                        let host = *host;
+                        let removed = removed.clone();
+                        cx.defer(move |cx| {
+                            crate::ui::session_history::forget_sessions(host, &removed);
+                            crate::ui::windows::WindowRegistry::refresh_session_history(host, cx);
+                        });
+                    }
                     SettingsEvent::ApplyTheme {
                         persist,
                         refresh_windows,

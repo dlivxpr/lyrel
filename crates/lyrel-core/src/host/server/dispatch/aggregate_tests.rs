@@ -158,6 +158,66 @@ fn a_process_with_no_panes_does_not_claim_it_can_list_ports() {
     assert!(!client.hello().has_feature(feature::PANE_PROCS));
 }
 
+/// Termination is verified on the peer that owns the pane's PTY, over the
+/// same control link. A peer serving panes says so; the directory's
+/// default refuses, and the refusal carries the reason rather than
+/// reading as an empty success.
+#[test]
+fn a_peer_endorses_verified_end_process_only_where_it_serves_panes() {
+    let with_panes = client_with(Services {
+        panes: Some(Arc::new(ThreePanesOneAgent { panes: Vec::new() })),
+        ..Services::none()
+    });
+    assert!(with_panes.hello().has_feature(feature::PANE_END_PROCESS));
+
+    let without = client_with(Services::none());
+    assert!(!without.hello().has_feature(feature::PANE_END_PROCESS));
+    let refused = without
+        .call(ControlRequest::PaneEndProcessPlan {
+            pane_id: 4,
+            pid: 904,
+            started: Some(42),
+        })
+        .unwrap_err();
+    assert_eq!(
+        refused.kind(),
+        std::io::ErrorKind::Unsupported,
+        "a peer with no panes refuses the plan rather than vouching for nothing"
+    );
+
+    // The default directory refuses even where panes exist: only the real
+    // registry's verified action answers, and the default's refusal is a
+    // normal answer, not a broken link.
+    let err = with_panes
+        .call(ControlRequest::PaneEndProcessPlan {
+            pane_id: 4,
+            pid: 904,
+            started: Some(42),
+        })
+        .unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+
+    let report = match with_panes
+        .call(ControlRequest::PaneEndProcess {
+            pane_id: 4,
+            scope: vec![crate::daemon::protocol::ProcIdentity {
+                pid: 904,
+                started: Some(42),
+            }],
+        })
+        .unwrap()
+    {
+        ReplyOk::EndProcessReport(outcomes) => outcomes,
+        other => panic!("PaneEndProcess must answer with a report, got {other:?}"),
+    };
+    assert_eq!(report.len(), 1);
+    assert_eq!(
+        report[0].state,
+        crate::daemon::protocol::EndProcessState::NotOwned,
+        "the refusing default reports every confirmed identity as refused"
+    );
+}
+
 #[test]
 fn machine_get_overlays_live_pane_titles() {
     let dir = tempfile::TempDir::new().unwrap();

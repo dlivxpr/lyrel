@@ -144,3 +144,119 @@ fn native_ssh_progress_survives_eviction_and_a_fresh_consumer_without_resending(
         }
     }
 }
+
+#[test]
+#[ignore = "requires the isolated pinned Linux SSH fixture and a matching lyrel-server; run alone"]
+fn managed_ssh_ends_only_the_confirmed_pane_process_scope() {
+    use lyrel_core::daemon::protocol::{EndProcessState, ProcIdentity, ShellSpec};
+    use lyrel_core::host::Host as _;
+    use std::time::{Duration, Instant};
+
+    let fixture = NativeSshFixture::start(Path::new(env!("CARGO_BIN_EXE_lyrel-server")));
+    let host = fixture.connect_control();
+    let spawn = || {
+        let (mut stream, _) = fixture.connect_pane();
+        ClientMsg::Spawn {
+            cwd: Some(fixture.remote_home().into()),
+            size: win_size(),
+            shell: Some(ShellSpec {
+                program: "/bin/sh".into(),
+                args: vec![
+                    "-c".into(),
+                    "sh -c 'sleep 35 & wait' & wait; sleep 35".into(),
+                ],
+                args_are_lyrel_defaults: false,
+            }),
+            owner: None,
+            workspace: None,
+            restore: None,
+            allow_remote_clipboard_write: false,
+            await_claim: false,
+        }
+        .encode(&mut stream)
+        .unwrap();
+        let DaemonMsg::Spawned { pane_id } = DaemonMsg::read(&mut stream).unwrap() else {
+            panic!("expected the managed SSH pane to start");
+        };
+        fixture.track_pane(pane_id);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(snapshot) = host.pane_procs(pane_id)
+                && let Some(parent) = snapshot.procs.iter().find(|p| p.depth == 1)
+                && let Some(child) = snapshot.procs.iter().find(|p| p.depth == 2)
+            {
+                assert!(snapshot.context.unwrap().local_pty);
+                return (
+                    stream,
+                    pane_id,
+                    ProcIdentity {
+                        pid: parent.pid,
+                        started: parent.started,
+                    },
+                    ProcIdentity {
+                        pid: child.pid,
+                        started: child.started,
+                    },
+                );
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fixture process tree did not appear"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+
+    let (_single_stream, single_pane, single, untouched_child) = spawn();
+    let (_tree_stream, tree_pane, tree, tree_child) = spawn();
+    assert!(
+        host.pane_end_process_plan(tree_pane, single.pid, single.started)
+            .unwrap()
+            .is_err()
+    );
+    let single_plan = host
+        .pane_end_process_plan(single_pane, single.pid, single.started)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        single_plan
+            .targets
+            .iter()
+            .map(|p| p.pid)
+            .collect::<Vec<_>>(),
+        [untouched_child.pid, single.pid]
+    );
+    let outcome = host.pane_end_process(single_pane, &[single]).unwrap();
+    assert_eq!(outcome.len(), 1);
+    assert_eq!(
+        (outcome[0].pid, outcome[0].state),
+        (single.pid, EndProcessState::Ended)
+    );
+    assert!(host.exists(Path::new(&format!("/proc/{}", untouched_child.pid))));
+
+    let plan = host
+        .pane_end_process_plan(tree_pane, tree.pid, tree.started)
+        .unwrap()
+        .unwrap();
+    assert!(plan.complete);
+    let scope: Vec<_> = plan
+        .targets
+        .iter()
+        .map(|p| ProcIdentity {
+            pid: p.pid,
+            started: p.started,
+        })
+        .collect();
+    assert_eq!(scope, [tree_child, tree]);
+    let outcomes = host.pane_end_process(tree_pane, &scope).unwrap();
+    assert_eq!(
+        outcomes
+            .iter()
+            .map(|o| (o.pid, o.state))
+            .collect::<Vec<_>>(),
+        [
+            (tree_child.pid, EndProcessState::Ended),
+            (tree.pid, EndProcessState::Ended)
+        ]
+    );
+}

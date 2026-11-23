@@ -47,6 +47,14 @@ pub(super) fn handshake<R: Read>(
     ];
     if host.id().is_local() {
         features.push(feature::HOST_METRICS.to_string());
+        if crate::host::metrics::network::supported() {
+            features.push(feature::HOST_NETWORK_METRICS.to_string());
+        }
+        features.push(feature::DISK_USAGE.to_string());
+        features.push(feature::SESSION_BATCH.to_string());
+    }
+    if host.has_lyrel_usage() {
+        features.push(feature::LYREL_USAGE.to_string());
     }
     if host.agent_environment().is_ok() {
         features.push(feature::AGENT_ENVIRONMENT.to_string());
@@ -56,6 +64,7 @@ pub(super) fn handshake<R: Read>(
     // "nothing is listening" rather than as "I cannot tell you".
     if services.panes.is_some() {
         features.push(feature::PANE_PROCS.to_string());
+        features.push(feature::PANE_END_PROCESS.to_string());
         features.push(feature::AGENT_STATE_AGE.to_string());
     }
     if services.machine.is_some() {

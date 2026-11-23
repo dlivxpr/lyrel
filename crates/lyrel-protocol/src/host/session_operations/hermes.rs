@@ -139,6 +139,651 @@ pub(crate) fn statistics(
     Ok(result)
 }
 
+// ---------------------------------------------------------------------------
+// Bounded batch deletion (#367). The stock `session.delete` RPC forwards only
+// the write-guard switch and `sessions export --delete-after-verified`
+// computes its own later set; neither fences the exact confirmed cascade.
+// The verified path below reuses the selected installation's own Python
+// through the recognized `--print-runtime-command --module tui_gateway.entry`
+// argv shape, substitutes only the `-c` entry with a fixed adapter script,
+// and drives the native SessionDB with `expected_delete_ids` +
+// `exclude_active_write_guards` inside one write transaction per target.
+// ---------------------------------------------------------------------------
+
+/// The exact suffix the official launcher publishes for the gateway entry;
+/// verified on Windows and Linux against the pinned launcher fixture. Only
+/// this shape may run the delete adapter — anything else refuses closed.
+const GATEWAY_ENTRY_SUFFIX: &str =
+    "runpy.run_module('tui_gateway.entry', run_name='__main__', alter_sys=True)";
+
+/// The fixed adapter program. Inputs arrive as one structured JSON stdin
+/// line (never interpolated); the store and the writer-lease fence both
+/// resolve through this installation-bound runtime, not through a client-side
+/// recheck. Each root is isolated: one bad target cannot hide the others.
+const BATCH_ADAPTER_SCRIPT: &str = r#"
+import inspect
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def emit(payload):
+    sys.stdout.write(json.dumps(payload) + "\n")
+    sys.stdout.flush()
+
+
+def refuse(message):
+    emit({"ok": False, "error": str(message)[:4000]})
+    sys.exit(0)
+
+
+def main():
+    try:
+        request = json.loads(sys.stdin.readline(64 * 1024))
+    except Exception as error:
+        refuse("invalid request: %s" % error)
+        return
+    try:
+        home = Path(os.environ["HERMES_HOME"]).resolve(strict=True)
+    except Exception as error:
+        refuse("HERMES_HOME is not resolvable: %s" % error)
+        return
+    asked = request.get("home")
+    if asked and Path(str(asked)).resolve() != home:
+        refuse("requested home does not match the pinned HERMES_HOME")
+        return
+    try:
+        from hermes_constants import get_hermes_home
+        from hermes_state import SessionDB
+        from hermes_state_errors import SessionActiveWriteGuardError
+    except Exception as error:
+        refuse("Hermes native state modules unavailable: %s" % error)
+        return
+    try:
+        if Path(get_hermes_home()).resolve() != home:
+            refuse("native home resolution disagrees with HERMES_HOME")
+            return
+    except Exception as error:
+        refuse("native home resolution failed: %s" % error)
+        return
+    for name in ("get_session_delete_targets", "_guarded_ids", "_execute_write"):
+        if not callable(getattr(SessionDB, name, None)):
+            refuse("installed Hermes lacks SessionDB.%s" % name)
+            return
+    signature = inspect.signature(SessionDB.delete_session).parameters
+    for name in ("expected_delete_ids", "exclude_active_write_guards"):
+        if name not in signature:
+            refuse("installed Hermes delete_session lacks %s" % name)
+            return
+    mode = request.get("mode")
+    roots = request.get("roots") or []
+    expected = request.get("expected") or {}
+    results = []
+    db_path = home / "state.db"
+    if not db_path.is_file() or db_path.resolve() != db_path:
+        refuse("Hermes state.db is missing or points outside the confirmed store")
+    with SessionDB(db_path=db_path) as db:
+        sessions_dir = home / "sessions"
+        if sessions_dir.exists() and sessions_dir.resolve() != sessions_dir:
+            refuse("Hermes sessions directory points outside the confirmed store")
+        for root in roots:
+            try:
+                if mode == "plan":
+                    results.append(prepare_one(db, root))
+                elif mode == "delete":
+                    results.append(delete_one(db, sessions_dir, root, expected.get(root), SessionActiveWriteGuardError))
+                else:
+                    refuse("unknown adapter mode: %s" % mode)
+                    return
+            except Exception as error:
+                results.append({"id": root, "status": "failed", "message": str(error)[:400]})
+    emit({"ok": True, "results": results})
+
+
+def plan_one(db, root):
+    targets = db.get_session_delete_targets(root)
+    if not targets:
+        return {"id": root, "status": "stale", "message": "stored session was not found"}
+    row = db.get_session(root) or {}
+    if str(row.get("source") or "") != "cli":
+        return {"id": root, "status": "stale", "message": "stored session is no longer a CLI session"}
+    if row.get("archived"):
+        return {"id": root, "status": "stale", "message": "stored session is archived"}
+    return {"id": root, "status": "eligible", "delete_ids": list(targets)}
+
+
+class GuardPreview(Exception):
+    pass
+
+
+def prepare_one(db, root):
+    plan = plan_one(db, root)
+    if plan["status"] != "eligible":
+        return plan
+
+    def inspect_guards(conn):
+        # The native check can reclaim expired leases. Raising causes the
+        # native transaction wrapper to roll back all preview-time writes.
+        raise GuardPreview(bool(db._guarded_ids(conn, plan["delete_ids"])))
+
+    try:
+        db._execute_write(inspect_guards)
+    except GuardPreview as preview:
+        if preview.args[0]:
+            return {"id": root, "status": "guarded", "message": "session or delegate has an active turn lease or compression lock"}
+        return plan
+    raise RuntimeError("Hermes did not report the native write guards")
+
+
+def delete_one(db, sessions_dir, root, expected, active_write_guard):
+    if expected is None:
+        return {"id": root, "status": "failed", "message": "no confirmed delete scope"}
+    plan = plan_one(db, root)
+    if plan["status"] != "eligible":
+        return plan
+    if set(plan["delete_ids"]) != set(expected):
+        return {"id": root, "status": "stale", "message": "native cascade changed since confirmation"}
+    try:
+        removed = db.delete_session(
+            root,
+            sessions_dir=sessions_dir,
+            expected_delete_ids=[str(item) for item in expected],
+            exclude_active_write_guards=True,
+        )
+    except active_write_guard as error:
+        return {"id": root, "status": "guarded", "message": str(error)[:400]}
+    if not removed:
+        return {"id": root, "status": "stale", "message": "native cascade changed since confirmation"}
+    return {"id": root, "status": "deleted", "delete_ids": [str(item) for item in expected]}
+
+
+main()
+"#;
+
+/// Run a bounded batch in request order. A failed store contributes its own
+/// outcomes without hiding results from stores already processed.
+pub(crate) fn batch(
+    request: &batch::SessionBatchRequest,
+) -> Result<batch::SessionBatchReply, SessionOperationError> {
+    match request {
+        batch::SessionBatchRequest::Prepare(request) => {
+            let mut result = batch::SessionBatchPrepareResult::default();
+            for group in &request.groups {
+                let payload = serde_json::json!({
+                    "home": group.scope.environment.get("HERMES_HOME"),
+                    "mode": "plan",
+                    "roots": group.source_ids,
+                });
+                let group_result = match batch_group(group, payload) {
+                    Ok(answers) => plan_result(&group.source_ids, &answers),
+                    Err(error) => failed_group(
+                        group.source_ids.iter().map(String::as_str),
+                        batch::SessionBatchStatus::Ineligible,
+                        error,
+                    ),
+                };
+                result.groups.push(group_result);
+            }
+            Ok(batch::SessionBatchReply::Prepare(result))
+        }
+        batch::SessionBatchRequest::Execute(request) => {
+            let mut result = batch::SessionBatchExecuteResult::default();
+            for group in &request.groups {
+                let expected: serde_json::Map<String, serde_json::Value> = group
+                    .confirmations
+                    .iter()
+                    .map(|confirmation| {
+                        (
+                            confirmation.source_id.clone(),
+                            serde_json::json!(confirmation.expected_delete_ids),
+                        )
+                    })
+                    .collect();
+                let roots: Vec<&str> = group
+                    .confirmations
+                    .iter()
+                    .map(|confirmation| confirmation.source_id.as_str())
+                    .collect();
+                let payload = serde_json::json!({
+                    "home": group.scope.environment.get("HERMES_HOME"),
+                    "mode": "delete",
+                    "roots": roots,
+                    "expected": expected,
+                });
+                let group_result = match batch_group(group, payload) {
+                    Ok(answers) => execute_result(&group.confirmations, &answers),
+                    Err(error) => {
+                        failed_group(roots.into_iter(), batch::SessionBatchStatus::Failed, error)
+                    }
+                };
+                result.groups.push(group_result);
+            }
+            Ok(batch::SessionBatchReply::Execute(result))
+        }
+    }
+}
+
+fn failed_group<'a>(
+    ids: impl Iterator<Item = &'a str>,
+    status: batch::SessionBatchStatus,
+    error: SessionOperationError,
+) -> batch::SessionBatchGroupResult {
+    let kind = match error.kind {
+        SessionErrorKind::Unsupported => batch::SessionBatchReasonKind::UnsupportedProvider,
+        SessionErrorKind::Directory | SessionErrorKind::Identity => {
+            batch::SessionBatchReasonKind::UnconfirmedStore
+        }
+        _ => batch::SessionBatchReasonKind::Provider,
+    };
+    let items = ids
+        .map(|id| {
+            batch::SessionBatchItem::refused(
+                id.to_owned(),
+                status,
+                batch::SessionBatchReason::new(kind, error.message.clone()),
+            )
+        })
+        .collect();
+    batch::SessionBatchGroupResult { items }
+}
+
+/// Resolve the group's launch context through the same rules as history and
+/// resume (one effective home/profile), then run the fixed adapter through
+/// the installation's own runtime command and parse its one-line answer.
+fn batch_group(
+    group: &impl BatchGroupContext,
+    payload: serde_json::Value,
+) -> Result<Vec<serde_json::Value>, SessionOperationError> {
+    let (gateway, scope, cwd) = group.gateway_scope_cwd()?;
+    let runtime = runtime_command(&gateway, &scope, &cwd)?;
+    let argv = adapter_argv(&runtime)?;
+    let home = scope
+        .environment
+        .get("HERMES_HOME")
+        .cloned()
+        .ok_or_else(|| {
+            failure(
+                SessionErrorKind::Directory,
+                "Hermes batch scope has no HERMES_HOME",
+            )
+        })?;
+    let mut payload = payload;
+    payload["home"] = serde_json::Value::String(home);
+    let line = adapter_line(&argv, &scope, &cwd, &payload)?;
+    let answer: serde_json::Value = serde_json::from_str(&line).map_err(|_| {
+        failure(
+            SessionErrorKind::Command,
+            "Hermes batch adapter returned no valid JSON",
+        )
+    })?;
+    if answer["ok"] != true {
+        return Err(failure(
+            SessionErrorKind::Command,
+            format!(
+                "Hermes batch adapter: {}",
+                answer["error"].as_str().unwrap_or("no adapter answer")
+            ),
+        ));
+    }
+    answer["results"].as_array().cloned().ok_or_else(|| {
+        failure(
+            SessionErrorKind::Command,
+            "Hermes batch adapter returned no result list",
+        )
+    })
+}
+
+/// Both batch group shapes share the context resolution; the trait keeps the
+/// generic dispatch out of the wire types.
+trait BatchGroupContext {
+    fn gateway_scope_cwd(
+        &self,
+    ) -> Result<(Vec<String>, SessionScope, PathBuf), SessionOperationError>;
+}
+
+impl BatchGroupContext for batch::SessionBatchPrepareGroup {
+    fn gateway_scope_cwd(
+        &self,
+    ) -> Result<(Vec<String>, SessionScope, PathBuf), SessionOperationError> {
+        let shim = SessionOperation {
+            expected_host: 0,
+            agent: CLIAgent::Hermes,
+            kind: SessionOperationKind::Resume,
+            source_id: String::new(),
+            cwd: self.cwd.clone(),
+            launch_argv: self.launch_argv.clone(),
+            scope: self.scope.clone(),
+        };
+        let (_, gateway, scope) = context(&shim)?;
+        Ok((gateway, scope, self.cwd.clone()))
+    }
+}
+
+impl BatchGroupContext for batch::SessionBatchExecuteGroup {
+    fn gateway_scope_cwd(
+        &self,
+    ) -> Result<(Vec<String>, SessionScope, PathBuf), SessionOperationError> {
+        let shim = SessionOperation {
+            expected_host: 0,
+            agent: CLIAgent::Hermes,
+            kind: SessionOperationKind::Resume,
+            source_id: String::new(),
+            cwd: self.cwd.clone(),
+            launch_argv: self.launch_argv.clone(),
+            scope: self.scope.clone(),
+        };
+        let (_, gateway, scope) = context(&shim)?;
+        Ok((gateway, scope, self.cwd.clone()))
+    }
+}
+
+/// Substitute only the published gateway entry with the fixed adapter
+/// program. The bootstrap prefix (interpreter setup, sys.path) is upstream's
+/// own and stays byte-identical; the adapter source travels base64 so no
+/// quoting or interpolation can corrupt it.
+fn adapter_argv(runtime: &[String]) -> Result<Vec<String>, SessionOperationError> {
+    if runtime.len() != 4
+        || runtime[1] != "-I"
+        || runtime[2] != "-c"
+        || !runtime[3].ends_with(GATEWAY_ENTRY_SUFFIX)
+    {
+        return Err(failure(
+            SessionErrorKind::Unsupported,
+            "Hermes launcher runtime has an unrecognized gateway entry; only the published --print-runtime-command tui_gateway.entry shape can run the verified delete adapter",
+        ));
+    }
+    let prefix = &runtime[3][..runtime[3].len() - GATEWAY_ENTRY_SUFFIX.len()];
+    let encoded = base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        BATCH_ADAPTER_SCRIPT.as_bytes(),
+    );
+    let program = format!(
+        "{prefix}import base64;exec(compile(base64.b64decode(\"{encoded}\").decode(\"utf-8\"),\"lyrel-hermes-batch\",\"exec\"))"
+    );
+    Ok(vec![runtime[0].clone(), "-I".into(), "-c".into(), program])
+}
+
+/// Spawn the adapter runtime, feed it the one-line structured request on
+/// stdin, and read its one-line answer. Response and teardown share one
+/// absolute budget; a timeout never leaves the interpreter running.
+fn adapter_line(
+    argv: &[String],
+    scope: &SessionScope,
+    cwd: &Path,
+    payload: &serde_json::Value,
+) -> Result<String, SessionOperationError> {
+    let mut command = Command::new(&argv[0]);
+    command
+        .args(&argv[1..])
+        .current_dir(cwd)
+        .envs(&scope.environment)
+        .env_remove("LYREL")
+        .env_remove(crate::daemon::LYREL_PANE_ENV)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    crate::core::proc::hide_console(&mut command);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let mut child = command.spawn().map_err(|e| {
+        failure(
+            SessionErrorKind::Command,
+            format!("Hermes batch adapter could not start: {e}"),
+        )
+    })?;
+    let stdout = child.stdout.take().unwrap();
+    let mut stderr = child.stderr.take().unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    if let Err(error) = writeln!(stdin, "{payload}").and_then(|_| stdin.flush()) {
+        drop(stdin);
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(failure(
+            SessionErrorKind::Command,
+            format!("Hermes batch adapter request failed: {error}"),
+        ));
+    }
+    drop(stdin);
+    // The answer is one line; the reader threads keep the wait loop free to
+    // enforce the deadline even when the adapter never speaks.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = io::BufReader::new(stdout);
+        let mut frame = Vec::new();
+        let _ = reader
+            .by_ref()
+            .take(1024 * 1024 + 1)
+            .read_until(b'\n', &mut frame);
+        let _ = tx.send(frame);
+        let _ = io::copy(&mut reader, &mut io::sink());
+    });
+    let (error_tx, error_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.by_ref().take(64 * 1024).read_to_end(&mut bytes);
+        let _ = error_tx.send(bytes);
+    });
+    let stderr_bytes = |error_rx: &std::sync::mpsc::Receiver<Vec<u8>>| {
+        error_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap_or_default()
+    };
+    let frame = loop {
+        match rx.try_recv() {
+            Ok(frame) => break Some(frame),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                match child.try_wait() {
+                    // EOF already closed the pipe, so the reader's send is
+                    // in flight: a short blocking recv beats racing it.
+                    Ok(Some(_)) => {
+                        break match rx.recv_timeout(Duration::from_millis(500)) {
+                            Ok(frame) => Some(frame),
+                            Err(_) => Some(Vec::new()),
+                        };
+                    }
+                    Ok(None) if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(10))
+                    }
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break None;
+                    }
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => break None,
+        }
+    };
+    let Some(frame) = frame else {
+        return Err(failure(
+            SessionErrorKind::Command,
+            format!(
+                "Hermes batch adapter returned no answer in time: {}",
+                String::from_utf8_lossy(&stderr_bytes(&error_rx))
+                    .chars()
+                    .take(1000)
+                    .collect::<String>()
+            ),
+        ));
+    };
+    // The answer arrived; the process still has to exit inside the budget.
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(failure(
+                    SessionErrorKind::Command,
+                    "Hermes batch adapter did not exit inside the operation budget",
+                ));
+            }
+        }
+    };
+    if !status.success() {
+        return Err(failure(
+            SessionErrorKind::Command,
+            format!(
+                "Hermes batch adapter exited unsuccessfully ({status}): {}",
+                String::from_utf8_lossy(&stderr_bytes(&error_rx))
+                    .chars()
+                    .take(1000)
+                    .collect::<String>()
+            ),
+        ));
+    }
+    if frame.is_empty() || frame.len() > 1024 * 1024 {
+        return Err(failure(
+            SessionErrorKind::Command,
+            format!(
+                "Hermes batch adapter returned no answer: {}",
+                String::from_utf8_lossy(&stderr_bytes(&error_rx))
+                    .chars()
+                    .take(1000)
+                    .collect::<String>()
+            ),
+        ));
+    }
+    String::from_utf8(frame).map_err(|_| {
+        failure(
+            SessionErrorKind::Command,
+            "Hermes batch adapter answer was not UTF-8",
+        )
+    })
+}
+
+/// Map the adapter's plan answers onto the prepare reply, keeping the
+/// request's source order (the adapter answers in root order, which is the
+/// request's order — this re-binds by id so a drifted adapter cannot
+/// mislabel a row).
+fn plan_result(
+    source_ids: &[String],
+    answers: &[serde_json::Value],
+) -> batch::SessionBatchGroupResult {
+    let find = |id: &str| {
+        answers
+            .iter()
+            .find(|answer| answer["id"].as_str() == Some(id))
+    };
+    let items = source_ids
+        .iter()
+        .map(|id| match find(id) {
+            Some(answer) if answer["status"] == "eligible" => {
+                let delete_ids = answer["delete_ids"]
+                    .as_array()
+                    .map(|ids| {
+                        ids.iter()
+                            .filter_map(|id| id.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                batch::SessionBatchItem::eligible(id.clone(), delete_ids)
+            }
+            Some(answer) if answer["status"] == "guarded" => batch::SessionBatchItem::refused(
+                id.clone(),
+                batch::SessionBatchStatus::Ineligible,
+                batch::SessionBatchReason::new(
+                    batch::SessionBatchReasonKind::Active,
+                    answer["message"]
+                        .as_str()
+                        .unwrap_or("a writer lease holds this session"),
+                ),
+            ),
+            Some(answer) if answer["status"] == "stale" => batch::SessionBatchItem::refused(
+                id.clone(),
+                batch::SessionBatchStatus::Ineligible,
+                batch::SessionBatchReason::new(
+                    batch::SessionBatchReasonKind::Stale,
+                    answer["message"]
+                        .as_str()
+                        .unwrap_or("stored session changed"),
+                ),
+            ),
+            Some(answer) => batch::SessionBatchItem::refused(
+                id.clone(),
+                batch::SessionBatchStatus::Ineligible,
+                batch::SessionBatchReason::new(
+                    batch::SessionBatchReasonKind::Provider,
+                    answer["message"].as_str().unwrap_or("native plan failed"),
+                ),
+            ),
+            None => batch::SessionBatchItem::refused(
+                id.clone(),
+                batch::SessionBatchStatus::Ineligible,
+                batch::SessionBatchReason::new(
+                    batch::SessionBatchReasonKind::Provider,
+                    "adapter returned no answer for this session",
+                ),
+            ),
+        })
+        .collect();
+    batch::SessionBatchGroupResult { items }
+}
+
+/// Map the adapter's delete answers onto the execute reply, binding each by
+/// its confirmed source id. `guarded` is an active writer lease — the row
+/// stays intact and the reason says who held it.
+fn execute_result(
+    confirmations: &[batch::SessionBatchConfirmation],
+    answers: &[serde_json::Value],
+) -> batch::SessionBatchGroupResult {
+    let find = |id: &str| {
+        answers
+            .iter()
+            .find(|answer| answer["id"].as_str() == Some(id))
+    };
+    let items = confirmations
+        .iter()
+        .map(|confirmation| {
+            let id = &confirmation.source_id;
+            match find(id) {
+                Some(answer) if answer["status"] == "deleted" => batch::SessionBatchItem {
+                    source_id: id.clone(),
+                    status: batch::SessionBatchStatus::Deleted,
+                    delete_ids: confirmation.expected_delete_ids.clone(),
+                    reason: None,
+                },
+                Some(answer) if answer["status"] == "guarded" => batch::SessionBatchItem::refused(
+                    id.clone(),
+                    batch::SessionBatchStatus::Skipped,
+                    batch::SessionBatchReason::new(
+                        batch::SessionBatchReasonKind::Active,
+                        answer["message"]
+                            .as_str()
+                            .unwrap_or("a writer lease holds this session"),
+                    ),
+                ),
+                Some(answer) if answer["status"] == "stale" => batch::SessionBatchItem::refused(
+                    id.clone(),
+                    batch::SessionBatchStatus::Skipped,
+                    batch::SessionBatchReason::new(
+                        batch::SessionBatchReasonKind::Stale,
+                        answer["message"].as_str().unwrap_or("native scope changed"),
+                    ),
+                ),
+                Some(answer) => batch::SessionBatchItem::refused(
+                    id.clone(),
+                    batch::SessionBatchStatus::Failed,
+                    batch::SessionBatchReason::new(
+                        batch::SessionBatchReasonKind::Provider,
+                        answer["message"].as_str().unwrap_or("native delete failed"),
+                    ),
+                ),
+                None => batch::SessionBatchItem::refused(
+                    id.clone(),
+                    batch::SessionBatchStatus::Failed,
+                    batch::SessionBatchReason::new(
+                        batch::SessionBatchReasonKind::Provider,
+                        "adapter returned no answer for this session",
+                    ),
+                ),
+            }
+        })
+        .collect();
+    batch::SessionBatchGroupResult { items }
+}
+
 pub(super) fn prepare(
     request: &SessionOperation,
 ) -> Result<PreparedSession, SessionOperationError> {
@@ -726,3 +1371,7 @@ fn rpc(
     };
     Ok((result, close_error.or(shutdown_error)))
 }
+
+#[cfg(test)]
+#[path = "hermes_tests.rs"]
+mod tests;

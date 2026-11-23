@@ -7,8 +7,10 @@
 //! whole-host metrics sampling, the remote SSH host and the server listener.
 
 pub mod content_search;
+pub mod disk;
 mod file_version;
 pub mod local;
+pub mod lyrel_usage;
 pub mod metrics;
 pub mod read;
 mod read_lease;
@@ -337,6 +339,37 @@ pub trait Host: Send + Sync + 'static {
         ))
     }
 
+    /// Lyrel's own component usage for this host's daemon process, stamped
+    /// with the daemon instance. Appended to the [`Host::host_metrics`]
+    /// answer on the wire; hosts that cannot attribute it say so here. The
+    /// desktop application samples itself client-side and never crosses this
+    /// seam.
+    fn lyrel_usage(&self) -> io::Result<lyrel_usage::LyrelUsage> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Lyrel usage is unavailable on this transport",
+        ))
+    }
+
+    /// Whether [`Host::lyrel_usage`] is actually backed by a sampler, so a
+    /// server can advertise the capability without sampling to learn it.
+    /// Asking a host that answers `false` still fails closed with
+    /// `Unsupported`.
+    fn has_lyrel_usage(&self) -> bool {
+        false
+    }
+
+    /// Size of a bounded directory walk and capacity of its containing volume,
+    /// computed on the owning host. Run on the Host executor.
+    fn disk_usage(&self, _dir: &Path) -> io::Result<disk::DiskUsage> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "disk usage is unavailable on this transport",
+        ))
+    }
+
     /// How far away this host is: the round trip to it, measured now.
     ///
     /// `None` from a host with no link to measure — the local one, whose
@@ -571,8 +604,16 @@ pub trait Host: Send + Sync + 'static {
     }
 
     /// Past coding-agent sessions on this host, most recent first.
-    /// A host that cannot look has none to offer.
-    fn agent_sessions(&self) -> io::Result<Vec<crate::core::agent_history::PastSession>> {
+    /// A host that cannot look has none to offer. With `directory`, the
+    /// answer is filtered to sessions that ran there before the recent cap
+    /// is applied — hosts whose providers cannot filter exactly (a service
+    /// that only pages a recency window) ignore it and answer unscoped, and
+    /// the caller treats their cap as a partial source.
+    fn agent_sessions(
+        &self,
+        directory: Option<&Path>,
+    ) -> io::Result<Vec<crate::core::agent_history::PastSession>> {
+        let _ = directory;
         Ok(Vec::new())
     }
 
@@ -766,6 +807,21 @@ pub trait Host: Send + Sync + 'static {
         session_operations::hermes::statistics(request)
     }
 
+    /// Bounded native session deletion on this Host: Prepare revalidates each
+    /// group's store identity and computes the exact native cascade per
+    /// target; Execute removes exactly the confirmed target sets inside the
+    /// provider's own write transaction and reports per-target outcomes.
+    /// GUI callers use HostOps; the operation never opens or replaces a pane.
+    fn session_batch(
+        &self,
+        request: &session_operations::batch::SessionBatchRequest,
+    ) -> Result<
+        session_operations::batch::SessionBatchReply,
+        session_operations::SessionOperationError,
+    > {
+        session_operations::batch::run(self, request)
+    }
+
     fn watch(&self, dirs: &[PathBuf]) -> io::Result<WatchSub>;
 
     fn is_connected(&self) -> bool {
@@ -783,6 +839,32 @@ pub trait Host: Send + Sync + 'static {
     /// over "we could not ask" is how a remote pane came to look idle while a
     /// dev server was up in it.
     fn pane_procs(&self, _pane_id: u64) -> Option<crate::daemon::protocol::PaneProcs> {
+        None
+    }
+
+    /// The verified scope ending one of this host's pane processes would
+    /// cover, for the End Process confirmation dialog — or `None` where this
+    /// host cannot vouch for it (no link, or a peer too old to answer). `Err`
+    /// carries the owning daemon's refusal reason: the selected row is stale,
+    /// the pid was reused, or the process no longer belongs to the pane.
+    fn pane_end_process_plan(
+        &self,
+        _pane_id: u64,
+        _pid: u32,
+        _started: Option<u64>,
+    ) -> Option<Result<crate::daemon::protocol::EndProcessPlan, String>> {
+        None
+    }
+
+    /// Terminate exactly the confirmed identities in a previously planned
+    /// scope and report one outcome per identity. `None` where
+    /// [`Host::pane_end_process_plan`] is `None`; the caller must not offer
+    /// the action where it cannot first confirm the scope.
+    fn pane_end_process(
+        &self,
+        _pane_id: u64,
+        _scope: &[crate::daemon::protocol::ProcIdentity],
+    ) -> Option<Vec<crate::daemon::protocol::EndProcessOutcome>> {
         None
     }
 }

@@ -27,6 +27,18 @@ pub(crate) struct SettingsContext {
     pub shells: Rc<dyn Fn(&App) -> Vec<crate::core::shells::DetectedShell>>,
     pub live_profiles: Rc<dyn Fn(&App) -> std::collections::HashSet<uuid::Uuid>>,
     pub session_sources: Rc<dyn Fn(lyrel_ui_base::host_ops::HostId, &App) -> SessionSources>,
+    /// The open sessions across workbench windows, using the native
+    /// identity also used by the Sessions settings listing.
+    pub live_sessions: Rc<dyn Fn(&App) -> Vec<crate::ui::session_history::SessionIdentity>>,
+    /// The planned host-scoped session-store scan for the Sessions page —
+    /// the same plan the Session History tool and Search Everywhere run,
+    /// built from that workspace's open panes and offered agents.
+    pub session_scan: Rc<
+        dyn Fn(
+            lyrel_ui_base::host_ops::HostId,
+            &App,
+        ) -> Option<crate::ui::session_history::SessionScan>,
+    >,
     pub credentials: std::sync::Arc<dyn crate::core::keychain::CredentialStore>,
     pub usage_vault: std::sync::Arc<dyn lyrel_insights::usage::accounts::SecretVault>,
 }
@@ -45,6 +57,14 @@ pub(crate) enum SettingsEvent {
     LocaleChanged,
     /// A keybinding edit was persisted; the shell rebinds the app-wide keymap.
     RebindKeymap,
+    /// A verified native session batch delete landed in the settings window:
+    /// the owning app drops the removed ids from the shared cache and lets
+    /// the Session History tool rebind/rescan on its next sync.
+    SessionsDeleted {
+        host: lyrel_ui_base::host_ops::HostId,
+        /// 已删除的原生 ID，按精确存储键分组。
+        removed: Vec<(String, Vec<String>)>,
+    },
     /// Repaint theme and menus for the current in-memory `Config`. The theme
     /// picker and theme editor pass `persist: false` for live previews, which
     /// must repaint without writing `config.json`; committed changes pass
@@ -336,6 +356,9 @@ impl Render for SettingsWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_rem_size(px(cx.global::<Config>().ui_font_size));
         crate::ui::settings::kit::note_scale(window);
+        // Like the right panel's session history: the page stays bound to its
+        // one host, and a scan starts only when the bound moved.
+        self.sync_sessions_settings(window, cx);
         let page = self.render_settings(window, cx);
         gpui_kit::div()
             .size_full()

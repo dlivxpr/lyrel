@@ -17,9 +17,8 @@ anyhow.workspace = true
 log.workspace = true
 serde = { workspace = true }
 serde_json.workspace = true
-# Whole-host CPU/RAM only; no process, disk or network refreshes. Already locked
-# through the desktop stack; shared here so headless daemons use the same APIs.
-sysinfo = { version = "=0.40.1", default-features = false, features = ["system"] }
+# CPU and memory for host and component sampling; already locked through the desktop stack.
+sysinfo = { version = "=0.40.1", default-features = false, features = ["system", "network"] }
 
 # SSH connection-manager data layer (`core::ssh_profile` / `core::keychain`) and
 # workspace identity (`core::session`). `uuid` mints stable ids (v4) and
@@ -171,6 +170,8 @@ getrandom = "0.4.3"
 # hives at pane-spawn time instead of inheriting the daemon's stale `PATH`.
 # `IpHelper` is `GetExtendedTcpTable`, which is how `daemon::procinfo` answers
 # the Info tab's Ports section here — the platform has no `lsof` to shell out to.
+# `Performance` is the documented GPU Engine counter query behind
+# `host::metrics::gpu`'s whole-host and per-process utilization (#374/#378).
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_IpHelper",
@@ -183,6 +184,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Ioctl",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Memory",
+    "Win32_System_Performance",
     "Win32_System_SystemInformation",
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",

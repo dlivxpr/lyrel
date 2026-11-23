@@ -1,4 +1,5 @@
-//! CPU% and memory for Info → Processes.
+//! CPU% and memory for the right panel's process views — the Activity
+//! Monitor's tree since the process list left Info (#371).
 //!
 //! The daemon sends raw CPU time; the percentage needs two samples of the same
 //! process, so it is worked out here, where the panel's poll keeps state
@@ -12,11 +13,12 @@ use gpui_kit::{App, IntoElement, ParentElement as _, SharedString, Styled as _, 
 
 use crate::core::proc::compact_bytes;
 use crate::daemon::protocol::ProcEntry;
-use crate::ui::right_panel::{META, META_MONO};
-use lyrel_ui_base::i18n::{L10nKey, t};
+use crate::ui::right_panel::META_MONO;
 
-const CPU_W: f32 = 40.;
-const MEM_W: f32 = 52.;
+/// Column widths, shared with the Activity Monitor's fixed header so the
+/// header's sort controls sit exactly over the rows' cells.
+pub(crate) const CPU_W: f32 = 40.;
+pub(crate) const MEM_W: f32 = 52.;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Sample {
@@ -67,16 +69,6 @@ fn cpu_percent(prev: Option<Sample>, cur: Sample, elapsed_ns: u64) -> Option<f64
         return None;
     }
     Some((cur.cpu_ns - prev.cpu_ns) as f64 * 100.0 / elapsed_ns as f64)
-}
-
-/// Summed CPU% and RSS over the rows that report them; `None` when none do.
-pub(crate) fn totals(procs: &[ProcEntry], cpu: &CpuTracker) -> (Option<f64>, Option<u64>) {
-    let pcts: Vec<f64> = procs.iter().filter_map(|p| cpu.percent(p.pid)).collect();
-    let rss: Vec<u64> = procs.iter().filter_map(|p| p.rss).collect();
-    (
-        (!pcts.is_empty()).then(|| pcts.iter().sum()),
-        (!rss.is_empty()).then(|| rss.iter().sum()),
-    )
 }
 
 fn format_cpu(pct: f64) -> String {
@@ -132,52 +124,9 @@ pub(crate) fn row_cells(
         ))
 }
 
-/// The Total line under the tree, or nothing from a daemon that reports no
-/// usage at all.
-pub(crate) fn total_row(
-    procs: &[ProcEntry],
-    cpu: &CpuTracker,
-    mono: SharedString,
-    cx: &App,
-) -> Option<gpui_kit::Div> {
-    let reported = procs.iter().any(|p| p.cpu_ns.is_some());
-    let (pct, rss) = totals(procs, cpu);
-    if !reported && rss.is_none() {
-        return None;
-    }
-    Some(
-        h_flex()
-            .h(px(super::right_panel::PROC_ROW_H))
-            .px(px(super::right_panel::ROW_INSET))
-            .items_center()
-            .gap(px(6.))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .text_size(rems(META))
-                    .text_color(cx.theme().muted_foreground)
-                    .child(t(L10nKey::PanelProcessesTotal).to_string()),
-            )
-            .child(
-                h_flex()
-                    .flex_none()
-                    .gap(px(6.))
-                    .child(cell(cpu_text(reported, pct), CPU_W, mono.clone(), cx))
-                    .child(cell(
-                        rss.map(compact_bytes).unwrap_or_default(),
-                        MEM_W,
-                        mono,
-                        cx,
-                    )),
-            ),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     fn s(started: u64, cpu_ns: u64) -> Sample {
         Sample {
@@ -216,32 +165,6 @@ mod tests {
             None,
             "went backwards"
         );
-    }
-
-    fn proc(pid: u32, rss: Option<u64>, cpu_ns: Option<u64>) -> ProcEntry {
-        ProcEntry {
-            pid,
-            rss,
-            cpu_ns,
-            started: Some(7),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn totals_sum_what_was_reported() {
-        let t0 = Instant::now();
-        let mut cpu = CpuTracker::default();
-        cpu.sample(&[proc(1, None, Some(0)), proc(2, None, Some(0))], t0);
-        assert_eq!(cpu.percent(1), None, "first sample shows a dash");
-        let procs = [
-            proc(1, Some(1024), Some(250_000_000)),
-            proc(2, Some(2048), Some(500_000_000)),
-            proc(3, None, None),
-        ];
-        cpu.sample(&procs, t0 + Duration::from_secs(1));
-        assert_eq!(totals(&procs, &cpu), (Some(75.0), Some(3072)));
-        assert_eq!(totals(&[proc(3, None, None)], &cpu), (None, None));
     }
 
     #[test]

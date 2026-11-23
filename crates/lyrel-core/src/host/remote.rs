@@ -180,6 +180,11 @@ impl Host for RemoteHost {
         self.client.host_metrics()
     }
 
+    fn disk_usage(&self, dir: &Path) -> io::Result<crate::host::disk::DiskUsage> {
+        guard_off_ui();
+        self.client.disk_usage(&dir.to_string_lossy().into_owned())
+    }
+
     fn separator(&self) -> char {
         self.separator
     }
@@ -552,6 +557,69 @@ impl Host for RemoteHost {
         }
     }
 
+    /// The peer owns the pane's processes, so it is the only one that can
+    /// vouch for a termination scope. A peer without the feature answers
+    /// `None` and the caller's monitor stays read-only, same as `pane_procs`.
+    fn pane_end_process_plan(
+        &self,
+        pane_id: u64,
+        pid: u32,
+        started: Option<u64>,
+    ) -> Option<Result<crate::daemon::protocol::EndProcessPlan, String>> {
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::PANE_END_PROCESS)
+        {
+            return None;
+        }
+        match self.call(ControlRequest::PaneEndProcessPlan {
+            pane_id,
+            pid,
+            started,
+        }) {
+            Ok(ReplyOk::EndProcessPlan(plan)) => Some(Ok(plan)),
+            Ok(other) => {
+                log::warn!("PaneEndProcessPlan answered with {other:?}");
+                None
+            }
+            // The refusal reason is information, not a broken link: the row
+            // went stale between the poll and the click. Surface it so the
+            // caller can say why instead of offering a dead action.
+            Err(e) if crate::daemon::control::is_dialect_refusal(&e.to_string()) => {
+                log::debug!("peer refused PaneEndProcessPlan: {e}");
+                None
+            }
+            Err(e) => Some(Err(e.to_string())),
+        }
+    }
+
+    fn pane_end_process(
+        &self,
+        pane_id: u64,
+        scope: &[crate::daemon::protocol::ProcIdentity],
+    ) -> Option<Vec<crate::daemon::protocol::EndProcessOutcome>> {
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::PANE_END_PROCESS)
+        {
+            return None;
+        }
+        match self.call(ControlRequest::PaneEndProcess {
+            pane_id,
+            scope: scope.to_vec(),
+        }) {
+            Ok(ReplyOk::EndProcessReport(outcomes)) => Some(outcomes),
+            Ok(other) => {
+                log::warn!("PaneEndProcess answered with {other:?}");
+                None
+            }
+            Err(e) => {
+                log::debug!("could not end pane {pane_id}'s processes: {e}");
+                None
+            }
+        }
+    }
+
     fn remove(&self, p: &Path, recursive: bool) -> io::Result<()> {
         self.expect_unit(ControlRequest::Remove {
             path: wire_path(p),
@@ -652,8 +720,14 @@ impl Host for RemoteHost {
         Ok(environment)
     }
 
-    fn agent_sessions(&self) -> io::Result<Vec<crate::core::agent_history::PastSession>> {
-        match self.call(ControlRequest::AgentSessions)? {
+    fn agent_sessions(
+        &self,
+        directory: Option<&Path>,
+    ) -> io::Result<Vec<crate::core::agent_history::PastSession>> {
+        guard_off_ui();
+        match self.call(ControlRequest::AgentSessions {
+            directory: directory.map(|dir| dir.to_string_lossy().into_owned()),
+        })? {
             ReplyOk::AgentSessions(sessions) => Ok(sessions),
             other => Err(wrong_shape("a list of agent sessions", &other)),
         }
@@ -935,6 +1009,71 @@ impl Host for RemoteHost {
             _ => Err(error(
                 SessionErrorKind::Identity,
                 "Hermes statistics Host returned an incompatible response",
+            )),
+        }
+    }
+
+    /// The bounded batch runs on the data-owning Host: the route, the
+    /// connection and the negotiated capability are revalidated here, and a
+    /// peer without `session-batch-v1` sees an explicit Unsupported instead
+    /// of a request it cannot decode taking the link down.
+    fn session_batch(
+        &self,
+        request: &crate::host::session_operations::batch::SessionBatchRequest,
+    ) -> Result<
+        crate::host::session_operations::batch::SessionBatchReply,
+        crate::host::session_operations::SessionOperationError,
+    > {
+        use crate::host::session_operations::{SessionErrorKind, SessionOperationError};
+        let error = |kind, message: &str| SessionOperationError {
+            kind,
+            message: message.into(),
+            retained: None,
+        };
+        if request.expected_host() != self.id.0 {
+            return Err(error(
+                SessionErrorKind::WrongHost,
+                "session batch belongs to another Host",
+            ));
+        }
+        if !self.is_connected() {
+            return Err(error(
+                SessionErrorKind::Connection,
+                "session batch Host is disconnected",
+            ));
+        }
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::SESSION_BATCH)
+        {
+            return Err(error(
+                SessionErrorKind::Unsupported,
+                "update lyrel-server for session-batch-v1",
+            ));
+        }
+        let mut wire = request.clone();
+        match &mut wire {
+            crate::host::session_operations::batch::SessionBatchRequest::Prepare(request) => {
+                request.expected_host = 0;
+            }
+            crate::host::session_operations::batch::SessionBatchRequest::Execute(request) => {
+                request.expected_host = 0;
+            }
+        }
+        match self
+            .call(ControlRequest::SessionBatch {
+                request: Box::new(wire),
+            })
+            .map_err(|e| {
+                error(
+                    SessionErrorKind::Connection,
+                    &format!("session batch connection failed: {e}"),
+                )
+            })? {
+            ReplyOk::SessionBatch(result) => *result,
+            _ => Err(error(
+                SessionErrorKind::Identity,
+                "session batch Host returned an incompatible response",
             )),
         }
     }
@@ -2263,7 +2402,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_sessions_come_from_the_peer() {
+    fn agent_sessions_come_from_the_peer_scoped_to_the_directory() {
         use crate::core::agent_history::PastSession;
         use crate::core::cli_agent::CLIAgent;
         let session = PastSession {
@@ -2277,16 +2416,38 @@ mod tests {
         };
         let reply = session.clone();
         let (host, seen) = host_with_peer('/', move |req| match req {
-            ControlRequest::AgentSessions => Some((
+            ControlRequest::AgentSessions {
+                directory: Some(directory),
+            } if directory == "/home/me/repo" => Some((
                 ControlReply::Ok(ReplyOk::AgentSessions(vec![reply.clone()])),
                 vec![],
             )),
             other => panic!("unexpected request {other:?}"),
         });
 
-        let found = host.agent_sessions().unwrap();
-        assert_eq!(seen.recv().unwrap(), ControlRequest::AgentSessions);
+        let found = host
+            .agent_sessions(Some(Path::new("/home/me/repo")))
+            .unwrap();
+        assert_eq!(
+            seen.recv().unwrap(),
+            ControlRequest::AgentSessions {
+                directory: Some("/home/me/repo".into())
+            }
+        );
         assert_eq!(found, vec![session]);
+
+        // No directory: the unscoped request is what an unscoped consumer sends.
+        let (host, seen) = host_with_peer('/', |req| match req {
+            ControlRequest::AgentSessions { directory: None } => {
+                Some((ControlReply::Ok(ReplyOk::AgentSessions(Vec::new())), vec![]))
+            }
+            other => panic!("unexpected request {other:?}"),
+        });
+        assert!(host.agent_sessions(None).unwrap().is_empty());
+        assert_eq!(
+            seen.recv().unwrap(),
+            ControlRequest::AgentSessions { directory: None }
+        );
     }
 
     #[test]

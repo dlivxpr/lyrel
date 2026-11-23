@@ -12,6 +12,7 @@ pub mod history;
 pub mod install;
 mod kimi;
 pub mod pane;
+pub(crate) mod procctl;
 pub mod procinfo;
 pub mod procstat;
 #[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]

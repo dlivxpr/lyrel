@@ -73,7 +73,21 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// v18 adds read-only SQLite browsing (`Sqlite`) and the `sqlite-browse-v1`
 /// feature. One request carries the whole operation, so later browsing
 /// operations stay additive inside it; pane framing stays v7.
-pub const CONTROL_VERSION: u32 = 18;
+/// v19 lets `AgentSessions` carry a directory: the scoped answer is filtered
+/// on the host, before the recent-history cap, so a busy store cannot crowd
+/// out the queried directory's own sessions. A v18 peer cannot decode the
+/// request and is turned away at the handshake, as with any other dialect
+/// change; pane framing stays v7.
+/// v20 adds verified pane-process termination (`PaneEndProcessPlan` /
+/// `PaneEndProcess`) and the `pane-end-process` feature (#372). The owning
+/// daemon plans the scope from its complete walk, then re-verifies each
+/// confirmed identity against the live process and the pane's tree before
+/// signaling; a peer without the feature is never asked, and the caller's
+/// monitor stays read-only instead.
+/// v21 adds `DirectoryScan` and the `disk-usage-v1` feature. The owning
+/// host scans the directory under a work bound and reports its volume size.
+/// v22 adds the bounded native session `SessionBatch` request/reply pair.
+pub const CONTROL_VERSION: u32 = 22;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -166,6 +180,13 @@ pub mod feature {
     /// nothing, and the caller sees `Unsupported` rather than an empty schema.
     pub const SQLITE_BROWSE: &str = "sqlite-browse-v1";
     pub const HOST_METRICS: &str = "host-metrics-v1";
+    /// The peer's `HostMetrics` answer may carry `lyrel_usage`: its own
+    /// daemon process stamped with the control instance. Appended as an
+    /// ignorable field on control v19, so a peer without the name simply
+    /// answers without the field and a client without it drops it on decode.
+    pub const LYREL_USAGE: &str = "lyrel-usage-v1";
+    /// The peer answers [`ControlRequest::DirectoryScan`] on the owning host.
+    pub const DISK_USAGE: &str = "disk-usage-v1";
     pub const MACHINE_TREE: &str = "machine-tree";
     pub const STDIO_BRIDGE: &str = "stdio-bridge";
     /// The peer can say what is running inside one of its panes, and what that
@@ -173,6 +194,12 @@ pub mod feature {
     /// simply unknown here: the pane lives in the peer's registry, and the
     /// local daemon this client would otherwise ask has never heard of it.
     pub const PANE_PROCS: &str = "pane-procs";
+    /// The peer can end a process in one of its panes — or the process's whole
+    /// verified subtree — after re-checking identity and pane ownership on its
+    /// own process table (#372). Without it a caller must keep its process
+    /// monitor read-only: the far side cannot vouch for a scope, and signaling
+    /// through a heuristic guess is how an innocent reused pid gets killed.
+    pub const PANE_END_PROCESS: &str = "pane-end-process";
     /// The peer can put a tab to sleep: mark it in the tree and stop its panes
     /// while keeping their screens (#762). Needs both a tree and panes, so a
     /// peer serving either alone does not say it.
@@ -197,6 +224,10 @@ pub mod feature {
     pub const AGENT_STATE_AGE: &str = "agent-state-age";
     pub const HERMES_STATISTICS: &str = "hermes-statistics-v1";
     pub const OPENCODE_STATISTICS: &str = "opencode-statistics-v1";
+    /// The peer can prepare and execute a bounded native session batch.
+    pub const SESSION_BATCH: &str = "session-batch-v1";
+    /// Whole-host samples include receive and transmit rates when available.
+    pub const HOST_NETWORK_METRICS: &str = "host-network-metrics-v1";
 }
 
 pub use crate::host::{
@@ -215,6 +246,9 @@ pub use crate::core::session::WorkspaceId;
 pub enum ControlRequest {
     Ping,
     HostMetrics,
+    DirectoryScan {
+        path: String,
+    },
 
     ReadDir {
         dir: String,
@@ -306,8 +340,13 @@ pub enum ControlRequest {
 
     Shells,
 
-    /// Past supported coding-agent sessions on this machine.
-    AgentSessions,
+    /// Past supported coding-agent sessions on this machine. `directory`,
+    /// when set, scopes the answer to sessions that ran there, matched on
+    /// this host before the recent cap is applied.
+    AgentSessions {
+        #[serde(default)]
+        directory: Option<String>,
+    },
     SessionOperation {
         request: Box<crate::host::session_operations::SessionOperation>,
     },
@@ -322,6 +361,9 @@ pub enum ControlRequest {
     },
     HermesStatistics {
         request: Box<crate::host::session_operations::SessionOperation>,
+    },
+    SessionBatch {
+        request: Box<crate::host::session_operations::batch::SessionBatchRequest>,
     },
 
     WatchOpen {
@@ -512,6 +554,27 @@ pub enum ControlRequest {
     PaneProcs {
         pane_id: u64,
     },
+    /// The scope an End Process action would cover, computed by the daemon
+    /// that owns the pane from its complete walk — never from the client's
+    /// capped snapshot. `started` is the birth stamp the client's selected row
+    /// carries; a live process whose stamp does not match, or that no longer
+    /// belongs to the pane's tree, refuses the plan. Answered with
+    /// [`ReplyOk::EndProcessPlan`].
+    PaneEndProcessPlan {
+        pane_id: u64,
+        pid: u32,
+        started: Option<u64>,
+    },
+    /// Terminate exactly the confirmed identities, in the order the plan gave
+    /// them. The owning daemon re-verifies each identity against the live
+    /// process and the pane's tree immediately before signaling it, drops any
+    /// that have drifted, and never adds a process the client did not confirm.
+    /// Answered with [`ReplyOk::EndProcessReport`], one entry per confirmed
+    /// identity.
+    PaneEndProcess {
+        pane_id: u64,
+        scope: Vec<crate::daemon::protocol::ProcIdentity>,
+    },
     Routes,
     Status,
 }
@@ -596,6 +659,7 @@ impl ControlRequest {
         use ControlRequest::*;
         match self {
             Ping | HostMetrics => Duration::from_secs(5),
+            DirectoryScan { .. } => Duration::from_secs(30),
             ReadDir { .. }
             | Stat { .. }
             | Exists { .. }
@@ -609,6 +673,13 @@ impl ControlRequest {
             // between asks would only stack up requests behind a peer that has
             // stopped answering.
             | PaneProcs { .. } => Duration::from_secs(5),
+            // Planning is a walk plus one identity read. Termination signals a
+            // verified batch and then waits on the same handles for it to take,
+            // bounded by one deadline on the daemon side; this deadline sits
+            // past that so a slow batch still gets its per-target report
+            // instead of a dead link.
+            PaneEndProcessPlan { .. } => Duration::from_secs(10),
+            PaneEndProcess { .. } => Duration::from_secs(15),
             ReadFile { .. } | WriteFile { .. } | ReadChunk { .. } => Duration::from_secs(30),
             OpenRead { .. } | CloseRead { .. } => Duration::from_secs(5),
             // The server's own progress handler ends a query on its seconds
@@ -635,8 +706,9 @@ impl ControlRequest {
             // Past the host's own time budget (`ContentLimits::max_millis`),
             // so a search that ran long still gets to say what it found.
             SearchContent { .. } => Duration::from_secs(30),
-            Shells | AgentSessions => Duration::from_secs(20),
+            Shells | AgentSessions { .. } => Duration::from_secs(20),
             SessionOperation { .. } | OpenCodeSessions { .. } | OpenCodeStatistics { .. } | HermesSessions { .. } | HermesStatistics { .. } => Duration::from_secs(120),
+            SessionBatch { .. } => Duration::from_secs(180),
             WorkspaceAttach { .. } | WorkspaceDetach { .. } => Duration::from_secs(10),
             GuiOpen { .. } => Duration::from_secs(5),
             MachineGet
@@ -705,6 +777,7 @@ pub enum ReplyOk {
     Unit,
     Pong,
     HostMetrics(crate::host::metrics::HostMetrics),
+    DiskUsage(crate::host::disk::DiskUsage),
     Entries(Vec<Entry>),
     Meta(Meta),
     Bool(bool),
@@ -759,6 +832,14 @@ pub enum ReplyOk {
     HermesStatistics(
         Box<Result<serde_json::Value, crate::host::session_operations::SessionOperationError>>,
     ),
+    SessionBatch(
+        Box<
+            Result<
+                crate::host::session_operations::batch::SessionBatchReply,
+                crate::host::session_operations::SessionOperationError,
+            >,
+        >,
+    ),
     Attached {
         took_over_from: Option<String>,
     },
@@ -774,6 +855,13 @@ pub enum ReplyOk {
     Panes(Vec<u64>),
     AgentStates(Vec<PaneAgentState>),
     PaneProcs(crate::daemon::protocol::PaneProcs),
+    /// The answer to [`ControlRequest::PaneEndProcessPlan`]: the complete
+    /// scope the owning daemon would act on, each row with its plan-time
+    /// identity.
+    EndProcessPlan(crate::daemon::protocol::EndProcessPlan),
+    /// The answer to [`ControlRequest::PaneEndProcess`]: one outcome per
+    /// confirmed identity, in the order given.
+    EndProcessReport(Vec<crate::daemon::protocol::EndProcessOutcome>),
     Routes(Vec<RouteInfo>),
     Status(ServerStatus),
 }
@@ -1677,6 +1765,37 @@ impl ControlClient {
         }
     }
 
+    /// Scan the exact directory on this daemon. Check the returned instance
+    /// and directory before handing a result to the desktop.
+    pub fn disk_usage(&self, path: &str) -> io::Result<crate::host::disk::DiskUsage> {
+        crate::host::guard_off_ui();
+        if !self.is_connected() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "disk scan daemon is disconnected",
+            ));
+        }
+        if !self.hello().has_feature(feature::DISK_USAGE) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "daemon does not support directory disk scans",
+            ));
+        }
+        match self.call(ControlRequest::DirectoryScan {
+            path: path.to_owned(),
+        })? {
+            ReplyOk::DiskUsage(usage)
+                if usage.instance() == self.hello().instance && usage.directory() == path =>
+            {
+                Ok(usage)
+            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "disk usage came from an unexpected daemon or directory",
+            )),
+        }
+    }
+
     pub fn close(&self) {
         self.inner
             .fail_all("control connection closed by this client");
@@ -2072,6 +2191,24 @@ mod tests {
             },
             ControlRequest::AgentStates,
             ControlRequest::PaneProcs { pane_id: 7 },
+            ControlRequest::PaneEndProcessPlan {
+                pane_id: 7,
+                pid: 4242,
+                started: Some(1_700_000_000_000_000),
+            },
+            ControlRequest::PaneEndProcess {
+                pane_id: 7,
+                scope: vec![
+                    crate::daemon::protocol::ProcIdentity {
+                        pid: 4242,
+                        started: Some(1_700_000_000_000_000),
+                    },
+                    crate::daemon::protocol::ProcIdentity {
+                        pid: 4243,
+                        started: Some(1_700_000_000_000_001),
+                    },
+                ],
+            },
             ControlRequest::Sqlite {
                 request: Box::new(crate::host::sqlite::SqliteRequest::Open {
                     path: "/home/me/proj/data.sqlite".into(),
@@ -2947,6 +3084,21 @@ mod tests {
             ),
             (R::AgentStates, s(5)),
             (R::PaneProcs { pane_id: 7 }, s(5)),
+            (
+                R::PaneEndProcessPlan {
+                    pane_id: 7,
+                    pid: 4242,
+                    started: None,
+                },
+                s(10),
+            ),
+            (
+                R::PaneEndProcess {
+                    pane_id: 7,
+                    scope: vec![],
+                },
+                s(15),
+            ),
             (R::Routes, s(5)),
             (R::Status, s(5)),
         ];

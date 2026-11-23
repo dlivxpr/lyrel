@@ -3,6 +3,9 @@ pub mod app;
 pub mod assets;
 #[cfg(target_os = "windows")]
 pub mod backdrop;
+pub(crate) mod caffeine;
+#[cfg(test)]
+mod caffeine_consumer_tests;
 #[cfg(any(test, feature = "native-markdown-tests"))]
 pub mod code_editor;
 pub mod desktop_lookups;
@@ -18,10 +21,12 @@ pub mod forwards;
 pub mod github;
 pub mod hints;
 pub mod home;
+pub(crate) mod host_disk;
 pub(crate) mod host_metrics;
 pub(crate) mod ime;
 pub mod keymap;
 pub mod local_link;
+pub(crate) mod lyrel_usage;
 pub mod machine_mirror;
 pub(crate) mod motion;
 #[cfg(test)]
@@ -34,6 +39,9 @@ pub mod pane_drag;
 pub(crate) mod pane_liveness;
 pub(crate) mod pane_sidecar;
 pub mod panel_github;
+pub(crate) mod panel_monitor;
+#[cfg(test)]
+mod panel_monitor_tests;
 pub mod panel_search;
 pub(crate) mod panel_slide;
 pub(crate) mod parked_deck;
@@ -54,6 +62,10 @@ pub mod right_panel;
 pub mod scm;
 pub mod scm_snapshot;
 pub mod search;
+pub(crate) mod session_history;
+#[cfg(test)]
+#[path = "session_history_resume_tests.rs"]
+mod session_history_resume_tests;
 pub(crate) mod session_lifecycle;
 pub mod settings;
 pub mod settings_window;

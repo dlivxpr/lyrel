@@ -211,6 +211,15 @@ impl PromptInput {
     pub fn enabled(&self) -> bool {
         self.enabled
     }
+
+    /// Whether anything unsubmitted sits on the shell's line — recorded text
+    /// or a taint either one. History restoration asks this before reusing a
+    /// pane: typed-but-unsubmitted input belongs to the user, not to the
+    /// session being restored, and must be preserved by leaving the pane
+    /// alone.
+    pub fn has_pending_typeahead(&self) -> bool {
+        self.typeahead.is_pending()
+    }
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }

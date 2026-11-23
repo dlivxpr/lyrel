@@ -1,93 +1,89 @@
-//! The shared worktree picker: one searchable list of every checkout of the
-//! Context Pane's repository, opened from the Changes header's worktree
-//! entry or the status bar's Git indicator (#351).
+//! The shared 工作树 submenu of the two Git menus — the Changes panel's
+//! branch menu and the status bar's checkout menu (#351).
+//!
+//! Both menus append the identical submenu: 新建工作树 first, a separator,
+//! then every checkout of the repository as a direct two-line row — the
+//! directory name, then the branch (or detached) and the distinguishing
+//! parent path — with the menu's own check gutter ticking the checkout the
+//! Context Pane sits in. There is deliberately no generic "switch worktree"
+//! item: the checkouts themselves are the choices.
 //!
 //! Picking a checkout navigates: a pane of this window already sitting in
 //! the target — its cwd somewhere underneath the checkout root counts — is
-//! focused; otherwise exactly one terminal tab opens at the checkout root on
-//! the owning Host. Nothing is ever sent to a running process: no `cd`, no
-//! branch checkout, no injection. Creating a worktree hands the picker's
-//! captured Host and directory to the existing creation prompt, so setup,
+//! focused; otherwise exactly one terminal tab opens at the checkout root
+//! on the owning Host. Nothing is ever sent to a running process: no `cd`,
+//! no branch checkout, no injection. Creating a worktree hands the captured
+//! Host and directory to the existing creation prompt, so setup,
 //! cancellation and per-worktree commit drafts behave exactly the way they
 //! do from every other entrance.
 //!
-//! The pick a row names is a [`WorktreePick`] — the canonical checkout on its
-//! owning Host. Removal (#352) consumes the same value through
-//! [`LyrelApp::revalidate_worktree_pick`], which re-reads the checkout's
-//! current facts on that Host before anything destructive is offered, and
+//! Removal (#352) keeps the picker's old route as a discreet trailing
+//! submenu: it lists the same checkouts, and clicking one opens the
+//! confirmation for exactly that pick. The confirmation re-reads the
+//! checkout's current facts on its owning Host before it is offered and
 //! again after the confirmation click: the checkout may have become dirty or
 //! occupied while the dialog was open. Dirty removal needs its own explicit
-//! confirmation and a durable recovery point before Git removes the checkout.
+//! confirmation and a durable recovery point before Git removes the
+//! checkout.
 
-use std::cell::Cell;
 use std::path::{Path, PathBuf};
 
-use gpui_kit::base::{
-    Popup,
-    actions::{Cancel, Confirm, SelectDown, SelectUp},
-};
+use gpui_kit::Focusable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::list::{List, ListDelegate, ListEvent, ListState};
-use gpui_kit::component::{
-    ActiveTheme as _, Disableable as _, Icon, IconName, IndexPath, Selectable, Sizable as _,
-    h_flex, v_flex,
-};
+use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::{ActiveTheme as _, Disableable as _, Sizable as _, v_flex};
 use gpui_kit::{
-    Anchor, AnyElement, App, Context, Entity, Focusable as _, IntoElement, KeyDownEvent,
-    MouseButton, SharedString, Subscription, Task, TestSupportExt as _, Window, div, prelude::*,
-    px, rems,
+    AnyElement, App, Context, FocusHandle, IntoElement, KeyDownEvent, MouseButton, SharedString,
+    TestSupportExt as _, WeakEntity, Window, div, prelude::*, px, rems,
 };
 
 use crate::ui::app::LyrelApp;
 use crate::ui::notification_history::NotificationWindowExt as _;
-use crate::ui::right_panel::{META, info_chip};
+use crate::ui::right_panel::META;
+use crate::ui::scm::state::RepoKey;
 use lyrel_core::core::worktree::{
     CheckoutInspection, CheckoutRemoval, inspect_checkout, remove_confirmed_checkout,
 };
-use lyrel_ui_base::host_ops::SharedHost;
+use lyrel_ui_base::host_ops::{HostOps, SharedHost};
+use lyrel_ui_base::host_registry::HostRegistry;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
-/// The confirmation needs room for a full checkout path and the recovery notice.
+/// The removal confirmation needs room for a full checkout path and the
+/// recovery notice.
 const REMOVAL_CARD_W: f32 = 480.;
-const PICKER_W: f32 = 24.;
-/// One row carries two lines: the directory name, then branch and
-/// distinguishing path. Every row is the same height, which the list
-/// component requires.
-const ROW_H: f32 = 44. / 16.;
-const ROW_PAD: f32 = 10.;
-const LIST_PAD: f32 = 8.;
-/// The list stops growing at five rows; past that it scrolls.
-const LIST_MAX_ROWS: usize = 5;
+/// The first line of a checkout row, the same body size the picker used.
 const TEXT: f32 = 13. / 16.;
+// Keep both menus compact enough to open to the right of the Changes menu.
+const MENU_WIDTH: f32 = 12.;
+const ROW_TEXT_WIDTH: f32 = 9.5;
 
-/// A checkout the picker lists, bound to the Host that owns the repository.
+/// A checkout the menus list, bound to the Host that owns the repository.
 /// Identity is the Host plus the canonical checkout path — never the
 /// basename or the branch, which two checkouts can share (#351).
 #[derive(Clone)]
 pub(crate) struct WorktreePick {
-    pub(crate) host: SharedHost,
-    pub(crate) checkout: lyrel_core::core::worktree::Listed,
+    host: SharedHost,
+    checkout: lyrel_core::core::worktree::Listed,
 }
 
 /// One checkout's current facts, re-read on its owning Host. Removal (#352)
 /// consumes this before offering to delete, and again after the confirmation
 /// click: any fact that cannot be read is a block, never a pass, and a fact
 /// that changed while the dialog was open blocks with the fresh reason.
-pub(crate) struct WorktreePickState {
+struct WorktreePickState {
     /// The pinned identity: the canonical checkout path on its Host. Two
     /// external directories can share a basename, so identity is never the
     /// name and never the branch.
-    pub(crate) canonical: PathBuf,
+    canonical: PathBuf,
     /// The facts shown by this confirmation, rechecked before deletion.
     inspection: Option<CheckoutInspection>,
     /// What blocks removal right now; `None` while every guard passes.
-    pub(crate) block: Option<WorktreePickBlock>,
+    block: Option<WorktreePickBlock>,
 }
 
 /// Why one checkout cannot be removed from the disk right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WorktreePickBlock {
+enum WorktreePickBlock {
     /// The checkout no longer answers `git worktree list` on its Host.
     Gone,
     /// The main checkout is never removable.
@@ -102,312 +98,43 @@ pub(crate) enum WorktreePickBlock {
     Unverifiable,
 }
 
-/// The removal confirmation for one pick, shown inside the picker's card.
-/// Pinned at activation — the Host, the checkout identity, the canonical
-/// path — and revalidated before the dialog is offered and once more after
-/// the confirmation click.
-struct WorktreeRemoval {
+/// The removal confirmation for one pick, shown as the window-level overlay.
+/// Pinned at activation — the Host, the checkout identity, the repository
+/// directory — and revalidated before the dialog is offered and once more
+/// after the confirmation click.
+pub(crate) struct WorktreeRemoval {
     id: uuid::Uuid,
     pick: WorktreePick,
+    /// The repository directory the revalidation lists checkouts from.
+    repo_cwd: PathBuf,
     /// What the open-time revalidation answered; `None` while it runs.
     state: Option<WorktreePickState>,
     /// True from confirmation until its result; ignore repeated activation.
     busy: bool,
     /// Once Git is asked to remove, dismissal cannot cancel that operation.
     removing: bool,
+    /// Owns the keyboard while the dialog shows.
+    focus: FocusHandle,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WorktreePickerEntrance {
-    StatusBar,
-    Changes,
+/// What clicking a checkout row does.
+enum WorktreeRowAction {
+    /// Navigate: focus a pane already in the checkout, or open one tab.
+    Activate,
+    /// Remove: open the confirmation for exactly this checkout.
+    Remove,
 }
 
-/// The picker, while open. One instance serves both entrances: they name the
-/// same choice, so opening one closes the other.
-pub(crate) struct WorktreePicker {
-    entrance: WorktreePickerEntrance,
-    workspace: lyrel_ui_base::session::WorkspaceId,
-    pane: gpui_kit::EntityId,
-    anchor_seen: Cell<bool>,
-    focus_on_mount: std::rc::Rc<Cell<bool>>,
-    /// The Host the list was read on — also where a new tab opens.
-    host: SharedHost,
-    /// The Context Pane's spawn route, distinct from the window's route for
-    /// a local sidecar inside a remote Workspace.
-    spawn_workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
-    /// The Context Pane's directory when the picker opened. The read runs
-    /// from here, and the checkout containing it reads as the active row.
-    cwd: PathBuf,
-    query: Entity<InputState>,
-    list: Entity<ListState<WorktreeDelegate>>,
-    /// The removal confirmation, while it is showing. One dialog at a time:
-    /// the card asks one question, and the question is removal now.
-    removal: Option<WorktreeRemoval>,
-    /// Keyboard owner while the removal dialog shows: the query input owns
-    /// the list's chords, the removal card owns its own.
-    removal_focus: gpui_kit::FocusHandle,
-    _sub: Subscription,
-    _query_sub: Subscription,
+/// The Host connection the menus were built against is still the one the
+/// registry hands out — a reconnect must not run actions on a stale handle.
+pub(crate) fn current_host(expected: &SharedHost, cx: &App) -> bool {
+    HostRegistry::lookup(cx, expected.id())
+        .is_some_and(|host| std::sync::Arc::ptr_eq(&host, expected))
 }
 
-/// The list's rows: every checkout of the repository, filtered by the query.
-struct WorktreeDelegate {
-    host: SharedHost,
-    query: String,
-    /// What `git worktree list` answered, main checkout first (git's own
-    /// order, kept — the main checkout is the one removal never touches).
-    worktrees: Vec<lyrel_core::core::worktree::Listed>,
-    /// Indices into `worktrees` the query keeps visible.
-    matching: Vec<usize>,
-    /// The checkout containing the Context Pane's directory: what Return
-    /// re-affirms, and the row the picker opens on.
-    active: Option<PathBuf>,
-    loading: bool,
-    failed: Option<String>,
-    selected: Option<IndexPath>,
-}
-
-impl WorktreeDelegate {
-    fn new(host: SharedHost) -> Self {
-        Self {
-            host,
-            query: String::new(),
-            worktrees: Vec::new(),
-            matching: Vec::new(),
-            active: None,
-            loading: true,
-            failed: None,
-            selected: None,
-        }
-    }
-
-    /// The read landed (or failed). Returns the row the selection should
-    /// open on: the active checkout when it is listed, otherwise the first.
-    fn land(
-        &mut self,
-        worktrees: Vec<lyrel_core::core::worktree::Listed>,
-        active: Option<PathBuf>,
-    ) -> Option<IndexPath> {
-        self.loading = false;
-        self.failed = None;
-        self.active = active;
-        self.worktrees = worktrees;
-        self.refilter();
-        let first = self
-            .active
-            .as_ref()
-            .and_then(|active| {
-                self.matching
-                    .iter()
-                    .position(|&ix| self.worktrees[ix].path == *active)
-            })
-            .or_else(|| (!self.matching.is_empty()).then_some(0));
-        first.map(|row| IndexPath {
-            section: 0,
-            row,
-            ..Default::default()
-        })
-    }
-
-    fn fail(&mut self, error: String) {
-        self.loading = false;
-        self.failed = Some(error);
-        self.worktrees.clear();
-        self.matching.clear();
-    }
-
-    fn refilter(&mut self) {
-        self.matching = self
-            .worktrees
-            .iter()
-            .enumerate()
-            .filter(|(_, wt)| self.matches(wt))
-            .map(|(ix, _)| ix)
-            .collect();
-    }
-
-    /// Searchable by directory, branch and path — the three things a reader
-    /// can know a checkout by. A detached HEAD matches nothing under branch;
-    /// the detached label is a rendering of absence, not a name.
-    fn matches(&self, wt: &lyrel_core::core::worktree::Listed) -> bool {
-        let Some(query) = crate::ui::scm::tree::normalize_query(&self.query) else {
-            return true;
-        };
-        let name = checkout_name(wt);
-        let branch = wt.branch.as_deref().unwrap_or("");
-        let path = wt.path.display().to_string();
-        name.to_lowercase().contains(&query)
-            || (!branch.is_empty() && branch.to_lowercase().contains(&query))
-            || path.to_lowercase().contains(&query)
-    }
-
-    fn row(&self, row: usize) -> Option<&lyrel_core::core::worktree::Listed> {
-        self.matching.get(row).map(|&ix| &self.worktrees[ix])
-    }
-
-    /// The pick a row names — the canonical checkout on its owning Host.
-    fn pick_at(&self, ix: IndexPath) -> Option<WorktreePick> {
-        let checkout = self.row(ix.row)?.clone();
-        Some(WorktreePick {
-            host: self.host.clone(),
-            checkout,
-        })
-    }
-}
-
-impl ListDelegate for WorktreeDelegate {
-    type Item = WorktreeRow;
-
-    fn perform_search(
-        &mut self,
-        query: &str,
-        _window: &mut Window,
-        _cx: &mut Context<ListState<Self>>,
-    ) -> Task<()> {
-        self.query = query.to_string();
-        self.refilter();
-        Task::ready(())
-    }
-
-    fn items_count(&self, _section: usize, _cx: &App) -> usize {
-        self.matching.len()
-    }
-
-    fn render_item(
-        &mut self,
-        ix: IndexPath,
-        _window: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) -> Option<Self::Item> {
-        let wt = self.row(ix.row)?;
-        let theme = cx.theme();
-        let muted = theme.muted_foreground;
-        let mono = theme.mono_font_family.clone();
-        let name = checkout_name(wt);
-        let path_text = wt.path.display().to_string();
-        let branch = wt
-            .branch
-            .clone()
-            .unwrap_or_else(|| t(L10nKey::ScmDetached).to_string());
-        let second = match wt.path.parent().map(|p| p.display().to_string()) {
-            Some(parent) if !parent.is_empty() => format!("{branch} · {parent}"),
-            _ => branch.clone(),
-        };
-        let active = self.active.as_ref() == Some(&wt.path);
-        let label: SharedString = if active {
-            format!(
-                "{name}, {branch}, {path_text}, {}",
-                t(L10nKey::WorktreePickerCurrent)
-            )
-        } else {
-            format!("{name}, {branch}, {path_text}")
-        }
-        .into();
-
-        let mut first = h_flex().flex_none().min_w_0().items_center().gap(px(6.));
-        first = first.child(
-            div()
-                .flex_1()
-                .min_w(px(40.))
-                .truncate()
-                .text_size(rems(TEXT))
-                .font_weight(gpui_kit::FontWeight::MEDIUM)
-                .child(name),
-        );
-        if active {
-            first = first.child(info_chip(
-                &t(L10nKey::WorktreePickerCurrent),
-                muted.opacity(0.14),
-                muted,
-                &mono,
-            ));
-        }
-
-        let child = h_flex()
-            .flex_1()
-            .min_w_0()
-            .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .justify_center()
-                    .gap(px(2.))
-                    .child(first)
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(rems(META))
-                            .text_color(muted)
-                            .child(second),
-                    ),
-            )
-            .into_any_element();
-
-        Some(WorktreeRow {
-            id: ("worktree-row", ix.row as u64).into(),
-            label,
-            selected: self.selected == Some(ix),
-            child,
-        })
-    }
-
-    fn render_empty(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) -> impl IntoElement {
-        let text = match (&self.failed, self.loading) {
-            (Some(error), _) => t_fmt(L10nKey::WorktreePickerFailed, &[("error", error)]),
-            (None, true) => t(L10nKey::PanelLoading).to_string(),
-            (None, false) => t(L10nKey::WorktreePickerEmpty).to_string(),
-        };
-        h_flex()
-            .id("worktree-picker-empty")
-            .w_full()
-            .h(rems(ROW_H))
-            .px(px(ROW_PAD + LIST_PAD))
-            .items_center()
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(rems(META))
-                    .text_color(cx.theme().muted_foreground)
-                    .child(text),
-            )
-    }
-
-    fn set_selected_index(
-        &mut self,
-        ix: Option<IndexPath>,
-        window: &mut Window,
-        cx: &mut Context<ListState<Self>>,
-    ) {
-        // After a search the list re-picks from the rows it drew last frame;
-        // when that frame drew none, Return would do nothing on a list with
-        // rows in it. Put the first row back once the list is done, the same
-        // re-arm SearchDelegate performs.
-        if ix.is_none() && !self.matching.is_empty() {
-            let first = IndexPath {
-                section: 0,
-                row: 0,
-                ..Default::default()
-            };
-            cx.defer_in(window, move |state, window, cx| {
-                if state.selected_index().is_none() {
-                    state.set_selected_index(Some(first), window, cx);
-                }
-            });
-        }
-        let moved = self.selected != ix;
-        self.selected = ix;
-        if moved && let Some(ix) = ix {
-            cx.emit(ListEvent::Select(ix));
-        }
-        cx.notify();
-    }
+/// The one unavailable row both Git menus show when a Host is missing.
+pub(crate) fn unavailable(menu: PopupMenu) -> PopupMenu {
+    menu.item(PopupMenuItem::new(t(L10nKey::ScmStatusUnavailable)).disabled(true))
 }
 
 /// The directory name a checkout answers to — the last path component, with
@@ -438,223 +165,375 @@ fn canonical_checkout(host: &dyn lyrel_core::host::Host, cwd: &Path) -> Option<P
     host.canonicalize(Path::new(path)).ok()
 }
 
-/// One checkout row: the same neutral selected fill the search rows use, so
-/// the keyboard row reads as where Return lands, not as an action.
-#[derive(IntoElement)]
-struct WorktreeRow {
-    id: gpui_kit::ElementId,
-    label: SharedString,
-    selected: bool,
-    child: AnyElement,
-}
-
-impl Selectable for WorktreeRow {
-    fn selected(mut self, selected: bool) -> Self {
-        self.selected = selected;
-        self
+/// One checkout row of a worktree menu: the directory name on the first
+/// line, the branch (or detached) and distinguishing parent path on the
+/// second. The menu's own check gutter ticks the current checkout. `kind`
+/// separates the navigation rows from the removal submenu's rows so both
+/// can be open at once without shared element ids.
+fn worktree_row_item(
+    kind: &'static str,
+    wt: &lyrel_core::core::worktree::Listed,
+    active: bool,
+    action: WorktreeRowAction,
+    app: WeakEntity<LyrelApp>,
+    host: SharedHost,
+    repo: RepoKey,
+    workspace: lyrel_ui_base::session::WorkspaceId,
+) -> PopupMenuItem {
+    let name = checkout_name(wt);
+    let branch = wt
+        .branch
+        .clone()
+        .unwrap_or_else(|| t(L10nKey::ScmDetached).to_string());
+    let path_text = wt.path.display().to_string();
+    let second = match wt.path.parent().map(|p| p.display().to_string()) {
+        Some(parent) if !parent.is_empty() => format!("{branch} · {parent}"),
+        _ => branch.clone(),
+    };
+    let label: SharedString = if active {
+        format!(
+            "{name}, {branch}, {path_text}, {}",
+            t(L10nKey::WorktreePickerCurrent)
+        )
+    } else {
+        format!("{name}, {branch}, {path_text}")
     }
+    .into();
+    let row_id: gpui_kit::ElementId =
+        gpui_kit::ElementId::Name(format!("{kind}: {path_text}").into());
 
-    fn is_selected(&self) -> bool {
-        self.selected
-    }
-}
-
-impl gpui_kit::RenderOnce for WorktreeRow {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().popover;
-        let (hover, picked) = (gpui_kit::rgb(sf.hover), gpui_kit::rgb(sf.selected));
-        h_flex()
-            .id(self.id)
+    let item = PopupMenuItem::element(move |_, cx| {
+        let muted = cx.theme().muted_foreground;
+        v_flex()
+            .id(row_id.clone())
             .test_support()
-            .role(gpui_kit::Role::ListBoxOption)
-            .aria_label(self.label)
-            .aria_selected(self.selected)
-            .items_center()
-            .flex_none()
-            .h(rems(ROW_H))
-            .mx(px(LIST_PAD))
-            .px(px(ROW_PAD))
-            .rounded(lyrel_ui_base::rounding::ROW_RADIUS)
+            .role(gpui_kit::Role::MenuItem)
+            .aria_label(label.clone())
+            .w(rems(ROW_TEXT_WIDTH))
             .overflow_hidden()
-            .cursor_pointer()
-            .text_color(cx.theme().foreground)
-            .when(self.selected, |r| r.bg(picked))
-            .when(!self.selected, |r| r.hover(move |s| s.bg(hover)))
-            .child(self.child)
+            .gap(px(1.))
+            .py(px(1.))
+            .child(
+                div()
+                    .w(rems(ROW_TEXT_WIDTH))
+                    .truncate()
+                    .text_size(rems(TEXT))
+                    .font_weight(gpui_kit::FontWeight::MEDIUM)
+                    .child(name.clone()),
+            )
+            .child(
+                div()
+                    .w(rems(ROW_TEXT_WIDTH))
+                    .truncate()
+                    .text_ellipsis_middle()
+                    .text_size(rems(META))
+                    .text_color(muted)
+                    .child(second.clone()),
+            )
+    })
+    .checked(active);
+
+    let checkout = wt.clone();
+    match action {
+        WorktreeRowAction::Activate => item.on_click(move |_, window, cx| {
+            let handle = window.window_handle();
+            let app = app.clone();
+            let host = host.clone();
+            let repo = repo.clone();
+            let checkout = checkout.clone();
+            // Dismissal restores focus to the trigger, and that restore runs
+            // after this handler returns. Defer the navigation past the
+            // dismiss chain so its focus lands last.
+            cx.defer(move |cx| {
+                _ = handle.update(cx, |_, window, cx| {
+                    _ = app.update(cx, |app, cx| {
+                        if !app.status_checkout_is_current(&repo, workspace, window, cx)
+                            || !current_host(&host, cx)
+                        {
+                            return;
+                        }
+                        // The route is the pane the menu is bound to, not the
+                        // window's: a local pane inside a remote workspace
+                        // spawns the checkout's terminal locally.
+                        let source_workspace = app
+                            .context_pane(window, cx)
+                            .and_then(|pane| pane.read(cx).workspace().cloned());
+                        app.confirm_worktree_pick(
+                            WorktreePick { host, checkout },
+                            source_workspace,
+                            window,
+                            cx,
+                        );
+                    });
+                });
+            });
+        }),
+        WorktreeRowAction::Remove => item.on_click(move |_, window, cx| {
+            let handle = window.window_handle();
+            let app = app.clone();
+            let host = host.clone();
+            let repo = repo.clone();
+            let checkout = checkout.clone();
+            cx.defer(move |cx| {
+                _ = handle.update(cx, |_, window, cx| {
+                    _ = app.update(cx, |app, cx| {
+                        if !app.status_checkout_is_current(&repo, workspace, window, cx)
+                            || !current_host(&host, cx)
+                        {
+                            return;
+                        }
+                        app.begin_worktree_removal(
+                            WorktreePick { host, checkout },
+                            repo.root.clone(),
+                            window,
+                            cx,
+                        );
+                    });
+                });
+            });
+        }),
     }
+}
+
+/// The submenu's static head: 新建工作树, then the separator before the
+/// checkout list. `PopupMenu::rebuild` clears every item when the read
+/// lands, so the landing builder reuses this rather than repeating itself.
+fn worktree_menu_shell(
+    menu: PopupMenu,
+    app: &WeakEntity<LyrelApp>,
+    host: &SharedHost,
+    repo: &RepoKey,
+    workspace: lyrel_ui_base::session::WorkspaceId,
+) -> PopupMenu {
+    menu.item(PopupMenuItem::new(t(L10nKey::CmdNewWorktreeTab)).on_click({
+        let app = app.clone();
+        let host = host.clone();
+        let repo = repo.clone();
+        move |_, window, cx| {
+            if !current_host(&host, cx) {
+                return;
+            }
+            _ = app.update(cx, |app, cx| {
+                if !app.status_checkout_is_current(&repo, workspace, window, cx) {
+                    return;
+                }
+                // The route is the pane the menu is bound to, not the
+                // window's: a local pane inside a remote workspace
+                // spawns the worktree terminal locally.
+                let source_workspace = app
+                    .context_pane(window, cx)
+                    .and_then(|pane| pane.read(cx).workspace().cloned());
+                app.new_worktree_at(
+                    host.clone(),
+                    repo.root.clone(),
+                    source_workspace,
+                    window,
+                    cx,
+                );
+            });
+        }
+    }))
+    .separator()
+}
+
+/// Append the shared 工作树 submenu. Both Git menus call this, so they
+/// cannot disagree about the choices or the active checkout.
+pub(crate) fn worktree_submenu(
+    menu: PopupMenu,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+    app: &WeakEntity<LyrelApp>,
+    repo: &RepoKey,
+    workspace: lyrel_ui_base::session::WorkspaceId,
+    host: Option<&SharedHost>,
+) -> PopupMenu {
+    let app = app.clone();
+    let repo = repo.clone();
+    let host = host.cloned();
+    menu.submenu(
+        t(L10nKey::ScmWorktrees),
+        window,
+        cx,
+        move |menu, window, cx| {
+            let Some(host) = host.clone() else {
+                return unavailable(menu);
+            };
+            let expected = host.clone();
+            let width = window.rem_size() * MENU_WIDTH;
+            let menu = menu.min_w(width).max_w(width);
+            let menu = worktree_menu_shell(menu, &app, &host, &repo, workspace);
+            let read_repo = repo.clone();
+            let land_app = app.clone();
+            let land_repo = repo.clone();
+            let menu_host = expected.clone();
+            let remove_app = app.clone();
+            let remove_repo = repo.clone();
+            HostOps::run_in(
+                expected,
+                window,
+                cx,
+                move |h| -> Result<
+                    (Vec<lyrel_core::core::worktree::Listed>, Option<PathBuf>),
+                    String,
+                > {
+                    let worktrees = crate::core::worktree::list(h, &read_repo.root)?;
+                    // A managed checkout may live underneath the main checkout.
+                    // Git's root, not a prefix match, identifies the current row.
+                    let active = canonical_checkout(h, &read_repo.root).and_then(|root| {
+                        worktrees
+                            .iter()
+                            .find(|wt| {
+                                h.canonicalize(&wt.path).ok().as_deref() == Some(root.as_path())
+                            })
+                            .map(|wt| wt.path.clone())
+                    });
+                    Ok((worktrees, active))
+                },
+                move |menu, result, window, cx| {
+                    // Only the pinned Host and the pinned checkout may fill the
+                    // menu; a reconnect or a moved Context Pane leaves it alone.
+                    if !current_host(&menu_host, cx)
+                        || !land_app.upgrade().is_some_and(|app| {
+                            app.read(cx)
+                                .status_checkout_is_current(&land_repo, workspace, window, cx)
+                        })
+                    {
+                        return;
+                    }
+                    menu.rebuild(window, cx, |menu, window, cx| {
+                        let menu =
+                            worktree_menu_shell(menu, &land_app, &menu_host, &land_repo, workspace);
+                        match result {
+                            Ok((worktrees, active)) => {
+                                let mut menu = menu;
+                                for wt in &worktrees {
+                                    let is_active = active.as_ref() == Some(&wt.path);
+                                    menu = menu.item(worktree_row_item(
+                                        "worktree-menu-row",
+                                        wt,
+                                        is_active,
+                                        WorktreeRowAction::Activate,
+                                        land_app.clone(),
+                                        menu_host.clone(),
+                                        land_repo.clone(),
+                                        workspace,
+                                    ));
+                                }
+                                // The picker's removal footer survives as one
+                                // discreet trailing submenu, scoped away from the
+                                // navigation list.
+                                menu.separator().submenu(
+                                    t(L10nKey::WorktreePickerRemove),
+                                    window,
+                                    cx,
+                                    {
+                                        let remove_host = menu_host.clone();
+                                        move |menu, window, cx| {
+                                            worktree_removal_menu(
+                                                menu,
+                                                window,
+                                                cx,
+                                                remove_app.clone(),
+                                                remove_repo.clone(),
+                                                workspace,
+                                                remove_host.clone(),
+                                            )
+                                        }
+                                    },
+                                )
+                            }
+                            Err(error) => menu.item(
+                                PopupMenuItem::new(t_fmt(
+                                    L10nKey::WorktreePickerFailed,
+                                    &[("error", &error)],
+                                ))
+                                .disabled(true),
+                            ),
+                        }
+                    });
+                },
+            );
+            menu.item(PopupMenuItem::new(t(L10nKey::PanelLoading)).disabled(true))
+        },
+    )
+}
+
+/// The removal entry's submenu: every checkout of the repository, where
+/// clicking one opens the removal confirmation for exactly that checkout.
+/// The confirmation re-reads the checkout's facts before offering anything.
+fn worktree_removal_menu(
+    menu: PopupMenu,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
+    app: WeakEntity<LyrelApp>,
+    repo: RepoKey,
+    workspace: lyrel_ui_base::session::WorkspaceId,
+    host: SharedHost,
+) -> PopupMenu {
+    let width = window.rem_size() * MENU_WIDTH;
+    let menu = menu.min_w(width).max_w(width);
+    let expected = host.clone();
+    let read_repo = repo.clone();
+    let land_app = app.clone();
+    let land_repo = repo.clone();
+    HostOps::run_in(
+        host,
+        window,
+        cx,
+        move |h| crate::core::worktree::list(h, &read_repo.root),
+        move |menu, result, window, cx| {
+            if !current_host(&expected, cx)
+                || !land_app.upgrade().is_some_and(|app| {
+                    app.read(cx)
+                        .status_checkout_is_current(&land_repo, workspace, window, cx)
+                })
+            {
+                return;
+            }
+            menu.rebuild(window, cx, |menu, _, _| match result {
+                Ok(worktrees) => worktrees.iter().fold(menu, |menu, wt| {
+                    menu.item(worktree_row_item(
+                        "worktree-remove-row",
+                        wt,
+                        false,
+                        WorktreeRowAction::Remove,
+                        land_app.clone(),
+                        expected.clone(),
+                        land_repo.clone(),
+                        workspace,
+                    ))
+                }),
+                Err(error) => menu.item(
+                    PopupMenuItem::new(t_fmt(L10nKey::WorktreePickerFailed, &[("error", &error)]))
+                        .disabled(true),
+                ),
+            });
+        },
+    );
+    menu.item(PopupMenuItem::new(t(L10nKey::PanelLoading)).disabled(true))
 }
 
 impl LyrelApp {
-    /// The shared entrance: open the picker on the Context Pane's
-    /// repository. Both Git surfaces — the Changes header's worktree entry
-    /// and the status bar's Git indicator — call this, so they cannot
-    /// disagree about the choices or the active checkout. Opening while one
-    /// is up closes it: a second entrance is a change of mind, not a second
-    /// question.
-    pub(crate) fn open_worktree_picker(
-        &mut self,
-        entrance: WorktreePickerEntrance,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.worktree_picker.is_some() {
-            self.cancel_worktree_picker(window, cx);
-            return;
-        }
-        let target = self.context_pane(window, cx).and_then(|pane| {
-            let view = pane.read(cx);
-            Some((
-                pane.entity_id(),
-                view.host(cx)?,
-                view.effective_host_cwd()?,
-                view.workspace().cloned(),
-            ))
-        });
-        let Some((pane, host, cwd, spawn_workspace)) = target else {
-            window.notify_app(t(L10nKey::PanelNoWorkingDirectory), cx);
-            return;
-        };
-        let query = cx.new(|cx| {
-            InputState::new(window, cx).placeholder(t(L10nKey::WorktreePickerPlaceholder))
-        });
-        let delegate = WorktreeDelegate::new(host.clone());
-        let list = cx.new(|cx| ListState::new(delegate, window, cx));
-        let request = list.entity_id();
-        let _sub = cx.subscribe_in(&list, window, Self::on_worktree_list_event);
-        let _query_sub = cx.subscribe_in(
-            &query,
-            window,
-            |this, input, ev: &InputEvent, window, cx| {
-                if matches!(ev, InputEvent::Change) {
-                    this.worktree_picker_query_changed(input, window, cx);
-                }
-            },
-        );
-        self.worktree_picker = Some(WorktreePicker {
-            entrance,
-            workspace: self.workspace,
-            pane,
-            anchor_seen: Cell::new(false),
-            focus_on_mount: std::rc::Rc::new(Cell::new(true)),
-            host: host.clone(),
-            spawn_workspace,
-            cwd: cwd.clone(),
-            query,
-            list,
-            removal: None,
-            removal_focus: cx.focus_handle(),
-            _sub,
-            _query_sub,
-        });
-        cx.notify();
-
-        let read_cwd = cwd;
-        lyrel_ui_base::host_ops::HostOps::run_in(
-            host,
-            window,
-            cx,
-            move |h| -> Result<(Vec<lyrel_core::core::worktree::Listed>, Option<PathBuf>), String> {
-                let worktrees = crate::core::worktree::list(h, &read_cwd)?;
-                // A managed checkout may live underneath the main checkout.
-                // Git's root, not a prefix match, identifies the current row.
-                let active = canonical_checkout(h, &read_cwd).and_then(|cwd| {
-                    worktrees
-                        .iter()
-                        .find(|wt| h.canonicalize(&wt.path).is_ok_and(|path| path == cwd))
-                        .map(|wt| wt.path.clone())
-                });
-                Ok((worktrees, active))
-            },
-            move |this, result, window, cx| this.land_worktree_list(request, result, window, cx),
-        );
-    }
-
-    fn worktree_picker_query_changed(
-        &mut self,
-        input: &Entity<InputState>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(picker) = self.worktree_picker.as_ref() else {
-            return;
-        };
-        let query = input.read(cx).value().to_string();
-        picker
-            .list
-            .update(cx, |list, cx| list.set_query(&query, window, cx));
-        cx.notify();
-    }
-
-    /// Forward the row's list chords to the list while the query input owns
-    /// the keyboard, the same composed-input pattern SearchView uses.
-    fn dispatch_worktree_list_action(
-        &mut self,
-        action: &dyn gpui_kit::Action,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(picker) = self.worktree_picker.as_ref() else {
-            return;
-        };
-        picker
-            .list
-            .read(cx)
-            .focus_handle(cx)
-            .dispatch_action(action, window, cx);
-    }
-
-    fn on_worktree_list_event(
-        &mut self,
-        list: &Entity<ListState<WorktreeDelegate>>,
-        ev: &ListEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match ev {
-            ListEvent::Confirm(ix) => {
-                let pick = list.read(cx).delegate().pick_at(*ix);
-                if let Some(pick) = pick {
-                    self.confirm_worktree_pick(pick, window, cx);
-                }
-            }
-            ListEvent::Cancel => self.cancel_worktree_picker(window, cx),
-            ListEvent::Select(_) => {}
-        }
-    }
-
-    /// Only the picker that issued the read may display its result.
-    fn land_worktree_list(
-        &mut self,
-        request: gpui_kit::EntityId,
-        result: Result<(Vec<lyrel_core::core::worktree::Listed>, Option<PathBuf>), String>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(picker) = self.worktree_picker.as_ref() else {
-            return;
-        };
-        if picker.list.entity_id() != request
-            || !self.worktree_picker_context_current(picker, window, cx)
-        {
-            return;
-        }
-        let list = picker.list.clone();
-        let first = match result {
-            Ok((worktrees, active)) => {
-                list.update(cx, |list, _| list.delegate_mut().land(worktrees, active))
-            }
-            Err(error) => list.update(cx, |list, _| {
-                list.delegate_mut().fail(error);
-                None
-            }),
-        };
-        list.update(cx, |list, cx| {
-            if let Some(first) = first {
-                list.set_selected_index(Some(first), window, cx);
-                list.scroll_to_selected_item(window, cx);
-            }
-        });
-        cx.notify();
+    /// Whether the checkout a menu names is still this window's Context
+    /// Pane's: the workspace matches and the pane still reports this
+    /// repository. Menus outlive the state they were built from; both
+    /// landing and activation ask again.
+    pub(crate) fn status_checkout_is_current(
+        &self,
+        repo: &RepoKey,
+        workspace: lyrel_ui_base::session::WorkspaceId,
+        window: &Window,
+        cx: &App,
+    ) -> bool {
+        self.workspace == workspace
+            && self.context_pane(window, cx).is_some_and(|pane| {
+                let view = pane.read(cx);
+                view.host_id() == repo.host
+                    && view.git_status_cwd().is_some_and(|cwd| {
+                        lyrel_ui_base::scm_snapshot::repo_root_for(cx, repo.host, cwd).as_ref()
+                            == Some(&repo.root)
+                    })
+            })
     }
 
     /// Navigation: focus a pane of this window already sitting in the picked
@@ -664,13 +543,10 @@ impl LyrelApp {
     fn confirm_worktree_pick(
         &mut self,
         pick: WorktreePick,
+        spawn_workspace: Option<lyrel_ui_base::route::PaneWorkspace>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(picker) = self.worktree_picker.take() else {
-            return;
-        };
-        let spawn_workspace = picker.spawn_workspace;
         let workspace = self.workspace;
         let host_id = pick.host.id();
         let target = pick.checkout.path.clone();
@@ -762,61 +638,43 @@ impl LyrelApp {
         self.save_session(cx);
     }
 
-    /// The picker's Create action: hand the captured Host and directory to
-    /// the existing creation flow, prompt and cancellation included. The
-    /// picker closes — the prompt is the dialog now.
-    fn worktree_picker_create(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(picker) = self.worktree_picker.take() else {
-            return;
-        };
-        cx.notify();
-        self.new_worktree_at(picker.host, picker.cwd, picker.spawn_workspace, window, cx);
-    }
-
-    /// The picker's removal action, named for what it does: remove the
-    /// selected checkout from the disk. Opens the confirmation inside the
-    /// picker's card; nothing is deleted here.
-    fn worktree_picker_remove_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let pick = self.worktree_picker.as_ref().and_then(|picker| {
-            let ix = picker.list.read(cx).delegate().selected?;
-            picker.list.read(cx).delegate().pick_at(ix)
+    /// The menus' removal action, named for what it does: open the
+    /// confirmation for this checkout. Nothing is deleted here; the
+    /// confirmation revalidates the pick on its owning Host first.
+    pub(crate) fn begin_worktree_removal(
+        &mut self,
+        pick: WorktreePick,
+        repo_cwd: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let focus = cx.focus_handle();
+        self.worktree_removal = Some(WorktreeRemoval {
+            id: uuid::Uuid::new_v4(),
+            pick: pick.clone(),
+            repo_cwd: repo_cwd.clone(),
+            state: None,
+            busy: false,
+            removing: false,
+            focus: focus.clone(),
         });
-        let Some(pick) = pick else {
-            return;
-        };
-        let focus = match self.worktree_picker.as_ref() {
-            Some(picker) => picker.removal_focus.clone(),
-            None => return,
-        };
-        if let Some(picker) = self.worktree_picker.as_mut() {
-            picker.removal = Some(WorktreeRemoval {
-                id: uuid::Uuid::new_v4(),
-                pick: pick.clone(),
-                state: None,
-                busy: false,
-                removing: false,
-            });
-        }
         window.focus(&focus, cx);
         cx.notify();
-        self.revalidate_open_worktree_removal(pick, window, cx);
+        self.revalidate_worktree_removal(pick, window, cx);
     }
 
-    /// The removal dialog backs out to the list; the picker itself stays
-    /// open, the way the creation prompt's cancellation leaves the app.
-    fn cancel_worktree_removal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(picker) = self.worktree_picker.as_mut() else {
+    /// The removal dialog's dismissal. While Git is removing a checkout the
+    /// dialog cannot be cancelled — `open_search` relies on that to keep the
+    /// confirmation visible until the operation answers.
+    pub(crate) fn cancel_worktree_removal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(removal) = self.worktree_removal.as_ref() else {
             return;
         };
-        if picker
-            .removal
-            .as_ref()
-            .is_some_and(|removal| removal.removing)
-        {
+        if removal.removing {
             return;
         }
-        if picker.removal.take().is_some() {
-            picker.query.update(cx, |input, cx| input.focus(window, cx));
+        if self.worktree_removal.take().is_some() {
+            self.focus_previous_content(window, cx);
             cx.notify();
         }
     }
@@ -826,64 +684,66 @@ impl LyrelApp {
     /// while the dialog was open — and only a still-removable checkout runs
     /// the deletion, which itself re-verifies every fact on the Host.
     fn confirm_worktree_removal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((id, pick, approved, cwd)) = self.worktree_picker.as_mut().and_then(|picker| {
-            let removal = picker.removal.as_mut()?;
-            let state = removal.state.as_ref()?;
-            if removal.busy || state.block.is_some() {
-                return None;
-            }
-            let approved = state.inspection.clone()?;
-            removal.busy = true;
-            Some((
-                removal.id,
-                removal.pick.clone(),
-                approved,
-                picker.cwd.clone(),
-            ))
-        }) else {
+        let Some((id, pick, approved, repo_cwd)) =
+            self.worktree_removal.as_mut().and_then(|removal| {
+                let state = removal.state.as_ref()?;
+                if removal.busy || state.block.is_some() {
+                    return None;
+                }
+                let approved = state.inspection.clone()?;
+                removal.busy = true;
+                Some((
+                    removal.id,
+                    removal.pick.clone(),
+                    approved,
+                    removal.repo_cwd.clone(),
+                ))
+            })
+        else {
             return;
         };
         cx.notify();
         let host = pick.host.clone();
         let checkout = pick.checkout.clone();
-        self.revalidate_worktree_pick(pick, cwd, window, cx, move |this, mut state, window, cx| {
-            let Some(removal) = this
-                .worktree_picker
-                .as_mut()
-                .and_then(|picker| picker.removal.as_mut())
-            else {
-                return;
-            };
-            if removal.id != id || !removal.busy {
-                return;
-            }
-            if state.block.is_none() && state.inspection.as_ref() != Some(&approved) {
-                state.block = Some(WorktreePickBlock::Changed);
-            }
-            if state.block.is_some() {
-                removal.state = Some(state);
-                removal.busy = false;
+        self.revalidate_worktree_pick(
+            pick,
+            repo_cwd,
+            window,
+            cx,
+            move |this, mut state, window, cx| {
+                let Some(removal) = this.worktree_removal.as_mut() else {
+                    return;
+                };
+                if removal.id != id || !removal.busy {
+                    return;
+                }
+                if state.block.is_none() && state.inspection.as_ref() != Some(&approved) {
+                    state.block = Some(WorktreePickBlock::Changed);
+                }
+                if state.block.is_some() {
+                    removal.state = Some(state);
+                    removal.busy = false;
+                    cx.notify();
+                    return;
+                }
+                removal.removing = true;
                 cx.notify();
-                return;
-            }
-            removal.removing = true;
-            cx.notify();
-            lyrel_ui_base::host_ops::HostOps::run_in(
-                host,
-                window,
-                cx,
-                move |h| remove_confirmed_checkout(h, &checkout, &approved),
-                move |this, result, window, cx| {
-                    this.finish_worktree_removal(id, result, window, cx)
-                },
-            );
-        });
+                lyrel_ui_base::host_ops::HostOps::run_in(
+                    host,
+                    window,
+                    cx,
+                    move |h| remove_confirmed_checkout(h, &checkout, &approved),
+                    move |this, result, window, cx| {
+                        this.finish_worktree_removal(id, result, window, cx)
+                    },
+                );
+            },
+        );
     }
 
     /// The deletion answered: report the distinct facts — the checkout is
     /// gone, the recovery reference, and whether the branch was deleted,
-    /// kept or absent — and close the picker, the way a confirmed
-    /// navigation does.
+    /// kept or absent — and close the dialog.
     fn finish_worktree_removal(
         &mut self,
         id: uuid::Uuid,
@@ -892,9 +752,8 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let (path, branch) = match self
-            .worktree_picker
+            .worktree_removal
             .as_ref()
-            .and_then(|picker| picker.removal.as_ref())
             .filter(|removal| removal.id == id)
         {
             Some(removal) => (
@@ -927,17 +786,15 @@ impl LyrelApp {
                         &[("path", &path), ("ref", &removed.recovery)],
                     ),
                 };
-                self.worktree_picker = None;
+                self.worktree_removal = None;
                 self.focus_active(window, cx);
                 window.notify_app(notice, cx);
                 cx.notify();
             }
             Err(e) => {
-                if let Some(picker) = self.worktree_picker.as_mut() {
-                    if let Some(removal) = picker.removal.as_mut() {
-                        removal.busy = false;
-                        removal.removing = false;
-                    }
+                if let Some(removal) = self.worktree_removal.as_mut() {
+                    removal.busy = false;
+                    removal.removing = false;
                 }
                 window.notify_app(
                     lyrel_ui_base::host_ops::failure(
@@ -951,54 +808,36 @@ impl LyrelApp {
         }
     }
 
-    /// A late answer belongs only to the specific confirmation that asked for it.
-    fn revalidate_open_worktree_removal(
+    /// The open-time revalidation: read the pick's facts before the dialog
+    /// offers anything. A late answer belongs only to the dialog that asked.
+    fn revalidate_worktree_removal(
         &mut self,
         pick: WorktreePick,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((id, cwd)) = self
-            .worktree_picker
+        let Some((id, repo_cwd)) = self
+            .worktree_removal
             .as_ref()
-            .and_then(|picker| Some((picker.removal.as_ref()?.id, picker.cwd.clone())))
+            .map(|removal| (removal.id, removal.repo_cwd.clone()))
         else {
             return;
         };
-        self.revalidate_worktree_pick(pick, cwd, window, cx, move |this, state, _window, cx| {
-            let Some(removal) = this
-                .worktree_picker
-                .as_mut()
-                .and_then(|picker| picker.removal.as_mut())
-            else {
-                return;
-            };
-            if removal.id == id && !removal.busy {
-                removal.state = Some(state);
-                cx.notify();
-            }
-        });
-    }
-
-    /// Close the picker and put the keyboard back where the workspace was.
-    pub(crate) fn cancel_worktree_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self
-            .worktree_picker
-            .as_ref()
-            .and_then(|picker| picker.removal.as_ref())
-            .is_some_and(|removal| removal.removing)
-        {
-            return;
-        }
-        if let Some(picker) = self.worktree_picker.take() {
-            if picker.anchor_seen.get() && self.worktree_picker_context_current(&picker, window, cx)
-            {
-                window.focus(self.worktree_trigger_focus(picker.entrance), cx);
-            } else {
-                self.focus_previous_content(window, cx);
-            }
-            cx.notify();
-        }
+        self.revalidate_worktree_pick(
+            pick,
+            repo_cwd,
+            window,
+            cx,
+            move |this, state, _window, cx| {
+                let Some(removal) = this.worktree_removal.as_mut() else {
+                    return;
+                };
+                if removal.id == id && !removal.busy {
+                    removal.state = Some(state);
+                    cx.notify();
+                }
+            },
+        );
     }
 
     /// Re-read the linked checkout, live pane usage and unsaved files on its
@@ -1147,253 +986,14 @@ impl LyrelApp {
             .collect()
     }
 
-    fn worktree_picker_context_current(
-        &self,
-        picker: &WorktreePicker,
-        window: &Window,
-        cx: &App,
-    ) -> bool {
-        picker.workspace == self.workspace
-            && crate::ui::worktree_prompt::same_worktree_host(&picker.host, cx)
-            && self.context_pane(window, cx).is_some_and(|pane| {
-                let view = pane.read(cx);
-                pane.entity_id() == picker.pane
-                    && view.host_id() == picker.host.id()
-                    && view.effective_host_cwd().as_ref() == Some(&picker.cwd)
-            })
-    }
-
-    pub(crate) fn begin_worktree_picker_frame(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(picker) = self.worktree_picker.as_ref() {
-            picker.anchor_seen.set(false);
-            let closed_changes = picker.entrance == WorktreePickerEntrance::Changes
-                && (!self.right_panel_open(cx)
-                    || self.right_panel_tab != lyrel_core::core::config::RightPanelTab::Scm);
-            if closed_changes || !self.worktree_picker_context_current(picker, window, cx) {
-                self.retire_worktree_picker(window, cx);
-            }
-        }
-    }
-
-    pub(crate) fn finish_worktree_picker_frame(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self
-            .worktree_picker
-            .as_ref()
-            .is_some_and(|picker| !picker.anchor_seen.get())
-        {
-            self.retire_worktree_picker(window, cx);
-        }
-    }
-
-    fn retire_worktree_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(picker) = self.worktree_picker.as_ref() else {
-            return;
-        };
-        if picker
-            .removal
-            .as_ref()
-            .is_some_and(|removal| removal.removing)
-        {
-            return;
-        }
-        let had_focus = picker
-            .query
-            .read(cx)
-            .focus_handle(cx)
-            .contains_focused(window, cx)
-            || picker.removal_focus.contains_focused(window, cx);
-        self.worktree_picker = None;
-        if had_focus {
-            self.focus_previous_content(window, cx);
-        }
-    }
-
-    pub(crate) fn worktree_picker_is_open_from(&self, entrance: WorktreePickerEntrance) -> bool {
-        self.worktree_picker
-            .as_ref()
-            .is_some_and(|picker| picker.entrance == entrance)
-    }
-
-    fn worktree_trigger_focus(&self, entrance: WorktreePickerEntrance) -> &gpui_kit::FocusHandle {
-        match entrance {
-            WorktreePickerEntrance::StatusBar => &self.status_checkout_focus,
-            WorktreePickerEntrance::Changes => &self.changes_worktree_focus,
-        }
-    }
-
-    pub(crate) fn worktree_picker_trigger(
-        &self,
-        entrance: WorktreePickerEntrance,
-        button: Button,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Popup {
-        let (id, anchor) = match entrance {
-            WorktreePickerEntrance::StatusBar => ("status-worktree-popup", Anchor::BottomLeft),
-            WorktreePickerEntrance::Changes => ("scm-worktree-popup", Anchor::TopRight),
-        };
-        let picker = self
-            .worktree_picker
-            .as_ref()
-            .filter(|picker| picker.entrance == entrance);
-        if let Some(picker) = picker {
-            picker.anchor_seen.set(true);
-        }
-        let trigger = button
-            .track_focus(self.worktree_trigger_focus(entrance))
-            .open(picker.is_some())
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.open_worktree_picker(entrance, window, cx);
-            }));
-        let popup = Popup::new(id, trigger)
-            .anchor(anchor)
-            .offset(rems(0.25).to_pixels(window.rem_size()));
-        match picker.filter(|picker| picker.removal.is_none()) {
-            Some(picker) => popup.content(self.render_worktree_picker(picker, window, cx)),
-            None => popup,
-        }
-    }
-
-    fn render_worktree_picker(
-        &self,
-        picker: &WorktreePicker,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let rungs = crate::ui::dialog::popover_rungs(cx);
-        let title = t(L10nKey::WorktreePickerTitle);
-        let muted = cx.theme().muted_foreground;
-        let focus_on_mount = picker.focus_on_mount.clone();
-        let request = picker.list.entity_id();
-        let app = cx.entity().downgrade();
-        crate::ui::dialog::card("worktree-picker-card", title, PICKER_W * 16., cx)
-            .test_support()
-            .w(rems(PICKER_W))
-            .max_w((window.viewport_size().width - window.rem_size()).max(px(0.)))
-            .child(
-                gpui_kit::canvas(
-                    |_, _, _| (),
-                    move |_, (), window, cx| {
-                        if !focus_on_mount.replace(false) {
-                            return;
-                        }
-                        // The trigger's menu may have just dismissed. Give focus to
-                        // the input only after it is in the window's dispatch tree.
-                        let handle = window.window_handle();
-                        cx.defer(move |cx| {
-                            _ = handle.update(cx, |_, window, cx| {
-                                _ = app.update(cx, |this, cx| {
-                                    if let Some(picker) = this.worktree_picker.as_ref()
-                                        && picker.list.entity_id() == request
-                                        && picker.removal.is_none()
-                                    {
-                                        picker
-                                            .query
-                                            .update(cx, |input, cx| input.focus(window, cx));
-                                    }
-                                });
-                            });
-                        });
-                    },
-                )
-                .absolute()
-                .size_full(),
-            )
-            .child(
-                h_flex()
-                    .id("worktree-picker-search")
-                    .key_context("List")
-                    .flex_none()
-                    .w_full()
-                    // Keep the framework's list navigation without moving
-                    // focus out of the input. These handlers belong only to
-                    // this row: the list's propagated Cancel must not loop
-                    // back into them.
-                    .on_action(cx.listener(|this, action: &SelectUp, window, cx| {
-                        this.dispatch_worktree_list_action(action, window, cx);
-                    }))
-                    .on_action(cx.listener(|this, action: &SelectDown, window, cx| {
-                        this.dispatch_worktree_list_action(action, window, cx);
-                    }))
-                    .on_action(cx.listener(|this, action: &Confirm, window, cx| {
-                        this.dispatch_worktree_list_action(action, window, cx);
-                    }))
-                    .on_action(cx.listener(|this, action: &Cancel, window, cx| {
-                        this.dispatch_worktree_list_action(action, window, cx);
-                    }))
-                    .px_2()
-                    .pt_2()
-                    .child(
-                        Input::new(&picker.query)
-                            .small()
-                            .prefix(Icon::new(IconName::Search).text_color(muted))
-                            .cleanable(true),
-                    ),
-            )
-            .child(
-                div().px(px(LIST_PAD)).py(px(LIST_PAD)).child(
-                    List::new(&picker.list).max_h(
-                        window.rem_size() * (ROW_H * LIST_MAX_ROWS as f32) + px(LIST_PAD * 2.),
-                    ),
-                ),
-            )
-            .child(
-                crate::ui::dialog::footer(cx)
-                    .child(crate::ui::dialog::button(
-                        "worktree-picker-remove",
-                        t(L10nKey::WorktreePickerRemove),
-                        crate::ui::dialog::Tone::Secondary,
-                        true,
-                        rungs,
-                        cx,
-                        cx.listener(|this, _, window, cx| {
-                            this.worktree_picker_remove_selected(window, cx)
-                        }),
-                    ))
-                    .child(crate::ui::dialog::button(
-                        "worktree-picker-new",
-                        t(L10nKey::CmdNewWorktreeTab),
-                        crate::ui::dialog::Tone::Secondary,
-                        true,
-                        rungs,
-                        cx,
-                        cx.listener(|this, _, window, cx| this.worktree_picker_create(window, cx)),
-                    )),
-            )
-            .on_mouse_down_out(
-                cx.listener(|this, event: &gpui_kit::MouseDownEvent, window, cx| {
-                    if event.button == MouseButton::Left {
-                        // Spend the press on dismissal; in particular, do not reopen on the trigger.
-                        cx.stop_propagation();
-                        this.cancel_worktree_picker(window, cx);
-                    }
-                }),
-            )
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" {
-                    cx.stop_propagation();
-                    this.cancel_worktree_picker(window, cx);
-                }
-            }))
-    }
-
     pub(crate) fn render_worktree_removal_overlay(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let picker = self.worktree_picker.as_ref()?;
-        let removal = picker.removal.as_ref()?;
+        let removal = self.worktree_removal.as_ref()?;
         let card = self
-            .render_worktree_removal(picker, removal, window, cx)
+            .render_worktree_removal(removal, window, cx)
             .into_any_element();
 
         Some(
@@ -1429,7 +1029,6 @@ impl LyrelApp {
     /// The destructive action is inert until every guard passes.
     fn render_worktree_removal(
         &self,
-        picker: &WorktreePicker,
         removal: &WorktreeRemoval,
         _window: &mut Window,
         cx: &mut Context<Self>,
@@ -1531,7 +1130,7 @@ impl LyrelApp {
                             })),
                     ),
             )
-            .track_focus(&picker.removal_focus)
+            .track_focus(&removal.focus)
     }
 
     /// The user-facing sentence for a removal block.
@@ -1557,8 +1156,8 @@ impl LyrelApp {
 mod tests {
     use super::*;
     use crate::ui::app::test_window;
-    use gpui_kit::test::TestWindowExt as _;
-    use gpui_kit::{TestAppContext, VisualTestContext};
+    use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
+    use gpui_kit::{Entity, MouseButton, TestAppContext, VisualTestContext};
     use lyrel_ui_base::host_ops::HostId;
 
     struct WorktreeTestDaemon {
@@ -1634,13 +1233,6 @@ mod tests {
         }
     }
 
-    fn open_picker(vcx: &mut VisualTestContext) {
-        settle(vcx);
-        vcx.update(|window, cx| window.click("status-git-branch", cx));
-        crate::ui::status_bar::choose_status_worktree(vcx);
-        wait_for(vcx, "both checkout rows", |vcx| row_labels(vcx).len() == 2);
-    }
-
     /// A real repository with one linked worktree: the main checkout at
     /// `main_root`, the linked one at `wt_root` on its own branch.
     fn repository_with_worktree() -> (tempfile::TempDir, tempfile::TempDir, PathBuf, PathBuf) {
@@ -1696,7 +1288,7 @@ mod tests {
     }
 
     /// Point a quiet test pane at `cwd` and register the cheap probe answer
-    /// (branch + counts) the status bar and picker read from.
+    /// (branch + counts) the status bar and panel read from.
     fn seed_repo_pane(
         vcx: &mut VisualTestContext,
         pane: &Entity<lyrel_terminal::view::TerminalView>,
@@ -1745,26 +1337,141 @@ mod tests {
         })
     }
 
-    fn row_labels(vcx: &mut VisualTestContext) -> Vec<String> {
-        vcx.update(|window, _| {
-            (0u64..LIST_MAX_ROWS as u64)
-                .filter_map(|row| window.try_find(("worktree-row", row)))
-                .filter(|row| row.visible())
-                .filter_map(|row| row.label().map(str::to_owned))
-                .collect()
-        })
+    /// Open the status bar's checkout menu.
+    fn open_status_checkout_menu(vcx: &mut VisualTestContext) {
+        settle(vcx);
+        vcx.update(|window, cx| window.click("status-git-branch", cx));
+        settle(vcx);
     }
 
-    fn type_in_picker(vcx: &mut VisualTestContext, query: &str) {
+    /// Hover a menu item by label so its submenu opens.
+    fn hover_menu_item(vcx: &mut VisualTestContext, label: &str) {
         vcx.update(|window, cx| {
-            window.press("secondary-a", cx);
-            window.input(query, cx);
+            window.render_frame(cx);
+            let item = window.find_by_label(label);
+            window.pointer_move(item.bounds().center(), None, cx);
         });
         settle(vcx);
     }
 
+    /// Click a plain menu item by its label.
+    fn click_menu_item(vcx: &mut VisualTestContext, label: &str) {
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let item = window.find_by_label(label);
+            let position = item.bounds().center();
+            window.pointer_down(position, MouseButton::Left, cx);
+            window.pointer_up(position, MouseButton::Left, cx);
+        });
+        settle(vcx);
+    }
+
+    /// A checkout row's element id — the same composition the row uses, so
+    /// the spelling git answers with is the spelling the test asks for.
+    fn row_id(kind: &str, path: &Path) -> gpui_kit::ElementId {
+        gpui_kit::ElementId::Name(format!("{kind}: {}", path.display()).into())
+    }
+
+    /// Click one checkout row of an open (sub)menu.
+    fn click_checkout_row(vcx: &mut VisualTestContext, kind: &str, path: &Path) {
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            let row = window.find(row_id(kind, path));
+            let position = row.bounds().center();
+            window.pointer_down(position, MouseButton::Left, cx);
+            window.pointer_up(position, MouseButton::Left, cx);
+        });
+    }
+
+    /// Open the checkout menu and hover into the shared 工作树 submenu.
+    fn open_worktree_menu(vcx: &mut VisualTestContext) {
+        open_status_checkout_menu(vcx);
+        hover_menu_item(vcx, &t(L10nKey::ScmWorktrees));
+    }
+
+    /// Wait for both checkout rows of the shared submenu.
+    fn wait_for_checkout_rows(vcx: &mut VisualTestContext, main_root: &Path, wt_root: &Path) {
+        wait_for(vcx, "both checkout rows", |vcx| {
+            vcx.update(|window, _| {
+                window
+                    .try_find(row_id("worktree-menu-row", main_root))
+                    .is_some()
+                    && window
+                        .try_find(row_id("worktree-menu-row", wt_root))
+                        .is_some()
+            })
+        });
+    }
+
+    /// Hover the discreet removal entry inside the open 工作树 submenu.
+    fn open_removal_entry(vcx: &mut VisualTestContext) {
+        hover_menu_item(vcx, &t(L10nKey::WorktreePickerRemove));
+    }
+
+    /// The texts the removal dialog shows, scoped to its card.
+    fn removal_texts(vcx: &mut VisualTestContext) -> Vec<String> {
+        vcx.update(|window, _| {
+            [
+                "worktree-removal-target",
+                "worktree-removal-branch",
+                "worktree-removal-status",
+            ]
+            .into_iter()
+            .filter_map(|id| window.try_find(id)?.label().map(str::to_owned))
+            .collect()
+        })
+    }
+
+    /// Open the removal confirmation for `path` through the status bar menu.
+    fn begin_removal(vcx: &mut VisualTestContext, path: &Path) {
+        wait_for(vcx, "the removal row", |vcx| {
+            vcx.update(|window, _| {
+                window
+                    .try_find(row_id("worktree-remove-row", path))
+                    .is_some()
+            })
+        });
+        click_checkout_row(vcx, "worktree-remove-row", path);
+    }
+
+    /// Run git for a disposable-fixture assertion.
+    fn git_at(args: &[&str], cwd: &Path) -> String {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// The same read without the success assertion — "did it happen" checks.
+    fn git_maybe(args: &[&str], cwd: &Path) -> Option<String> {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+    }
+
+    fn noticed(vcx: &mut VisualTestContext, needle: &str) -> bool {
+        vcx.read(|cx| {
+            crate::ui::notification_history::history(cx)
+                .read(cx)
+                .records()
+                .any(|record| record.message().contains(needle))
+        })
+    }
+
     #[gpui_kit::test]
-    fn status_bar_entrance_lists_checkouts_and_marks_the_active_one(cx: &mut TestAppContext) {
+    fn the_menu_lists_checkouts_and_ticks_the_active_one(cx: &mut TestAppContext) {
         lyrel_ui_base::i18n::set_locale("en");
         let (_main, _wt, main_root, wt_root) = repository_with_worktree();
         let (app, mut vcx) = harness(cx);
@@ -1774,49 +1481,48 @@ mod tests {
             cx.notify();
         });
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
+        app.update_in(&mut vcx, |app, window, cx| {
+            window.focus(&app.status_checkout_focus, cx);
+        });
 
-        open_picker(&mut vcx);
+        open_worktree_menu(&mut vcx);
+        wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
         assert!(
-            app.read_with(&vcx, |app, _| app.worktree_picker.is_some()),
-            "the status bar Git indicator opens the picker"
+            app.read_with(&vcx, |app, _| app.worktree_removal.is_none()),
+            "listing checkouts never touches the removal confirmation"
         );
-        let rows = row_labels(&mut vcx);
-        assert_eq!(rows.len(), 2, "main + linked checkout are listed");
         vcx.update(|window, _| {
-            let card = window.find("worktree-picker-card");
-            let trigger = window.find("status-git-branch").bounds();
-            assert!(card.visible());
-            let bounds = card.bounds();
-            assert!((px(0.)..=px(8.)).contains(&(trigger.top() - bounds.bottom())));
-            assert!((bounds.left() - trigger.left()).abs() <= px(1.));
+            let main_row = window.find(row_id("worktree-menu-row", &main_root));
             assert!(
-                window
-                    .find(("worktree-row", 0u64))
+                main_row
                     .label()
-                    .is_some_and(|label| label.ends_with(", current"))
+                    .is_some_and(|label| label.ends_with(", current")),
+                "the check gutter marks the checkout the Context Pane sits in"
+            );
+            let linked_row = window.find(row_id("worktree-menu-row", &wt_root));
+            let label = linked_row.label().expect("the row announces its name");
+            assert!(
+                label.contains("wt-branch"),
+                "the branch is on the row: {label}"
+            );
+            assert!(
+                !label.contains(", current"),
+                "only the active checkout carries the tick: {label}"
             );
         });
 
-        // Search by branch narrows to the linked checkout; the
-        // distinguishing path finds the same row again.
-        type_in_picker(&mut vcx, "wt-branch");
-        let by_branch = row_labels(&mut vcx);
-        assert_eq!(by_branch.len(), 1);
-        assert!(by_branch[0].contains("wt-branch"));
-        type_in_picker(&mut vcx, wt_root.parent().unwrap().to_str().unwrap());
-        let by_path = row_labels(&mut vcx);
-        assert_eq!(
-            by_path.len(),
-            1,
-            "the distinguishing path identifies the checkout"
-        );
-        assert_eq!(by_path, by_branch);
-
-        // Escape closes without navigating.
+        // Escape closes the menu without navigating.
         vcx.simulate_keystrokes("escape");
         settle(&mut vcx);
-        assert!(app.read_with(&vcx, |app, _| app.worktree_picker.is_none()));
-        vcx.update(|window, _| assert_eq!(window.find("status-git-branch").focused(), Some(true)));
+        assert!(app.read_with(&vcx, |app, _| app.worktree_removal.is_none()));
+        vcx.update(|window, _| {
+            assert!(
+                window
+                    .try_find(row_id("worktree-menu-row", &wt_root))
+                    .is_none()
+            );
+            assert_eq!(window.find("status-git-branch").focused(), Some(true));
+        });
     }
 
     #[gpui_kit::test]
@@ -1834,17 +1540,16 @@ mod tests {
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
 
         let tabs_before = app.read_with(&vcx, |app, _| app.tabs.len());
-        open_picker(&mut vcx);
-        type_in_picker(&mut vcx, "wt-branch");
-        assert_eq!(row_labels(&mut vcx).len(), 1);
-        vcx.simulate_keystrokes("enter");
+        open_worktree_menu(&mut vcx);
+        wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
+        click_checkout_row(&mut vcx, "worktree-menu-row", &wt_root);
         wait_for(&mut vcx, "one new terminal tab", |vcx| {
             app.read_with(vcx, |app, _| app.tabs.len() == tabs_before + 1)
         });
 
         assert!(
-            app.read_with(&vcx, |app, _| app.worktree_picker.is_none()),
-            "confirming navigates and closes the picker"
+            app.read_with(&vcx, |app, _| app.worktree_removal.is_none()),
+            "navigating never opens the removal confirmation"
         );
         let (tabs_after, selected, spawn_cwd) = app.read_with(&vcx, |app, cx| {
             let index = app.tabs.active_index();
@@ -1899,10 +1604,9 @@ mod tests {
         seed_repo_pane(&mut vcx, &right, &subdir, "wt-branch");
 
         let tabs_before = app.read_with(&vcx, |app, _| app.tabs.len());
-        open_picker(&mut vcx);
-        type_in_picker(&mut vcx, "wt-branch");
-        assert_eq!(row_labels(&mut vcx).len(), 1);
-        vcx.simulate_keystrokes("enter");
+        open_worktree_menu(&mut vcx);
+        wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
+        click_checkout_row(&mut vcx, "worktree-menu-row", &wt_root);
         wait_for(&mut vcx, "focus on the checkout's existing pane", |vcx| {
             vcx.update(|window, cx| right.read(cx).focus_handle(cx).is_focused(window))
         });
@@ -1926,9 +1630,7 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn create_from_the_picker_opens_the_existing_prompt_and_cancels_cleanly(
-        cx: &mut TestAppContext,
-    ) {
+    fn create_from_the_menu_opens_the_existing_prompt_and_cancels_cleanly(cx: &mut TestAppContext) {
         lyrel_ui_base::i18n::set_locale("en");
         let (_main, _wt, main_root, _wt_root) = repository_with_worktree();
         let (app, mut vcx) = harness(cx);
@@ -1939,8 +1641,8 @@ mod tests {
         });
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
 
-        open_picker(&mut vcx);
-        vcx.update(|window, cx| window.click("worktree-picker-new", cx));
+        open_worktree_menu(&mut vcx);
+        click_menu_item(&mut vcx, &t(L10nKey::CmdNewWorktreeTab));
         wait_for(&mut vcx, "the worktree creation card", |vcx| {
             vcx.update(|window, _| {
                 window
@@ -1949,8 +1651,8 @@ mod tests {
             })
         });
         assert!(
-            app.read_with(&vcx, |app, _| app.worktree_picker.is_none()),
-            "the picker hands over to the existing creation prompt"
+            app.read_with(&vcx, |app, _| app.worktree_removal.is_none()),
+            "creating hands over to the existing creation prompt"
         );
         vcx.update(|window, _| {
             assert!(
@@ -1974,67 +1676,6 @@ mod tests {
         );
     }
 
-    /// Run git for a disposable-fixture assertion.
-    fn git_at(args: &[&str], cwd: &Path) -> String {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "git {args:?} failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    }
-
-    /// The same read without the success assertion — "did it happen" checks.
-    fn git_maybe(args: &[&str], cwd: &Path) -> Option<String> {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .unwrap();
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-    }
-
-    /// The texts the removal dialog shows, scoped to its card.
-    fn removal_texts(vcx: &mut VisualTestContext) -> Vec<String> {
-        vcx.update(|window, _| {
-            [
-                "worktree-removal-target",
-                "worktree-removal-branch",
-                "worktree-removal-status",
-            ]
-            .into_iter()
-            .filter_map(|id| window.try_find(id)?.label().map(str::to_owned))
-            .collect()
-        })
-    }
-
-    /// Type the query, then click the footer's removal action for the row it
-    /// selects. The dialog's facts arrive from the Host on a real thread
-    /// pool; wait_for the expected status text before asserting on it.
-    fn open_removal(vcx: &mut VisualTestContext, query: &str) {
-        type_in_picker(vcx, query);
-        wait_for(vcx, "the filtered checkout row", |vcx| {
-            row_labels(vcx).len() == 1
-        });
-        vcx.update(|window, cx| window.click("worktree-picker-remove", cx));
-    }
-
-    fn noticed(vcx: &mut VisualTestContext, needle: &str) -> bool {
-        vcx.read(|cx| {
-            crate::ui::notification_history::history(cx)
-                .read(cx)
-                .records()
-                .any(|record| record.message().contains(needle))
-        })
-    }
-
     #[gpui_kit::test]
     fn removing_the_selected_clean_checkout_asks_first_then_removes_and_reports(
         cx: &mut TestAppContext,
@@ -2051,8 +1692,10 @@ mod tests {
         });
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
 
-        open_picker(&mut vcx);
-        open_removal(&mut vcx, "linked-checkout");
+        open_worktree_menu(&mut vcx);
+        wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
+        open_removal_entry(&mut vcx);
+        begin_removal(&mut vcx, &wt_root);
 
         wait_for(&mut vcx, "the removal dialog's facts", |vcx| {
             removal_texts(vcx)
@@ -2080,7 +1723,7 @@ mod tests {
 
         vcx.update(|window, cx| window.click("worktree-removal-remove", cx));
         wait_for(&mut vcx, "the checkout to be removed", |vcx| {
-            app.read_with(vcx, |app, _| app.worktree_picker.is_none())
+            app.read_with(vcx, |app, _| app.worktree_removal.is_none())
         });
 
         assert!(!wt_root.exists(), "the checkout directory is gone");
@@ -2130,8 +1773,10 @@ mod tests {
         });
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
 
-        open_picker(&mut vcx);
-        open_removal(&mut vcx, "linked-checkout");
+        open_worktree_menu(&mut vcx);
+        wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
+        open_removal_entry(&mut vcx);
+        begin_removal(&mut vcx, &wt_root);
         wait_for(&mut vcx, "the removal dialog's facts", |vcx| {
             removal_texts(vcx)
                 .iter()
@@ -2144,31 +1789,26 @@ mod tests {
         vcx.update(|window, cx| window.click("worktree-removal-cancel", cx));
         settle(&mut vcx);
         assert!(
-            app.read_with(&vcx, |app, _| {
-                app.worktree_picker
-                    .as_ref()
-                    .is_some_and(|picker| picker.removal.is_none())
-            }),
-            "cancel backs out to the picker list"
+            app.read_with(&vcx, |app, _| app.worktree_removal.is_none()),
+            "cancel closes the dialog"
         );
-        vcx.update(|window, _| {
-            assert!(
-                window.find("worktree-picker-card").visible(),
-                "the picker itself is still open"
-            );
-        });
 
-        // Escape is the other cancellation, from the dialog back to the list.
-        open_removal(&mut vcx, "linked-checkout");
+        // Escape is the other cancellation. The first dialog's row click
+        // dismissed the menu chain, so the whole menu opens again.
+        open_worktree_menu(&mut vcx);
+        wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
+        open_removal_entry(&mut vcx);
+        begin_removal(&mut vcx, &wt_root);
+        wait_for(&mut vcx, "the removal dialog's facts", |vcx| {
+            removal_texts(vcx)
+                .iter()
+                .any(|text| text.contains("clean and unused"))
+        });
         vcx.simulate_keystrokes("escape");
         settle(&mut vcx);
         assert!(
-            app.read_with(&vcx, |app, _| {
-                app.worktree_picker
-                    .as_ref()
-                    .is_some_and(|picker| picker.removal.is_none())
-            }),
-            "Escape backs out of the dialog without closing the picker"
+            app.read_with(&vcx, |app, _| app.worktree_removal.is_none()),
+            "Escape closes the dialog without removing anything"
         );
 
         assert_eq!(
@@ -2197,8 +1837,16 @@ mod tests {
         });
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
 
-        open_picker(&mut vcx);
-        open_removal(&mut vcx, main_root.file_name().unwrap().to_str().unwrap());
+        open_worktree_menu(&mut vcx);
+        wait_for(&mut vcx, "the checkout rows", |vcx| {
+            vcx.update(|window, _| {
+                window
+                    .try_find(row_id("worktree-menu-row", &main_root))
+                    .is_some()
+            })
+        });
+        open_removal_entry(&mut vcx);
+        begin_removal(&mut vcx, &main_root);
         wait_for(&mut vcx, "the main-checkout refusal", |vcx| {
             removal_texts(vcx)
                 .iter()
@@ -2215,7 +1863,7 @@ mod tests {
         vcx.update(|window, cx| window.click("worktree-removal-remove", cx));
         settle(&mut vcx);
         assert!(
-            app.read_with(&vcx, |app, _| app.worktree_picker.is_some()),
+            app.read_with(&vcx, |app, _| app.worktree_removal.is_some()),
             "the blocked dialog stays open and nothing was removed"
         );
         assert!(main_root.exists());
@@ -2240,8 +1888,10 @@ mod tests {
         });
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
 
-        open_picker(&mut vcx);
-        open_removal(&mut vcx, "linked-checkout");
+        open_worktree_menu(&mut vcx);
+        wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
+        open_removal_entry(&mut vcx);
+        begin_removal(&mut vcx, &wt_root);
         wait_for(
             &mut vcx,
             "the dirty checkout's recovery confirmation",
@@ -2257,10 +1907,27 @@ mod tests {
             wt_root.exists(),
             "selecting a checkout is not consent to destroy it"
         );
+        assert!(app.read_with(&vcx, |app, _| app.worktree_removal.is_some()));
         vcx.update(|window, cx| window.click("worktree-removal-remove", cx));
-        wait_for(&mut vcx, "the dirty checkout's recovery reference", |vcx| {
-            noticed(vcx, "refs/lyrel/trash/linked-checkout") && !wt_root.exists()
+        wait_for(&mut vcx, "the recovery attempt to finish", |vcx| {
+            app.read_with(vcx, |app, _| {
+                app.worktree_removal
+                    .as_ref()
+                    .is_none_or(|removal| !removal.busy)
+            })
         });
+        let notices = vcx.read(|cx| {
+            crate::ui::notification_history::history(cx)
+                .read(cx)
+                .records()
+                .map(|record| record.message().to_owned())
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            noticed(&mut vcx, "refs/lyrel/trash/linked-checkout") && !wt_root.exists(),
+            "the confirmed dirty checkout is removed with recovery; dialog: {:?}; notices: {notices:?}",
+            removal_texts(&mut vcx)
+        );
         for (path, expected) in [
             ("file.txt", &b"changed\r\n"[..]),
             ("untracked.txt", &b"dirty"[..]),
@@ -2293,8 +1960,10 @@ mod tests {
         seed_repo_pane(&mut vcx, &left, &main_root, "main");
         seed_repo_pane(&mut vcx, &right, &wt_root, "wt-branch");
 
-        open_picker(&mut vcx);
-        open_removal(&mut vcx, "linked-checkout");
+        open_worktree_menu(&mut vcx);
+        wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
+        open_removal_entry(&mut vcx);
+        begin_removal(&mut vcx, &wt_root);
         wait_for(&mut vcx, "the occupied-checkout refusal", |vcx| {
             removal_texts(vcx)
                 .iter()
@@ -2331,8 +2000,10 @@ mod tests {
         let vanished = wt_root.join("vanished");
         seed_repo_pane(&mut vcx, &right, &vanished, "wt-branch");
 
-        open_picker(&mut vcx);
-        open_removal(&mut vcx, "linked-checkout");
+        open_worktree_menu(&mut vcx);
+        wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
+        open_removal_entry(&mut vcx);
+        begin_removal(&mut vcx, &wt_root);
         wait_for(&mut vcx, "the unverifiable refusal", |vcx| {
             removal_texts(vcx)
                 .iter()
@@ -2382,20 +2053,23 @@ mod tests {
             "the fixture holds an unsaved document inside the checkout"
         );
 
-        // The docked document can own the status bar; use the other picker entrance.
+        // The docked document can own the status bar; use the panel's branch menu.
         app.update_in(&mut vcx, |app, window, cx| {
             app.set_right_panel_tab(lyrel_core::core::config::RightPanelTab::Scm, window, cx);
         });
-        wait_for(&mut vcx, "the Changes worktree entrance", |vcx| {
+        wait_for(&mut vcx, "the Changes branch menu", |vcx| {
             vcx.update(|window, _| {
                 window
-                    .try_find("scm-worktree")
+                    .try_find("scm-branch")
                     .is_some_and(|button| button.visible())
             })
         });
-        vcx.update(|window, cx| window.click("scm-worktree", cx));
-        wait_for(&mut vcx, "both checkouts", |vcx| row_labels(vcx).len() == 2);
-        open_removal(&mut vcx, "linked-checkout");
+        vcx.update(|window, cx| window.click("scm-branch", cx));
+        settle(&mut vcx);
+        hover_menu_item(&mut vcx, &t(L10nKey::ScmWorktrees));
+        wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
+        open_removal_entry(&mut vcx);
+        begin_removal(&mut vcx, &wt_root);
         wait_for(&mut vcx, "the unsaved-document refusal", |vcx| {
             removal_texts(vcx)
                 .iter()
@@ -2427,8 +2101,10 @@ mod tests {
         });
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
 
-        open_picker(&mut vcx);
-        open_removal(&mut vcx, "linked-checkout");
+        open_worktree_menu(&mut vcx);
+        wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
+        open_removal_entry(&mut vcx);
+        begin_removal(&mut vcx, &wt_root);
         wait_for(&mut vcx, "the removal dialog's facts", |vcx| {
             removal_texts(vcx)
                 .iter()
@@ -2452,7 +2128,7 @@ mod tests {
             "the post-confirmation revalidation refuses with the fresh reason: {texts:?}"
         );
         assert!(
-            app.read_with(&vcx, |app, _| app.worktree_picker.is_some()),
+            app.read_with(&vcx, |app, _| app.worktree_removal.is_some()),
             "the refused dialog stays open"
         );
         assert!(wt_root.exists(), "the checkout that became dirty stays");
@@ -2494,15 +2170,17 @@ mod tests {
             cx.notify();
         });
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
-        settle(&mut vcx);
-        vcx.update(|window, cx| window.click("status-git-branch", cx));
-        crate::ui::status_bar::choose_status_worktree(&mut vcx);
-        wait_for(&mut vcx, "all four checkout rows", |vcx| {
-            row_labels(vcx).len() == 4
-        });
 
-        // The distinguishing parent path selects exactly one of the twins.
-        open_removal(&mut vcx, a.parent().unwrap().to_str().unwrap());
+        // The distinguishing full path selects exactly one of the twins.
+        open_worktree_menu(&mut vcx);
+        wait_for(&mut vcx, "all four checkout rows", |vcx| {
+            vcx.update(|window, _| {
+                window.try_find(row_id("worktree-menu-row", &a)).is_some()
+                    && window.try_find(row_id("worktree-menu-row", &b)).is_some()
+            })
+        });
+        open_removal_entry(&mut vcx);
+        begin_removal(&mut vcx, &a);
         wait_for(&mut vcx, "the first twin's facts", |vcx| {
             removal_texts(vcx)
                 .iter()
@@ -2516,7 +2194,7 @@ mod tests {
         );
         vcx.update(|window, cx| window.click("worktree-removal-remove", cx));
         wait_for(&mut vcx, "the first twin to be removed", |vcx| {
-            app.read_with(vcx, |app, _| app.worktree_picker.is_none())
+            app.read_with(vcx, |app, _| app.worktree_removal.is_none())
         });
 
         assert!(!a.exists(), "the picked checkout is gone");
@@ -2536,14 +2214,19 @@ mod tests {
         );
 
         // The second twin removes too, under a suffixed recovery name that
-        // leaves the first reference intact.
-        settle(&mut vcx);
-        vcx.update(|window, cx| window.click("status-git-branch", cx));
-        crate::ui::status_bar::choose_status_worktree(&mut vcx);
+        // leaves the first reference intact. The first removal's row click
+        // dismissed the menu chain, so the whole menu opens again.
+        open_worktree_menu(&mut vcx);
         wait_for(&mut vcx, "all three remaining checkout rows", |vcx| {
-            row_labels(vcx).len() == 3
+            vcx.update(|window, _| {
+                window.try_find(row_id("worktree-menu-row", &b)).is_some()
+                    && window
+                        .try_find(row_id("worktree-menu-row", &main_root))
+                        .is_some()
+            })
         });
-        open_removal(&mut vcx, b.parent().unwrap().to_str().unwrap());
+        open_removal_entry(&mut vcx);
+        begin_removal(&mut vcx, &b);
         wait_for(&mut vcx, "the second twin's facts", |vcx| {
             removal_texts(vcx)
                 .iter()
@@ -2551,7 +2234,7 @@ mod tests {
         });
         vcx.update(|window, cx| window.click("worktree-removal-remove", cx));
         wait_for(&mut vcx, "the second twin to be removed", |vcx| {
-            app.read_with(vcx, |app, _| app.worktree_picker.is_none())
+            app.read_with(vcx, |app, _| app.worktree_removal.is_none())
         });
 
         assert!(!b.exists());
@@ -2593,8 +2276,10 @@ mod tests {
         });
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
 
-        open_picker(&mut vcx);
-        open_removal(&mut vcx, "linked-checkout");
+        open_worktree_menu(&mut vcx);
+        wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
+        open_removal_entry(&mut vcx);
+        begin_removal(&mut vcx, &wt_root);
         wait_for(&mut vcx, "the removal dialog's facts", |vcx| {
             removal_texts(vcx)
                 .iter()
@@ -2602,7 +2287,7 @@ mod tests {
         });
         vcx.update(|window, cx| window.click("worktree-removal-remove", cx));
         wait_for(&mut vcx, "the checkout to be removed", |vcx| {
-            app.read_with(vcx, |app, _| app.worktree_picker.is_none())
+            app.read_with(vcx, |app, _| app.worktree_removal.is_none())
         });
 
         assert!(!wt_root.exists(), "the checkout itself is still removed");
@@ -2634,8 +2319,10 @@ mod tests {
         });
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
 
-        open_picker(&mut vcx);
-        open_removal(&mut vcx, "linked-checkout");
+        open_worktree_menu(&mut vcx);
+        wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
+        open_removal_entry(&mut vcx);
+        begin_removal(&mut vcx, &wt_root);
         wait_for(&mut vcx, "the detached checkout to be verified", |vcx| {
             removal_texts(vcx)
                 .iter()
@@ -2649,7 +2336,7 @@ mod tests {
         );
         vcx.update(|window, cx| window.click("worktree-removal-remove", cx));
         wait_for(&mut vcx, "the checkout to be removed", |vcx| {
-            app.read_with(vcx, |app, _| app.worktree_picker.is_none())
+            app.read_with(vcx, |app, _| app.worktree_removal.is_none())
         });
 
         assert!(!wt_root.exists(), "the detached checkout is removed");
