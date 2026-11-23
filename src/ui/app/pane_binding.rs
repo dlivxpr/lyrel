@@ -267,6 +267,8 @@ impl LyrelApp {
             window,
             |_app, _view, _: &lyrel_terminal::view::AgentStatusChanged, _window, cx| {
                 crate::ui::caffeine::CaffeineState::agents_changed(cx);
+                // The same transition reshapes the inbox's live Pending rows.
+                crate::ui::notification_history::note_agent_status_changed(cx);
             },
         )
         .detach();

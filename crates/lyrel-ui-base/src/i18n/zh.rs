@@ -25,6 +25,11 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::NotificationInfo => "信息",
         L10nKey::NotificationWarning => "警告",
         L10nKey::NotificationError => "错误",
+        L10nKey::NotificationPending => "待处理",
+        L10nKey::NotificationFilterAll => "全部",
+        L10nKey::NotificationMarkAllRead => "全部标为已读",
+        L10nKey::NotificationGoToSource => "转到来源",
+        L10nKey::NotificationNoUnread => "暂无未读通知。",
         L10nKey::SettingsNavSkills => "技能",
         L10nKey::SkillsPageDescription => {
             "浏览所选机器和项目中的 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能。通过 GitHub 或 skills.sh 发现候选，审查共享安装、检查更新、保留本地改动并安全移除精确关联链接。"
