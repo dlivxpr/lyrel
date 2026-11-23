@@ -325,15 +325,31 @@ impl ParkedDeck {
             return;
         }
         self.drop_target = visible;
+        if visible {
+            // A pane drag owns the pointer from now on: the fan's hover road,
+            // preview and overflow list are not part of that gesture, and the
+            // target must be the only thing the deck offers until it ends.
+            self.pointer_fan = false;
+            self.hovered = None;
+            self.selected = None;
+            self.overflow_open = false;
+            self.keyboard = false;
+        }
         cx.notify();
     }
 
-    pub fn is_drop_target_visible(&self) -> bool {
-        self.drop_target
-    }
-
+    /// Whether `position` is inside the painted half-ellipse: releasing there
+    /// parks the dragged pane.
     pub fn drop_target_contains(&self, position: Point<Pixels>) -> bool {
         self.drop_target && self.frame.borrow().park_target_contains(position)
+    }
+
+    /// Whether `position` is inside the target's clipped envelope — the
+    /// rectangle around the painted dome. A release in its empty lower
+    /// corners cancels the gesture instead of turning into a split, so the
+    /// affordance never means two things at once.
+    pub fn drop_target_covers(&self, position: Point<Pixels>) -> bool {
+        self.drop_target && self.frame.borrow().park_target_bounds().contains(&position)
     }
 
     #[cfg(test)]
@@ -369,7 +385,9 @@ impl ParkedDeck {
         if !self.pointer_fan {
             return;
         }
-        if self.frame.borrow().deck_contains(window.mouse_position()) {
+        // A pane drag owns the pointer and shows the drop target instead of
+        // the fan; the road from the entry into the cards is not open then.
+        if !self.drop_target && self.frame.borrow().deck_contains(window.mouse_position()) {
             return;
         }
         self.pointer_fan = false;
@@ -596,8 +614,14 @@ impl ParkedDeck {
             return;
         }
         let frame = self.frame.borrow();
-        let hit = frame.hit(position).map(|hit| hit.0);
-        let fan = !self.cards.is_empty() && (frame.deck_contains(position) || hit.is_some());
+        let hit = if self.drop_target {
+            None
+        } else {
+            frame.hit(position).map(|hit| hit.0)
+        };
+        let fan = !self.drop_target
+            && !self.cards.is_empty()
+            && (frame.deck_contains(position) || hit.is_some());
         drop(frame);
         if self.hovered == hit && self.pointer_fan == fan {
             return;
@@ -989,10 +1013,12 @@ impl Render for ParkedDeck {
                         };
                         let center_x =
                             px(f32::from(window.viewport_size().width) / 2. - reserve);
+                        let window_center_x = px(f32::from(window.viewport_size().width) / 2.);
                         let scene = Frame::new(FrameInput {
                             bounds,
                             viewport,
                             center_x,
+                            window_center_x,
                             zoom,
                             cards,
                             fan: aura,

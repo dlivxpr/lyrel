@@ -96,16 +96,14 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
         self.sync_parked_deck(window, cx);
-        let pointer = window.mouse_position();
-        let show_park_target = self.dragged_parking_pane(cx).is_some()
-            && self.pane_area.get().is_some_and(|area| {
-                area.contains(&pointer)
-                    && pointer.y < area.bottom()
-                    && pointer.y
-                        >= area.bottom() - (window.rem_size() * (170. / 16.)).min(area.size.height)
-            });
+        // A recognized tiled or PiP pane drag reveals the parking target for
+        // as long as it is in flight — the affordance has to be findable
+        // before the pointer reaches it, and it must exist with no pane
+        // parked. The same read locks the title-bar move hit region, so a
+        // release or a press up there cannot start moving the window.
+        let dragging_pane = self.dragged_parking_pane(cx).is_some();
         self.parked_deck.update(cx, |deck, cx| {
-            deck.set_drop_target(show_park_target, cx);
+            deck.set_drop_target(dragging_pane, cx);
         });
         let tab_landing = self.tab_landing(window, cx);
         // Membership diff for the sidebar's row/disclosure motion, run even
@@ -308,6 +306,7 @@ impl LyrelApp {
             self.new_tab_button("titlebar-add", cx),
             self.render_park_entry(chrome_fit, window, cx),
             self.render_titlebar_metrics(window, cx, chrome_fit),
+            dragging_pane,
             cx,
             |command| {
                 cx.listener(move |this, _, window, cx| match command {
