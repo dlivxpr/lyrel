@@ -6305,6 +6305,7 @@ name = "lyrel"
 version = "0.4.1"
 dependencies = [
  "anyhow",
+ "block2 0.6.2",
  "chrono",
  "core-foundation 0.10.1",
  "encoding_rs",

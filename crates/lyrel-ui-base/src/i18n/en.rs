@@ -2796,6 +2796,49 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::BrowserSurfaceAutomated => "the browser surface is not started by automated tests",
         L10nKey::BrowserSurfaceNoDataDir => "the browser has no data directory for this Host",
+        L10nKey::BrowserPreviewShare => "Share",
+        L10nKey::BrowserPreviewShareTip => {
+            "Send a screenshot and feedback to the agent pane that asked for this preview"
+        }
+        L10nKey::BrowserPreviewSource => "{pane}",
+        L10nKey::BrowserPreviewSourceMissing => "{pane} (closed)",
+        L10nKey::BrowserPreviewSourceTip => "Agent preview requested by pane {pane}",
+        L10nKey::BrowserPreviewFeedbackPlaceholder => "Tell the agent what to change…",
+        L10nKey::BrowserPreviewSend => "Send to {pane}",
+        L10nKey::BrowserPreviewCancel => "Cancel",
+        L10nKey::BrowserPreviewSending => "Sending…",
+        L10nKey::BrowserPreviewSent => "Sent to {pane}",
+        L10nKey::BrowserPreviewNoSource => "This page was not opened by an agent.",
+        L10nKey::BrowserPreviewPaneGone => "Pane {pane} is gone; the feedback was not sent.",
+        L10nKey::BrowserPreviewPaneElsewhere => {
+            "Pane {pane} belongs to another workspace now; the feedback was not sent."
+        }
+        L10nKey::BrowserPreviewWorkspaceChanged => {
+            "The preview's workspace has changed; the feedback was not sent."
+        }
+        L10nKey::BrowserPreviewHostMismatch => {
+            "The pane is no longer on the preview's Host; the feedback was not sent."
+        }
+        L10nKey::BrowserPreviewHostDisconnected => {
+            "The preview's Host is not connected; the feedback was not sent."
+        }
+        L10nKey::BrowserPreviewPaneExited => "Pane {pane} has exited; the feedback was not sent.",
+        L10nKey::BrowserPreviewPaneLocked => {
+            "Another client is driving pane {pane}; the feedback was not sent."
+        }
+        L10nKey::BrowserPreviewScratchInvalid => {
+            "The preview has no absolute screenshot directory on its Host."
+        }
+        L10nKey::BrowserPreviewCaptureUnavailable => {
+            "The page cannot be captured right now: {error}"
+        }
+        L10nKey::BrowserPreviewCaptureFailed => "Could not capture the page: {error}",
+        L10nKey::BrowserPreviewWriteFailed => {
+            "Could not save the screenshot on the pane's Host: {error}"
+        }
+        L10nKey::BrowserPreviewSavedUnsent => {
+            "Screenshot saved at {path}, but it was not sent: {reason}"
+        }
         L10nKey::PanelNoSession => "No active session.",
         L10nKey::PanelNoSessionHint => {
             "Open a tab to see its shell, directory, and processes here."

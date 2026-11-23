@@ -254,14 +254,19 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = [
     "WKFrameInfo",
     "WKSecurityOrigin",
     "WKOpenPanelParameters",
+    # The explicit preview share captures the visible page as PNG (#393).
+    "WKSnapshotConfiguration",
 ] }
+# The capture completion handler is a block; `objc2-web-kit`'s block2
+# feature only points the bindings at it, so the type has to be in scope here.
+block2 = "0.6"
 raw-window-handle = "0.6"
 # CFStringTokenizer FFI for dictionary-based CJK word segmentation on
 # double-click (`terminal::smart_select`). Already in the tree transitively,
 # and it makes the Windows jieba fallback unnecessary here.
 core-foundation = "0.10.1"
 objc2 = { version = "0.6.5", features = ["disable-encoding-assertions"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem", "NSSpellChecker", "NSDockTile", "NSView", "NSWindow"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage", "NSBitmapImageRep", "NSMenu", "NSMenuItem", "NSSpellChecker", "NSDockTile", "NSView", "NSWindow"] }
 # NSData feeds the runtime Dock icon for bare (non-bundled) binaries — see
 # `set_dock_icon_for_bare_binary` in main.rs.
 # NSUserNotification is the click-to-reveal notification path — see

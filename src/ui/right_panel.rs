@@ -429,6 +429,10 @@ pub(crate) struct WebTab {
     /// The Host the page belongs to; `None` is this machine. Remote
     /// forwarding for a bound Host is #392's seam.
     pub(crate) host: Option<lyrel_core::core::session::RemoteRef>,
+    /// The agent pane that asked for this preview, when one did (#393).
+    /// Durable with the tab so the explicit share still names its origin
+    /// after a restart; the live pane/Host check happens at send time.
+    pub(crate) source: Option<lyrel_core::core::session::PreviewSourceState>,
 }
 
 impl WebTab {
@@ -438,6 +442,7 @@ impl WebTab {
             address: self.address.clone(),
             host: self.host.clone(),
             title: self.title.clone(),
+            source: self.source.clone(),
         }
     }
 
@@ -447,6 +452,7 @@ impl WebTab {
             address: state.address.clone(),
             title: state.title.clone(),
             host: state.host.clone(),
+            source: state.source.clone(),
         }
     }
 }
@@ -614,6 +620,7 @@ impl ToolLayout {
             address: String::new(),
             title: String::new(),
             host: None,
+            source: None,
         });
         self.close_entry(&target)
     }
@@ -4230,6 +4237,7 @@ mod persistence_tests {
                 address: "http://one.test".into(),
                 title: String::new(),
                 host: None,
+                source: None,
             }),
             "the original address is the tab's identity"
         );

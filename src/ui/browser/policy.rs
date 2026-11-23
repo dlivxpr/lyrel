@@ -28,28 +28,15 @@ pub(crate) enum Route {
 const SCHEME_SEP: &str = "://";
 
 /// Classifies one address for the browser surface.
+///
+/// The route itself is [`lyrel_core::core::web::classify`], shared with
+/// the CLI and daemon that validate an agent's preview request; this wrapper
+/// only names the GUI's own type.
 pub(crate) fn classify(address: &str) -> Route {
-    let trimmed = address.trim();
-    if trimmed.is_empty() || is_blank(trimmed) {
-        return Route::Blank;
-    }
-    let Some(sep) = trimmed.find(SCHEME_SEP) else {
-        // Typed input without a scheme ("localhost:3000", "example.com/path")
-        // is completed to http by the address bar before it gets here; a
-        // string that reaches the surface schemeless is not navigable.
-        return Route::Deny;
-    };
-    let scheme = &trimmed[..sep];
-    let rest = &trimmed[sep + SCHEME_SEP.len()..];
-    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
-    match scheme.to_ascii_lowercase().as_str() {
-        // A page needs a host to load: `http://` alone has nowhere to go and
-        // is refused here rather than handed to a host.
-        "http" | "https" if !authority.is_empty() => Route::Load,
-        // `about:blank` has no `://`; handled above. Everything else —
-        // file:, ftp:, data:, javascript:, custom schemes — stays inside the
-        // app's deny path.
-        _ => Route::Deny,
+    match lyrel_core::core::web::classify(address) {
+        lyrel_core::core::web::WebRoute::Load => Route::Load,
+        lyrel_core::core::web::WebRoute::Blank => Route::Blank,
+        lyrel_core::core::web::WebRoute::Deny => Route::Deny,
     }
 }
 
@@ -63,8 +50,7 @@ pub(crate) fn loopback_origin(address: &str) -> Option<String> {
 
 /// Whether `address` spells the built-in blank page.
 pub(crate) fn is_blank(address: &str) -> bool {
-    let lower = address.trim().to_ascii_lowercase();
-    lower == "about:blank" || lower == "about:home"
+    lyrel_core::core::web::is_blank(address)
 }
 
 /// Completes what the user typed into an absolute URL the surface can load.

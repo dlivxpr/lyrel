@@ -13,6 +13,7 @@ mod dispatch_tests;
 mod execution;
 mod launch;
 mod pane;
+mod preview;
 mod send;
 mod server;
 mod tab;
@@ -58,6 +59,7 @@ pub fn execute(cli: Cli, ctx: &Context, backend: &mut dyn Backend) -> Result<Out
         Some(Command::Send(args)) => send::send(args, ctx, backend),
         Some(Command::Exec(args)) => execution::exec(args, ctx, backend),
         Some(Command::Capture(args)) => capture::capture(args, ctx, backend),
+        Some(Command::Preview(args)) => preview::preview(args, ctx, backend),
         Some(Command::Procs { target }) => capture::procs(target.as_deref(), ctx, backend),
         Some(Command::Tab(cmd)) => tab::execute(cmd, ctx, backend),
         Some(Command::Worktree(cmd)) => worktree::execute(cmd, machine.as_deref(), ctx, backend),

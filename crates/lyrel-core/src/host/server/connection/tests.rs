@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::machine::{self, MachineStore};
 use crate::daemon::control::{
-    CONTROL_VERSION, ControlClientMsg, ControlHello, ControlReply, ControlRequest,
+    CONTROL_VERSION, ControlClientMsg, ControlEvent, ControlHello, ControlReply, ControlRequest,
     ControlServerMsg, ReplyOk, WireErrorKind,
 };
 use crate::host::local::LocalHost;
@@ -263,6 +263,88 @@ fn a_large_file_crosses_the_real_link_in_bounded_segments() {
 
     drop(host);
     served.join().unwrap().unwrap();
+}
+
+#[test]
+fn an_agent_preview_resolves_its_workspace_and_targets_only_preview_consumers() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = MachineStore::open(dir.path().join(machine::MACHINE_FILE));
+    let workspace = store.workspace_create(None, None, None).unwrap().id;
+    store
+        .tab_create(workspace, None, machine::PaneSeed::bare(7), None, None)
+        .unwrap();
+    let services = Services::with_machine(Arc::clone(&store));
+
+    let (mut preview, preview_served) = tcp_peer(services.clone());
+    hello(
+        &mut preview,
+        ControlHello::host_rpc("preview", "desktop").with_preview(),
+    );
+    let (mut cli, cli_served) = tcp_peer(services.clone());
+    hello(&mut cli, ControlHello::host_rpc("cli", "laptop"));
+
+    assert_eq!(
+        call(
+            &mut cli,
+            1,
+            ControlRequest::PreviewOpen {
+                pane: 7,
+                url: "http://localhost:5173/app".into(),
+                scratch: String::new(),
+            }
+        ),
+        ControlReply::Ok(ReplyOk::Bool(true)),
+        "the owning daemon delivered it to the preview consumer"
+    );
+    let event = ControlServerMsg::read(&mut preview).unwrap();
+    let ControlServerMsg::Event(ControlEvent::PreviewOpen {
+        workspace: got,
+        pane,
+        url,
+        scratch,
+    }) = event
+    else {
+        panic!("expected a preview event, got {event:?}");
+    };
+    assert_eq!(got, workspace.to_string());
+    assert_eq!(pane, 7);
+    assert_eq!(url, "http://localhost:5173/app");
+    assert!(
+        std::path::Path::new(&scratch).is_absolute(),
+        "the daemon resolves the screenshot directory on its own machine: {scratch}"
+    );
+
+    // The pane is the authority, never a client-supplied workspace.
+    assert!(matches!(
+        call(
+            &mut cli,
+            2,
+            ControlRequest::PreviewOpen {
+                pane: 99,
+                url: "http://localhost:5173".into(),
+                scratch: String::new(),
+            }
+        ),
+        ControlReply::Err(_)
+    ));
+    // The URL policy is applied before anything reaches a GUI.
+    assert!(matches!(
+        call(
+            &mut cli,
+            3,
+            ControlRequest::PreviewOpen {
+                pane: 7,
+                url: "file:///etc/passwd".into(),
+                scratch: String::new(),
+            }
+        ),
+        ControlReply::Err(_)
+    ));
+
+    drop(cli);
+    cli_served.join().unwrap().unwrap();
+    drop(preview);
+    preview_served.join().unwrap().unwrap();
 }
 
 #[test]

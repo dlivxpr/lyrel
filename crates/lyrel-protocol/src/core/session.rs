@@ -434,6 +434,33 @@ pub struct WebTabState {
     /// label only — the live page replaces it on the first update.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
+    /// The agent pane that asked for this preview, when one did (#393).
+    /// Persisted with the tab so the explicit screenshot-and-feedback action
+    /// still names its originating pane after a restart; the live check
+    /// happens in the window, which never trusts a remembered id alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<PreviewSourceState>,
+}
+
+/// The stable identity of the pane that requested one preview (#393).
+///
+/// `workspace` is the machine-side workspace the pane lives in — for a
+/// remote tab, the workspace id inside that machine's tree; the tab's
+/// [`WebTabState::host`] is what turns it into a window. `pane` is the
+/// daemon's pane id, stable for the pane's life. `scratch` is an absolute
+/// directory on the pane's own Host where an explicitly shared screenshot is
+/// written; it was chosen by the requesting process on that Host, never by a
+/// web page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PreviewSourceState {
+    /// The workspace the requesting pane lives in, as the owning machine
+    /// spells it.
+    pub workspace: WorkspaceId,
+    /// The daemon pane id the preview belongs to.
+    pub pane: u64,
+    /// An absolute directory on that pane's Host for shared screenshots.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scratch: String,
 }
 
 /// One entry of the Side Panel tab strip as persisted: either a built-in
@@ -1015,6 +1042,7 @@ mod tests {
                     address: "http://127.0.0.1:3000".into(),
                     host: None,
                     title: String::new(),
+                    source: None,
                 }),
                 TabEntryState::Tool(Scm),
             ],
@@ -1121,6 +1149,7 @@ mod tests {
             },
             WorkspaceId::new(),
         );
+        let source_workspace = WorkspaceId::new();
         let state = ToolLayoutState {
             version: ToolLayoutState::CURRENT_VERSION,
             order: vec![
@@ -1130,12 +1159,18 @@ mod tests {
                     address: "http://localhost:5173".into(),
                     host: None,
                     title: "Vite".into(),
+                    source: None,
                 }),
                 TabEntryState::Web(WebTabState {
                     id: "web-remote".into(),
                     address: "http://127.0.0.1:8080".into(),
                     host: Some(remote),
                     title: String::new(),
+                    source: Some(PreviewSourceState {
+                        workspace: source_workspace,
+                        pane: 42,
+                        scratch: "/tmp/lyrel-preview".into(),
+                    }),
                 }),
             ],
             active: TabSelectionState::Web("web-remote".into()),
@@ -1145,6 +1180,14 @@ mod tests {
         let back: ToolLayoutState = serde_json::from_str(&serde_json::to_string(&state).unwrap())
             .expect("web tabs keep their ids, order, addresses and Host bindings");
         assert_eq!(back, state);
+        assert!(
+            matches!(
+                &back.order[2],
+                TabEntryState::Web(tab)
+                    if tab.source.as_ref().is_some_and(|source| source.pane == 42)
+            ),
+            "the requesting pane is part of the tab's durable identity"
+        );
         // A local tab stays uncluttered: no host field at all.
         let json = serde_json::to_string(&state).unwrap();
         assert!(

@@ -92,7 +92,13 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// content-aware Diff never transfers an unbounded `git show`. A peer
 /// without the feature is never asked; the view keeps its line fallback and
 /// names the missing capability instead.
-pub const CONTROL_VERSION: u32 = 23;
+/// v24 adds `PreviewOpen` and its event: the agent-facing entry point that
+/// asks the GUI process attached to a pane's workspace to show a Side Panel
+/// page without taking keyboard focus. The handshake also grows the optional
+/// `preview` capability, which marks the one connection a GUI process keeps
+/// open to a remote server for exactly this delivery; it is additive on the
+/// wire, while the request and event variants are not.
+pub const CONTROL_VERSION: u32 = 24;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -420,6 +426,24 @@ pub enum ControlRequest {
         workspace: Option<WorkspaceId>,
     },
 
+    /// An agent's request to show one page in the Side Panel of whatever GUI
+    /// process has the requesting pane's workspace open (#393).
+    ///
+    /// The owning daemon resolves `pane` to its workspace and Host from its
+    /// own tree — never from a client-supplied workspace — and refuses a
+    /// pane it does not serve. The GUI reveals the page without taking
+    /// keyboard focus or activating a window. `scratch` is an absolute
+    /// directory on that pane's Host where the explicit user share action
+    /// may later write a screenshot; the owning daemon accepts an absolute
+    /// path from its caller and otherwise resolves one in its own temporary
+    /// directory, so a client routed through `-m` never guesses another
+    /// machine's paths. A web page never supplies it.
+    PreviewOpen {
+        pane: u64,
+        url: String,
+        scratch: String,
+    },
+
     MachineGet,
     WorkspaceTree {
         workspace: WorkspaceId,
@@ -738,6 +762,7 @@ impl ControlRequest {
             SessionBatch { .. } => Duration::from_secs(180),
             WorkspaceAttach { .. } | WorkspaceDetach { .. } => Duration::from_secs(10),
             GuiOpen { .. } => Duration::from_secs(5),
+            PreviewOpen { .. } => Duration::from_secs(5),
             MachineGet
             | WorkspaceTree { .. }
             | WorkspaceSidecarGet { .. }
@@ -1057,6 +1082,17 @@ pub enum ControlEvent {
         #[serde(default)]
         workspace: Option<WorkspaceId>,
     },
+    /// One preview an agent requested, for the GUI that holds the pane's
+    /// workspace (#393). `workspace` is the owning machine's workspace id;
+    /// the receiving GUI maps it (for a remote Host, through its own view
+    /// record) and refuses to guess another window. `scratch` is the
+    /// absolute screenshot directory on the pane's Host.
+    PreviewOpen {
+        workspace: String,
+        pane: u64,
+        url: String,
+        scratch: String,
+    },
     Layout {
         workspace: String,
         /// Boxed: a `LayoutDelta` is hundreds of bytes and this event rides
@@ -1095,6 +1131,13 @@ pub struct ControlHello {
     pub client_hostname: String,
     #[serde(default)]
     pub gui: bool,
+    /// This connection accepts agent preview requests for its GUI process
+    /// (#393). Separate from `gui`, which names the app that may be told to
+    /// open a window: a desktop's remote control link must receive previews
+    /// without making a remote `GuiOpen` believe a GUI lives on that Host.
+    /// Additive on the wire — an older daemon ignores it.
+    #[serde(default)]
+    pub preview: bool,
 }
 
 impl ControlHello {
@@ -1105,14 +1148,23 @@ impl ControlHello {
             client_token: client_token.into(),
             client_hostname: client_hostname.into(),
             gui: false,
+            preview: false,
         }
     }
 
     pub fn gui(client_token: impl Into<String>, client_hostname: impl Into<String>) -> Self {
         ControlHello {
             gui: true,
+            preview: true,
             ..Self::host_rpc(client_token, client_hostname)
         }
+    }
+
+    /// Marks a desktop connection that consumes preview requests but is not
+    /// this machine's GUI launcher. Used by the remote workspace link.
+    pub fn with_preview(mut self) -> Self {
+        self.preview = true;
+        self
     }
 }
 
@@ -2230,6 +2282,11 @@ mod tests {
                 path: Some("/home/me/proj".into()),
                 workspace: None,
             },
+            ControlRequest::PreviewOpen {
+                pane: 7,
+                url: "http://localhost:5173/app".into(),
+                scratch: "/tmp/lyrel-preview".into(),
+            },
             ControlRequest::AgentStates,
             ControlRequest::PaneProcs { pane_id: 7 },
             ControlRequest::PaneEndProcessPlan {
@@ -2474,6 +2531,12 @@ mod tests {
                 path: Some("/home/me/proj".into()),
                 workspace: Some(WorkspaceId::new()),
             },
+            ControlEvent::PreviewOpen {
+                workspace: WorkspaceId::new().to_string(),
+                pane: 7,
+                url: "http://localhost:5173/app".into(),
+                scratch: "/tmp/lyrel-preview".into(),
+            },
         ]
     }
 
@@ -2484,6 +2547,7 @@ mod tests {
             client_token: "tok".into(),
             client_hostname: "laptop".into(),
             gui: false,
+            preview: false,
         }
     }
 
