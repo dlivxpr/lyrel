@@ -36,6 +36,8 @@ pub mod notice;
 pub(crate) mod notification_history;
 pub(crate) mod palette;
 pub mod pane;
+pub(crate) mod browser;
+pub(crate) mod surface_coordinator;
 pub mod pane_drag;
 pub(crate) mod pane_liveness;
 pub(crate) mod pane_sidecar;

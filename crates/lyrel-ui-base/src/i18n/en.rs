@@ -2721,6 +2721,19 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MonitorDiskPartialDetail => "{dir} · at least {used} / {total} ({reason})",
         L10nKey::ToolHostAdd => "Add Tool",
         L10nKey::ToolHostClose => "Close {tool}",
+        L10nKey::ToolHostCloseWeb => "Close {page}",
+        L10nKey::PanelBrowserTitle => "Browser",
+        L10nKey::BrowserBack => "Back",
+        L10nKey::BrowserForward => "Forward",
+        L10nKey::BrowserReload => "Reload",
+        L10nKey::BrowserOpenExternal => "Open in System Browser",
+        L10nKey::BrowserHostLocal => "This machine",
+        L10nKey::BrowserHostRemote => "{host}",
+        L10nKey::BrowserStarting => "Loading page",
+        L10nKey::BrowserSurfaceAutomated => {
+            "the browser surface is not started by automated tests"
+        }
+        L10nKey::BrowserSurfaceNoDataDir => "the browser has no data directory for this Host",
         L10nKey::PanelNoSession => "No active session.",
         L10nKey::PanelNoSessionHint => {
             "Open a tab to see its shell, directory, and processes here."

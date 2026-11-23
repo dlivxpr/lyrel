@@ -182,8 +182,14 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_LibraryLoader",
 ] }
 # The window's public `HasWindowHandle` handle is how `ui::backdrop` reaches
-# the HWND for the DWM calls. Already in the tree at 0.6 via gpui itself.
+# the HWND for the DWM calls, and how the Side Panel browser (`ui::browser`)
+# anchors its native child. Already in the tree at 0.6 via gpui itself.
 raw-window-handle = "0.6"
+# The Side Panel browser's WebView2 child surface (`ui::browser::surface`).
+# The same pinned line the draw.io document engine uses; wry is not used on
+# Windows because this surface needs WebView2's own permission, popup and
+# `IsUserInitiated` answers.
+webview2-com = "=0.39.1"
 # Windows dictionary segmentation; macOS uses CFStringTokenizer instead.
 # COM for toast branding (`core::aumid`): IShellLinkW + IPropertyStore stamp
 # System.AppUserModel.ID onto the Start Menu shortcut, which Windows requires
@@ -223,6 +229,11 @@ libc = "0.2.191"
 # app appearance to match the active theme (see `ui::theme::sync_native_appearance`)
 # so the native traffic-light buttons render in the right light/dark style.
 [target.'cfg(target_os = "macos")'.dependencies]
+# The Side Panel browser's WKWebView child surface (`ui::browser::surface`).
+# The same pinned line the draw.io document engine uses; no custom protocol
+# or IPC handler is installed for the browser.
+wry = { version = "=0.57.2", default-features = false }
+raw-window-handle = "0.6"
 # CFStringTokenizer FFI for dictionary-based CJK word segmentation on
 # double-click (`terminal::smart_select`). Already in the tree transitively,
 # and it makes the Windows jieba fallback unnecessary here.
