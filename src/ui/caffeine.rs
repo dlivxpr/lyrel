@@ -199,6 +199,35 @@ fn any_window_agent_working(cx: &mut App) -> bool {
     false
 }
 
+/// Which ink the cup is painted in; resolved against the live theme in
+/// [`LyrelApp::render_caffeine`], where the accent ink arrives as the
+/// `ActiveAccentInk` global.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CupInk {
+    /// The theme accent cleared as ink: a live hold.
+    AccentInk,
+    /// The danger role: the last request failed.
+    Danger,
+    /// The muted caption role: Off, and automatic mode's wait.
+    Muted,
+}
+
+/// The cup's silhouette and ink for the request's real outcome — the one
+/// place the four presentations are decided (#401). A live hold is the filled
+/// cup in the contrast-checked theme accent; Off and the wait keep the
+/// muted outline; failure keeps the outline with the danger role. The hold
+/// wins the silhouette even while a stale release error is still reported:
+/// the request is genuinely live, and the failure shows in the menu footer
+/// and the accessible name. Automatic waiting adds its dot in
+/// `render_caffeine`, the badge the approved figure puts on the outline cup.
+pub(crate) fn cup_look(holding: bool, errored: bool) -> (&'static str, CupInk) {
+    match (holding, errored) {
+        (true, _) => ("icons/coffee-filled.svg", CupInk::AccentInk),
+        (false, true) => ("icons/coffee.svg", CupInk::Danger),
+        (false, false) => ("icons/coffee.svg", CupInk::Muted),
+    }
+}
+
 impl LyrelApp {
     /// Whether any pane — anywhere in this window's tree — has an agent
     /// Working right now. Read leaf by leaf: `Tab::agent_status` answers the
@@ -217,10 +246,12 @@ impl LyrelApp {
         })
     }
 
-    /// The status bar's coffee cup and its mode menu. The cup is accent while
-    /// a native request is held, neutral in Off and while automatic mode
-    /// waits, and danger when the last request errored; the waiting badge
-    /// marks automatic mode's not-yet-held state.
+    /// The status bar's coffee cup and its mode menu. A live hold is the
+    /// filled cup in the theme accent cleared as ink (`ActiveAccentInk`); Off
+    /// and automatic waiting keep the muted outline, waiting adds the dot, and
+    /// a failed request keeps the outline with the danger role. The accessible
+    /// name carries what the cup only shows: the selected mode and the
+    /// request's real outcome, the failure's explanation included (#401).
     pub(crate) fn render_caffeine(&self, _window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let state = cx.global::<CaffeineState>();
         let mode = state.mode();
@@ -230,20 +261,28 @@ impl LyrelApp {
         let footer = state.footer_text();
         let title = t(L10nKey::StatusCaffeineTitle);
 
+        // The control exposes the mode and the actual state accessibly; the
+        // failure footer is itself the explanation.
+        let access_name = t_fmt(
+            L10nKey::StatusCaffeineAccessName,
+            &[("title", title), ("mode", mode.label()), ("state", footer.as_str())],
+        );
+
+        let (cup_icon, cup_ink) = cup_look(holding, errored);
         let theme = cx.theme();
-        let cup_color = if holding {
-            theme.accent
-        } else if errored {
-            theme.danger
-        } else {
-            theme.muted_foreground
+        let cup_color = match cup_ink {
+            CupInk::AccentInk => {
+                gpui_kit::rgb(cx.global::<lyrel_ui_base::presets::ActiveAccentInk>().0).into()
+            }
+            CupInk::Danger => theme.danger,
+            CupInk::Muted => theme.muted_foreground,
         };
 
         let cup = Button::new("status-caffeine")
             .ghost()
             .xsmall()
-            .icon(Icon::empty().path("icons/coffee.svg").text_color(cup_color))
-            .accessibility_label(title)
+            .icon(Icon::empty().path(cup_icon).text_color(cup_color))
+            .accessibility_label(access_name)
             .tooltip(title)
             .dropdown_menu_with_anchor(Anchor::BottomRight, {
                 move |menu, window, cx| caffeine_menu(menu, window, cx, mode, footer.clone())

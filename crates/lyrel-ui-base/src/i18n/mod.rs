@@ -2317,6 +2317,9 @@ l10n_keys! {
     StatusCaffeineFooterHolding,
     StatusCaffeineFooterWaiting,
     StatusCaffeineFooterError,
+    // The cup's accessible name: title, selected mode, and the request's
+    // actual outcome in one string (#401).
+    StatusCaffeineAccessName,
     HomeTimeJustNow,
     HomeTimeMinutesAgo,
     HomeTimeHourAgo,

@@ -2669,6 +2669,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatusCaffeineFooterHolding => "正在保持本机唤醒",
         L10nKey::StatusCaffeineFooterWaiting => "等待智能体开始工作",
         L10nKey::StatusCaffeineFooterError => "无法保持本机唤醒：{error}",
+        L10nKey::StatusCaffeineAccessName => "{title}，{mode}：{state}",
         L10nKey::HomeTimeJustNow => "刚刚",
         L10nKey::HomeTimeMinutesAgo => "{count} 分钟前",
         L10nKey::HomeTimeHourAgo => "1 小时前",

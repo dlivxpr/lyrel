@@ -127,6 +127,7 @@ pub fn install_preset_theme(
     cx.set_global(interaction);
     cx.set_global(theme.parking());
     cx.set_global(presets::ActiveAccent(m.accent));
+    cx.set_global(presets::ActiveAccentInk(m.accent_ink));
     // Same treatment as `Surfaces`: derived once here rather than recomputed
     // in `render`, because the graph reads it once per visible row per frame
     // and each entry costs a contrast bisection on three surfaces.
