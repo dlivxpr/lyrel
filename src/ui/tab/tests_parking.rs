@@ -669,7 +669,7 @@ fn a_recognized_pane_drag_reveals_the_top_target_with_nothing_parked(
         let viewport = window.viewport_size();
         assert!((target.top() - content.top()).as_f32().abs() <= 1.);
         assert!((target.center().x - viewport.width / 2.).as_f32().abs() <= 1.);
-        assert!((target.height() - px(104. * zoom)).as_f32().abs() <= 1.);
+        assert!((target.size.height - px(104. * zoom)).as_f32().abs() <= 1.);
         assert!(pill.top() >= target.top() && pill.bottom() <= target.bottom());
         // The title bar is covered while the drag owns the pointer: its move
         // hit region must not take the release that parks the pane below it.
@@ -810,7 +810,7 @@ fn a_zoomed_pane_drag_parks_the_same_pane_and_restores_it_tiled(
         window.pointer_up(pill.center(), gpui_kit::MouseButton::Left, cx);
     });
     vcx.run_until_parked();
-    app.update_in(&mut vcx, |app, window, cx| {
+    app.update_in(&mut vcx, |app, _, cx| {
         assert!(app.maximized.is_none());
         assert!(app.tabs[0].is_parked_slot(&pane, cx));
         assert_eq!(app.tabs[0].pane.leaves().len(), 1);
@@ -820,7 +820,7 @@ fn a_zoomed_pane_drag_parks_the_same_pane_and_restores_it_tiled(
         );
         assert!(app.pane_drag.borrow().is_none());
     });
-    vcx.update(|window, cx| {
+    vcx.update(|window, _| {
         assert!(window.find("parked-empty").visible());
         assert!(window.try_find("park-drop-target").is_none());
         assert!(window.try_find("titlebar-drag-shield").is_none());
@@ -1184,7 +1184,7 @@ fn parking_target_matches_painted_ellipse_and_stays_above_status_after_zoom_resi
             assert!((target.top() - content.top()).as_f32().abs() <= 1.);
             assert!((target.left() - expected_left).as_f32().abs() <= 1.);
             assert!((target.right() - expected_right).as_f32().abs() <= 1.);
-            assert!((target.height() - px(104. * zoom)).as_f32().abs() <= 1.);
+            assert!((target.size.height - px(104. * zoom)).as_f32().abs() <= 1.);
             assert!(pill.top() >= target.top() && pill.bottom() <= target.bottom());
             assert!(pill.left() >= target.left() && pill.right() <= target.right());
             for bounds in [target, pill] {

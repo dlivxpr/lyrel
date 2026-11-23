@@ -29,6 +29,7 @@ mod overlay_tests;
 pub(crate) use surface::{BrowserCommand, BrowserEvent, BrowserParentWindow, BrowserSurfaceHost};
 
 use gpui_kit::TestSupportExt as _;
+use gpui_kit::base::Disableable as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
@@ -970,7 +971,7 @@ fn browser_overlay(
     let tab_id = tab_id.to_string();
     Some(
         v_flex()
-            .id(("browser-overlay", tab_id.clone()))
+            .id(format!("browser-overlay-{tab_id}"))
             .test_support()
             .absolute()
             .inset_0()
@@ -999,7 +1000,7 @@ fn browser_overlay(
                             .child(address.to_string()),
                     )
                     .child(
-                        Button::new(("browser-overlay-open", tab_id.clone()))
+                        Button::new(format!("browser-overlay-open-{tab_id}"))
                             .label(t(L10nKey::BrowserOpenExternal))
                             .small()
                             .on_click(cx.listener(move |this, _, _window, cx| {

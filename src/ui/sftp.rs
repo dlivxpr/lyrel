@@ -1452,11 +1452,9 @@ impl LyrelApp {
             SftpMenuAction::UploadFolders => self.sftp_pick_upload(true, None, window, cx),
             // The menu dismisses after this handler and hands focus back to
             // its trigger; open the editor a beat later so it keeps the caret.
-            SftpMenuAction::GotoPath => {
-                cx.defer_in(window, |this, window, cx| {
-                    this.sftp_begin_edit_path(window, cx)
-                })
-            }
+            SftpMenuAction::GotoPath => cx.defer_in(window, |this, window, cx| {
+                this.sftp_begin_edit_path(window, cx)
+            }),
             SftpMenuAction::GotoShellCwd => {
                 if let Some(pane_id) = self.sftp_panel.open_pane_id
                     && let Some(cwd) = self.pane_shell_cwd(pane_id, window, cx)
@@ -1540,6 +1538,9 @@ impl LyrelApp {
 
         let mut lane = h_flex()
             .id("sftp-breadcrumb")
+            .on_double_click(
+                cx.listener(|this, _, window, cx| this.sftp_begin_edit_path(window, cx)),
+            )
             .map(|element| {
                 #[cfg(test)]
                 {
@@ -1560,10 +1561,7 @@ impl LyrelApp {
             // plus a row's own inset, the panel's text column.
             .pl(px(ROW_INSET))
             .overflow_x_scroll()
-            .track_scroll(&self.sftp_panel.path_scroll)
-            .on_double_click(
-                cx.listener(|this, _, window, cx| this.sftp_begin_edit_path(window, cx)),
-            );
+            .track_scroll(&self.sftp_panel.path_scroll);
         let last = segments.len().saturating_sub(1);
         for (i, (label, path)) in segments.into_iter().enumerate() {
             if i > 0 {
