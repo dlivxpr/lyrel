@@ -356,6 +356,7 @@ l10n_keys! {
     IntegrationOmpExtension,
     IntegrationKimiHistory,
     IntegrationHermesObserver,
+    IntegrationAntigravityRegistry,
     IntegrationScopeUnavailable,
     IntegrationOpenCodeUnreadable,
     IntegrationOpenCodeRuntimeDiagnosis,

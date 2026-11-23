@@ -615,6 +615,20 @@ pub(super) fn agent_roots(
                 }
             }
         }
+        HookAgent::Antigravity => {
+            // agy keeps user skills under the shared `.gemini/config` tree.
+            // Discovery is `Unknown`: lyrel installs only hooks (#384), and a
+            // skills-directory presence does not prove agy loads them.
+            push(
+                &mut roots,
+                under(host, &home, &[".gemini", "config", "skills"]),
+                agent,
+                SourceKind::AgentPrivate,
+                true,
+                false,
+                DiscoveryState::Unknown,
+            );
+        }
     }
     for root in &mut roots {
         if root.kind == SourceKind::ProjectShared {

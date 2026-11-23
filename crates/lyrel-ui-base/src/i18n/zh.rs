@@ -368,6 +368,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::IntegrationHermesObserver => {
             "Hermes observer 目录：{home}。安装不代表授权。请在同一 home/profile 运行 hermes plugins enable lyrel，再运行 hermes plugins list。HERMES_SAFE_MODE 或禁用插件会阻止报告。on_session_end 携带最终结果，on_session_finalize 不是本轮结果。缺少事件不代表 Idle/Done。原生历史与操作使用所选安装的运行时，不使用系统 Python；lyrel 不更改插件授权。"
         }
+        L10nKey::IntegrationAntigravityRegistry => {
+            "Antigravity 注册表：{path}。lyrel 只在全局 hooks.json 中管理自己的具名条目，不改动其他 hooks 或状态栏偏好。observer 只报告 Working 与确定结束的 Done；普通工具调用不会显示为 Waiting。该 agy 版本的钩子契约仍需真实轮次验证。"
+        }
         L10nKey::IntegrationScopeUnavailable => "集成作用域不可用：{error}。未修改文件。",
         L10nKey::IntegrationOpenCodeUnreadable => "无法读取 OpenCode CLI 插件配置：{path}",
         L10nKey::IntegrationOpenCodeRuntimeDiagnosis => {

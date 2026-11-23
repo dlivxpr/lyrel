@@ -17,6 +17,7 @@ fn cli_agent(agent: HookAgent) -> crate::core::cli_agent::CLIAgent {
         HookAgent::OhMyPi => C::OhMyPi,
         HookAgent::Kimi => C::Kimi,
         HookAgent::Hermes => C::Hermes,
+        HookAgent::Antigravity => C::Antigravity,
     }
 }
 
@@ -542,6 +543,10 @@ fn integration_diagnostic(diagnostic: &crate::core::agent_hooks::HooksDiagnostic
         HooksDiagnostic::HermesObserver { home } => t_fmt(
             L10nKey::IntegrationHermesObserver,
             &[("home", &home.display().to_string())],
+        ),
+        HooksDiagnostic::AntigravityRegistry { path } => t_fmt(
+            L10nKey::IntegrationAntigravityRegistry,
+            &[("path", &path.display().to_string())],
         ),
         HooksDiagnostic::ScopeUnavailable { error } => {
             t_fmt(L10nKey::IntegrationScopeUnavailable, &[("error", error)])

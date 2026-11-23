@@ -404,6 +404,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::IntegrationHermesObserver => {
             "Hermes observer home: {home}. Installation does not grant authorization. In this home/profile, run hermes plugins enable lyrel, then hermes plugins list. HERMES_SAFE_MODE or disabled plugins prevent reports. on_session_end carries finalized outcomes; on_session_finalize is not a turn result. Missing events never imply Idle/Done. Native history and operations use the selected installation's runtime, not the system Python. lyrel does not change plugin consent."
         }
+        L10nKey::IntegrationAntigravityRegistry => {
+            "Antigravity registry: {path}. lyrel owns only its named entry in the global hooks.json and never touches sibling hooks or status-line preferences. Its observer reports Working and settled Done; ordinary tool calls are never Waiting. Real-turn verification of the hook contract for your agy version is still outstanding."
+        }
         L10nKey::IntegrationScopeUnavailable => {
             "Integration scope is unavailable: {error}. No files were changed."
         }
