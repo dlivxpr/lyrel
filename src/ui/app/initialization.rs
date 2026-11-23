@@ -389,15 +389,13 @@ impl LyrelApp {
         let notification_bell_sub = cx.subscribe(
             &notification_bell,
             |this, _, event: &crate::ui::notification_history::NotificationBellEvent, cx| {
-                if let crate::ui::notification_history::NotificationBellEvent::OpenChanged(open) =
-                    event
-                {
-                    this.set_surface_cover(
-                        crate::ui::surface_coordinator::CoverSource::InboxPopover,
-                        *open,
-                        cx,
-                    );
-                }
+                let crate::ui::notification_history::NotificationBellEvent::OpenChanged(open) =
+                    event;
+                this.set_surface_cover(
+                    crate::ui::surface_coordinator::CoverSource::InboxPopover,
+                    *open,
+                    cx,
+                );
             },
         );
         let mut app = Self {

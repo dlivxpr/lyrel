@@ -75,23 +75,22 @@ mod platform {
     use std::cell::RefCell;
     use std::ffi::c_void;
 
-    use windows::core::{w, HSTRING, IUnknown};
     use windows::Win32::Foundation::{COLORREF, HWND, RECT};
     use windows::Win32::Graphics::Gdi::{
+        ANTIALIASED_QUALITY, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CLIP_DEFAULT_PRECIS,
         CreateBitmap, CreateCompatibleDC, CreateDIBSection, CreateFontW, CreateSolidBrush,
-        DeleteDC, DeleteObject, DrawTextW, Ellipse, SelectObject, SetBkMode, SetTextColor,
-        ANTIALIASED_QUALITY, BI_RGB,
-        BITMAPINFO, BITMAPINFOHEADER, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS,
-        DT_CENTER, DT_SINGLELINE, DT_VCENTER, FW_BOLD, HBRUSH, HBITMAP, HDC, HFONT, HGDIOBJ,
-        OUT_DEFAULT_PRECIS, TRANSPARENT,
+        DEFAULT_CHARSET, DIB_RGB_COLORS, DT_CENTER, DT_SINGLELINE, DT_VCENTER, DeleteDC,
+        DeleteObject, DrawTextW, Ellipse, FW_BOLD, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ,
+        OUT_DEFAULT_PRECIS, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
     };
     use windows::Win32::System::Com::{
-        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     };
     use windows::Win32::UI::Shell::{ITaskbarList3, TaskbarList};
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateIconIndirect, DestroyIcon, HICON, ICONINFO,
     };
+    use windows::core::{HSTRING, IUnknown, w};
 
     /// The overlay is drawn at 32×32 so the taskbar can scale it for the
     /// current DPI; Windows draws it at the small-icon size of the button.
@@ -168,7 +167,11 @@ mod platform {
         // covers a host that has not initialized it yet. `HrInit` is required
         // before the taskbar methods are called.
         unsafe {
-            match CoCreateInstance(&TaskbarList, None::<&IUnknown>, CLSCTX_INPROC_SERVER) {
+            match CoCreateInstance::<_, ITaskbarList3>(
+                &TaskbarList,
+                None::<&IUnknown>,
+                CLSCTX_INPROC_SERVER,
+            ) {
                 Ok(taskbar) => {
                     taskbar
                         .HrInit()
@@ -177,13 +180,14 @@ mod platform {
                 }
                 Err(first) => {
                     let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-                    let taskbar: ITaskbarList3 =
-                        CoCreateInstance(&TaskbarList, None::<&IUnknown>, CLSCTX_INPROC_SERVER)
-                            .map_err(|second| {
-                                format!(
-                                    "CoCreateInstance(ITaskbarList3) failed: {first}; retry: {second}"
-                                )
-                            })?;
+                    let taskbar: ITaskbarList3 = CoCreateInstance(
+                        &TaskbarList,
+                        None::<&IUnknown>,
+                        CLSCTX_INPROC_SERVER,
+                    )
+                    .map_err(|second| {
+                        format!("CoCreateInstance(ITaskbarList3) failed: {first}; retry: {second}")
+                    })?;
                     taskbar
                         .HrInit()
                         .map_err(|error| format!("ITaskbarList3::HrInit failed: {error}"))?;
@@ -262,30 +266,18 @@ mod platform {
                     bmiColors: [Default::default()],
                 };
                 let mut bits = std::ptr::null_mut::<c_void>();
-                let color = match CreateDIBSection(
-                    Some(dc),
-                    &info,
-                    DIB_RGB_COLORS,
-                    &mut bits,
-                    None,
-                    0,
-                ) {
-                    Ok(bitmap) => bitmap,
-                    Err(error) => {
-                        let _ = DeleteDC(dc);
-                        return Err(format!("CreateDIBSection failed: {error}"));
-                    }
-                };
+                let color =
+                    match CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+                        Ok(bitmap) => bitmap,
+                        Err(error) => {
+                            let _ = DeleteDC(dc);
+                            return Err(format!("CreateDIBSection failed: {error}"));
+                        }
+                    };
                 // A zeroed monochrome mask means "opaque everywhere"; the
                 // color bitmap's alpha channel carries the disc's shape.
                 let mask_bits = vec![0u8; BADGE_PX as usize * 4];
-                let mask = CreateBitmap(
-                    BADGE_PX,
-                    BADGE_PX,
-                    1,
-                    1,
-                    Some(mask_bits.as_ptr().cast()),
-                );
+                let mask = CreateBitmap(BADGE_PX, BADGE_PX, 1, 1, Some(mask_bits.as_ptr().cast()));
                 if mask.is_invalid() {
                     let _ = DeleteObject(HGDIOBJ(color.0));
                     let _ = DeleteDC(dc);

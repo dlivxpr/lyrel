@@ -196,10 +196,7 @@ mod tests {
 
         coordinator.cover(CoverSource::SearchEverywhere);
         coordinator.cover(CoverSource::SearchEverywhere);
-        assert!(
-            coordinator.is_covered(),
-            "one cover hides the surfaces"
-        );
+        assert!(coordinator.is_covered(), "one cover hides the surfaces");
         assert_eq!(
             coordinator.covers(),
             &[CoverSource::SearchEverywhere],

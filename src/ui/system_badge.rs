@@ -94,11 +94,7 @@ impl SystemBadgeState {
         let state = cx.default_global::<Self>();
         let previous = state.count;
         state.count = count;
-        if count == 0
-            && previous == 0
-            && state.applied.is_none()
-            && state.error.is_none()
-        {
+        if count == 0 && previous == 0 && state.applied.is_none() && state.error.is_none() {
             return;
         }
         Self::apply(cx, label, count);
@@ -192,10 +188,7 @@ impl LyrelApp {
 /// Whether one pane's agent session is a live wait or an unread result whose
 /// row keeps its badge channel. A settled result only needs attention while
 /// it is unread; a wait is live until the pane stops waiting.
-fn pane_needs_badge(
-    view: &lyrel_terminal::view::TerminalView,
-    activity: &ProgramActivity,
-) -> bool {
+fn pane_needs_badge(view: &lyrel_terminal::view::TerminalView, activity: &ProgramActivity) -> bool {
     let Some(session) = view.agent_session() else {
         return false;
     };
@@ -207,7 +200,9 @@ fn pane_needs_badge(
     match row {
         ActivityState::Running => false,
         ActivityState::Waiting => channels.badge,
-        ActivityState::Ended | ActivityState::Failed => channels.badge && view.agent_result_unread(),
+        ActivityState::Ended | ActivityState::Failed => {
+            channels.badge && view.agent_result_unread()
+        }
     }
 }
 
