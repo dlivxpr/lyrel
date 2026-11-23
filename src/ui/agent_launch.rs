@@ -483,6 +483,16 @@ impl LyrelApp {
             fork,
         } = request.clone();
         use lyrel_core::host::session_operations::{SessionOperation, SessionOperationKind};
+        if fork && agent.fork_label().is_none() {
+            window.notify_app(
+                t_fmt(
+                    L10nKey::AppForkIndependentUnavailable,
+                    &[("name", agent.display_name())],
+                ),
+                cx,
+            );
+            return;
+        }
         let Some(cwd) = cwd else {
             window.notify_app(lyrel_ui_base::i18n::t(L10nKey::AppPaneNoKnownDirectory), cx);
             return;

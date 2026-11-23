@@ -145,9 +145,12 @@ impl CLIAgent {
 
     /// The workbench Fork action's label — `None` while no verified route
     /// creates an independent conversation and leaves the source unchanged.
-    /// Antigravity stays `None` until its two-pane fork contract passes (#386):
-    /// advertising the action before the verified route exists would offer an
-    /// operation lyrel cannot actually perform.
+    /// Antigravity's only documented fork is the interactive `/fork` (alias
+    /// `/branch`), which clones the conversation and switches the invoking
+    /// terminal; 1.5.15's `agy --help` has no non-interactive fork entry and
+    /// the two-pane contract remains unverified (#386). Advertising the action
+    /// before such a route exists would promise an operation lyrel cannot
+    /// perform.
     pub fn fork_label(self) -> Option<&'static str> {
         match self {
             CLIAgent::Antigravity => None,

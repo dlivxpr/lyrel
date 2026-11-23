@@ -3609,6 +3609,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::AppPaneNoCodingAgent => "This pane isn't running a coding agent",
         L10nKey::AppForkNoCommand => "lyrel has no fork command for {name}",
+        L10nKey::AppForkIndependentUnavailable => {
+            "lyrel can't fork {name} into an independent session yet"
+        }
         L10nKey::AppForkLocalOnly => {
             "{name} sessions can't be forked from inside an SSH or WSL session"
         }

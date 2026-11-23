@@ -26,7 +26,7 @@ use lyrel_terminal::view::TerminalView;
 use lyrel_ui_base::host_ops::HostId;
 
 use crate::ui::agent_launch::ResumeSessionRequest;
-use crate::ui::app::LyrelApp;
+use crate::ui::app::{ForkPlacement, LyrelApp};
 
 const SESSION_ID: &str = "hist365";
 const COMMAND: &str = "pi --resume hist365 --session-dir /store";
@@ -1050,6 +1050,97 @@ fn resume_focuses_an_open_antigravity_conversation_by_exact_id(cx: &mut TestAppC
     let focused = vcx.update(|window, cx| window.focused(cx));
     let first_focus = first.read_with(&mut vcx, |view, cx| view.focus_handle(cx));
     assert_eq!(focused, Some(first_focus), "the original pane took focus");
+}
+
+/// Antigravity advertises no workbench Fork route: its `/fork` switches the
+/// invoking terminal instead of creating an independent second pane (#386).
+/// The live-pane entry refuses before asking the Host, so no fork is created
+/// and nothing is typed into the source.
+#[gpui_kit::test]
+fn a_direct_antigravity_fork_is_refused_before_the_host(cx: &mut TestAppContext) {
+    let host = HistoryHost::new(lyrel_core::host::local::shared());
+    let (app, mut vcx, mut stream) = crate::ui::app::test_window::harness_with_pane(cx);
+    install_host_for(&app, &mut vcx, host.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    let source = make_idle_context(&app, &mut vcx, &mut stream, &cwd);
+    DaemonMsg::Agent(Some(CLIAgent::Antigravity))
+        .encode(&mut stream)
+        .unwrap();
+    DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
+        session_id: Some(SESSION_ID.into()),
+        ..Default::default()
+    })))
+    .encode(&mut stream)
+    .unwrap();
+    pump_until("the Antigravity identity lands", || {
+        source.read_with(&mut vcx, |view, _| {
+            view.agent() == Some(CLIAgent::Antigravity)
+                && view
+                    .agent_session()
+                    .and_then(|state| state.session_id)
+                    .as_deref()
+                    == Some(SESSION_ID)
+        })
+    });
+
+    let tabs_before = tab_count(&app, &mut vcx);
+    let index = app.update(&mut vcx, |app, _| app.tabs.active_index());
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.fork_agent_session(index, source.clone(), ForkPlacement::NewTab, window, cx);
+    });
+    settle(&mut vcx, "the unavailable fork is explained", |cx| {
+        crate::ui::notification_history::history(cx)
+            .read(cx)
+            .records()
+            .any(|record| {
+                let message = record.message();
+                message.contains("Antigravity") && message.to_ascii_lowercase().contains("fork")
+            })
+    });
+
+    assert!(
+        host.seen().is_empty(),
+        "a non-forkable agent must not reach the Host as a fork: {:?}",
+        host.seen()
+    );
+    assert_eq!(tab_count(&app, &mut vcx), tabs_before, "no new tab");
+    assert!(
+        inputs_now(&mut stream).is_empty(),
+        "the source pane received no command"
+    );
+}
+
+/// The same capability gate protects a saved-row fork request even if a
+/// caller bypasses the hidden menu: no Host round trip, no new tab, and the
+/// limitation is explained.
+#[gpui_kit::test]
+fn a_history_fork_for_antigravity_is_refused_before_the_host(cx: &mut TestAppContext) {
+    let host = HistoryHost::new(lyrel_core::host::local::shared());
+    let (app, mut vcx, _stream) = crate::ui::app::test_window::harness_with_pane(cx);
+    install_host_for(&app, &mut vcx, host.clone());
+    let dir = tempfile::tempdir().unwrap();
+    let cwd = dir.path().canonicalize().unwrap();
+    let tabs_before = tab_count(&app, &mut vcx);
+    let mut req = request(Some(cwd), true);
+    req.agent = CLIAgent::Antigravity;
+    run_resume(&app, &mut vcx, req);
+    settle(&mut vcx, "the unavailable history fork is explained", |cx| {
+        crate::ui::notification_history::history(cx)
+            .read(cx)
+            .records()
+            .any(|record| {
+                let message = record.message();
+                message.contains("Antigravity") && message.to_ascii_lowercase().contains("fork")
+            })
+    });
+
+    assert!(
+        host.seen().is_empty(),
+        "a non-forkable agent must not reach the Host as a fork: {:?}",
+        host.seen()
+    );
+    assert_eq!(tab_count(&app, &mut vcx), tabs_before, "no new tab");
 }
 
 /// The observer hook's conversation id is authoritative. If upstream opens a

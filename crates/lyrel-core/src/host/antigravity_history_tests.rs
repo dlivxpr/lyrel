@@ -401,6 +401,10 @@ fn exact_resume_revalidates_identity_directory_and_fork_boundary() {
         "a conversation id the index does not hold is refused"
     );
 
+    let root = home.path().join(".gemini").join("antigravity-cli");
+    let index_bytes = std::fs::read(root.join("conversation_summaries.db")).unwrap();
+    let conversation_bytes =
+        std::fs::read(root.join("conversations").join(format!("{ROOT_ID}.db"))).unwrap();
     let fork = request(
         &*host,
         home.path(),
@@ -410,7 +414,44 @@ fn exact_resume_revalidates_identity_directory_and_fork_boundary() {
     );
     let error = host.session_operation(&fork).unwrap_err();
     assert_eq!(error.kind, SessionErrorKind::Unsupported);
-    assert!(error.message.contains("#386"), "{}", error.message);
+    assert!(
+        error.message.contains("independent fork route") && error.message.contains("/fork"),
+        "the gate names the limitation and the manual route: {}",
+        error.message
+    );
+    assert_eq!(
+        std::fs::read(root.join("conversation_summaries.db")).unwrap(),
+        index_bytes,
+        "a refused fork leaves the source index byte-identical"
+    );
+    assert_eq!(
+        std::fs::read(root.join("conversations").join(format!("{ROOT_ID}.db"))).unwrap(),
+        conversation_bytes,
+        "a refused fork leaves the source conversation byte-identical"
+    );
+
+    // The gate answers before the store is consulted: an empty home still
+    // reads as Unsupported, not as a missing conversation.
+    let empty_home = tempfile::tempdir().unwrap();
+    let empty_project = tempfile::tempdir().unwrap();
+    let missing = request(
+        &*host,
+        empty_home.path(),
+        empty_project.path(),
+        "00000000-0000-4000-8000-000000000000",
+        SessionOperationKind::Fork,
+    );
+    let error = host.session_operation(&missing).unwrap_err();
+    assert_eq!(error.kind, SessionErrorKind::Unsupported);
+    assert!(
+        error.message.contains("independent fork route"),
+        "the same gate answers without any conversation store: {}",
+        error.message
+    );
+    assert!(
+        !empty_home.path().join(".gemini").exists(),
+        "the refused fork did not create the Antigravity store"
+    );
 }
 
 #[test]

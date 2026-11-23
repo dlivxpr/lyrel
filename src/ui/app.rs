@@ -3960,6 +3960,16 @@ impl LyrelApp {
             window.notify_app(t(L10nKey::AppPaneNoCodingAgent), cx);
             return;
         };
+        if agent.fork_label().is_none() {
+            window.notify_app(
+                t_fmt(
+                    L10nKey::AppForkIndependentUnavailable,
+                    &[("name", agent.display_name())],
+                ),
+                cx,
+            );
+            return;
+        }
         let session = view.agent_session().unwrap_or_default();
         let source_id = if agent == crate::core::cli_agent::CLIAgent::OpenCode {
             session

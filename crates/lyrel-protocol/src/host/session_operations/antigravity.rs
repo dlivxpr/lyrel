@@ -221,8 +221,10 @@ pub fn sessions<H: Host + ?Sized>(
 
 /// Prepare one exact resume on the owning Host. The index is re-read now, so
 /// a row deleted or moved since the listing is refused instead of launching a
-/// nearby conversation. Fork stays unavailable until its two-pane contract is
-/// verified (#386).
+/// nearby conversation. Fork is refused before any store access: 1.5.15 has
+/// no non-interactive fork entry, and the documented interactive `/fork`
+/// switches the invoking terminal instead of leaving an independent source
+/// pane (#386).
 pub(super) fn prepare<H: Host + ?Sized>(
     host: &H,
     request: &SessionOperation,
@@ -230,7 +232,7 @@ pub(super) fn prepare<H: Host + ?Sized>(
     if request.kind == SessionOperationKind::Fork {
         return Err(failure(
             SessionErrorKind::Unsupported,
-            "Antigravity fork stays unavailable until its two-pane contract is verified (#386)",
+            "Antigravity has no independent fork route: /fork switches the invoking terminal; run /fork inside the agy pane instead",
         ));
     }
     validate_scope(request)?;
