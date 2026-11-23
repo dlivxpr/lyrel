@@ -442,7 +442,7 @@ impl BrowserSurfaceHost {
             #[cfg(any(test, feature = "test-support"))]
             Inner::Test(surface) => {
                 if let BrowserCommand::Capture { request } = command {
-                    let _ = surface.events.try_send(BrowserEvent::Captured {
+                    let _ = surface._events.try_send(BrowserEvent::Captured {
                         request,
                         png: test_support::CAPTURED_PNG.to_vec(),
                     });
