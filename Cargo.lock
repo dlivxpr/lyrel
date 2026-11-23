@@ -6317,6 +6317,7 @@ dependencies = [
  "libc",
  "log",
  "lsp-types",
+ "lyrel-content-diff",
  "lyrel-core",
  "lyrel-document",
  "lyrel-insights",
@@ -6372,6 +6373,23 @@ dependencies = [
  "serde_json",
  "tempfile",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "lyrel-content-diff"
+version = "0.4.1"
+dependencies = [
+ "similar 3.2.1",
+ "tempfile",
+ "tree-sitter",
+ "tree-sitter-go",
+ "tree-sitter-javascript",
+ "tree-sitter-json",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-toml-ng",
+ "tree-sitter-typescript",
+ "tree-sitter-yaml",
 ]
 
 [[package]]

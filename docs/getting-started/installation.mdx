@@ -282,7 +282,8 @@ CPU／RAM 的 refresh 方法仍返回 `()`，没有可传播的刷新错误；�
     ```bash
     sudo apt-get install -y pkg-config cmake clang libzstd-dev libssl-dev libkrb5-dev
     headless=(--workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater \
-      --exclude lyrel-ui-base --exclude lyrel-terminal --exclude lyrel-workbench-editor --all-features)
+      --exclude lyrel-ui-base --exclude lyrel-terminal --exclude lyrel-workbench-editor \
+      --exclude lyrel-content-diff --all-features)
     LIBGSSAPI_IMPL=mit cargo build --release --locked "${headless[@]}"
     LIBGSSAPI_IMPL=mit cargo test --locked "${headless[@]}"
     ```

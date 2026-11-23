@@ -277,6 +277,10 @@ pub struct LyrelApp {
     /// spawn, what coalesces, what landing is allowed to install — so the app
     /// only supplies the registry lookup and the spawn itself.
     pub(crate) diff_probes: crate::ui::diff_probe::DiffProbeTracker,
+    /// In-flight structural reads for the Content-aware diff view, keyed by
+    /// `(host, cwd, source, path, epoch)`. Same policy split as the probes:
+    /// the tracker decides, the app supplies the registry and the spawn.
+    pub(crate) content_fetches: crate::ui::content_diff::ContentFetchTracker,
     pub(crate) file_tree: Entity<crate::ui::file_tree::FileTree>,
     _file_tree_events: Subscription,
     _file_tree_observer: Subscription,

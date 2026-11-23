@@ -186,6 +186,30 @@ pub(crate) fn glyph_unified(ink: gpui_kit::Hsla) -> gpui_kit::AnyElement {
     glyph_two_panes(ink, false)
 }
 
+/// Content-aware: blocks of structure — a wide, a short and a wide bar. Bars
+/// rather than panes, because this view is about what the file is made of
+/// rather than which side of it a line sits on.
+pub(crate) fn glyph_content(ink: gpui_kit::Hsla) -> gpui_kit::AnyElement {
+    let bar = |width: f32| {
+        div()
+            .w(px(width))
+            .h(px(1.5))
+            .rounded(px(0.75))
+            .bg(ink)
+    };
+    div()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .gap(px(2.))
+        .w(px(SWITCH_FRAME_W))
+        .h(px(SWITCH_FRAME_H))
+        .child(bar(SWITCH_FRAME_W))
+        .child(bar(SWITCH_FRAME_W * 0.55))
+        .child(bar(SWITCH_FRAME_W * 0.8))
+        .into_any_element()
+}
+
 /// The sunken track the two cells sit on.
 pub(crate) fn switch_track(
     id: &'static str,

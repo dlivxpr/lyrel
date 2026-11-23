@@ -405,6 +405,7 @@ impl LyrelApp {
             scm: crate::ui::scm::ScmPanelState::new(scm_graph_expanded),
             github: crate::ui::github::GitHubPanelState::new(cx),
             diff_probes: Default::default(),
+            content_fetches: Default::default(),
             file_tree,
             _file_tree_events: file_tree_events,
             _file_tree_observer: file_tree_observer,

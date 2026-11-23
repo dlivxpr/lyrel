@@ -58,6 +58,10 @@ lyrel-ui-base = { path = "crates/lyrel-ui-base" }
 # server and CLI never link it — so it stays a desktop-only dependency, while
 # the crate itself remains Linux-buildable (browser modules gated there).
 lyrel-insights = { path = "crates/lyrel-insights" }
+# GUI-free structural (content-aware) diff engine: tree-sitter item matching
+# over two text versions. Desktop-only by ownership — the shell is its only
+# production consumer, so no grammar enters the CLI or protocol graphs.
+lyrel-content-diff = { path = "crates/lyrel-content-diff" }
 gpui-kit = { workspace = true }
 # Only the opt-in main-thread Markdown consumer harness needs this direct edge.
 lyrel-markdown-editor = { path = "crates/lyrel-markdown-editor", optional = true }

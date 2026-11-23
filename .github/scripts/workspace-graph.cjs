@@ -5,7 +5,11 @@ const path = require('node:path');
 
 const editor = 'lyrel-workbench-editor';
 const terminal = 'lyrel-terminal';
-const desktopMembers = ['lyrel', 'lyrel-updater', 'lyrel-ui-base', 'lyrel-markdown-editor', terminal, editor];
+// `lyrel-content-diff` is GUI-free but desktop-owned: the tree-sitter
+// grammars must never enter the CLI, protocol, or headless production graphs,
+// and the shell is its only consumer. It is excluded from the headless build
+// with the other desktop-only packages.
+const desktopMembers = ['lyrel', 'lyrel-updater', 'lyrel-ui-base', 'lyrel-markdown-editor', terminal, editor, 'lyrel-content-diff'];
 const workspaceMembers = new Set([
   'lyrel-protocol', 'lyrel-core', 'lyrel-server', 'lyrel-cli',
   'lyrel-document', 'lyrel-insights', 'lyrel-test-support', ...desktopMembers,

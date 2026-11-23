@@ -17,6 +17,7 @@ use crate::ui::scm::diff::{
     self as git_diff, CommitLabel, DiffSnapshot, DiffSource, DiffStats, FileDiff, FileStatus,
     LineKind, Truncation,
 };
+use lyrel_content_diff::{BlockKind, LineSpan};
 use lyrel_core::core::config::DiffViewMode;
 use lyrel_ui_base::config::Config;
 
@@ -25,11 +26,18 @@ use lyrel_ui_base::config::Config;
 /// line budget below cuts rendering long before this does anyway.
 const MAX_PREVIEW_BYTES: u64 = 4 * 1024 * 1024;
 use crate::ui::app::LyrelApp;
-use crate::ui::diff_list::{DiffRow, FileHead, RowAt};
+use crate::ui::content_diff::{
+    ContentCompletion, ContentFailure, ContentFetchKey, ContentFile, ContentRequest, ContentState,
+    fetch_content, item_label, kind_label, plan_for,
+};
+use crate::ui::diff_list::{
+    CONTENT_ANCHOR_ROW, CONTENT_HEADER_ROW, ContentAnchorHead, ContentHead, ContentViews, DiffRow,
+    FileHead, RowAt,
+};
 use crate::ui::diff_probe::{DiffProbeKey, ProbeCompletion, ProbeRequest};
-use crate::ui::diff_rows::{DiffSelection, Side, SplitCell, SplitRow, UnifiedRow};
+use crate::ui::diff_rows::{DiffSelection, RowId, Side, SplitCell, SplitRow, UnifiedRow};
 use crate::ui::document_column::{
-    DocumentChrome, glyph_split, glyph_unified, switch_cell, switch_ink, switch_track,
+    DocumentChrome, glyph_content, glyph_split, glyph_unified, switch_cell, switch_ink, switch_track,
 };
 use crate::ui::right_panel::{HEADING, META, META_MONO, TEXT, TEXT_MONO, git_badge, info_chip};
 use crate::ui::scm::path::relative_time;
@@ -72,6 +80,13 @@ pub(crate) struct DiffOverlayState {
     /// selection this layout can honestly offer.
     pub(crate) selection: Option<DiffSelection>,
     pub(crate) selecting: bool,
+    /// Per-file content-aware state, keyed by the file's path. Populated on
+    /// demand while the Content view is selected; cleared whenever a fresh
+    /// snapshot lands, because the bytes it was built from are then history.
+    pub(crate) content: std::collections::HashMap<String, ContentState>,
+    /// Bumped with every snapshot. A content read carries the epoch it was
+    /// dispatched under and may not install over a newer one.
+    pub(crate) content_epoch: u64,
     /// The virtualised list the rows scroll in. Held across frames: it owns
     /// the scroll position, and the row heights gpui has measured.
     pub(crate) list: gpui_kit::ListState,
@@ -201,6 +216,8 @@ impl LyrelApp {
             preview_loading: None,
             selection: None,
             selecting: false,
+            content: std::collections::HashMap::new(),
+            content_epoch: 0,
             list: gpui_kit::ListState::new(0, gpui_kit::ListAlignment::Top, px(256.))
                 .with_uniform_item_height(DIFF_LINE_H),
             rows: Rc::new(Vec::new()),
@@ -380,19 +397,29 @@ impl LyrelApp {
         let Some(sel) = overlay.selection.as_ref() else {
             return;
         };
-        let hunks = match &overlay.load {
-            DiffLoad::Ready(snap) => snap
-                .files
-                .iter()
-                .find(|f| f.path == sel.path)
-                .map(|f| f.hunks.as_slice()),
+        // A content-aware card's rows index the synthesized structural file,
+        // not the snapshot's patch: its hunk indices are item indices. When
+        // the card is a fallback, the rows are the patch's and the state is
+        // not `Ready`, so this falls through to the patch below.
+        let content_hunks = match overlay.content.get(&sel.path) {
+            Some(ContentState::Ready(cf)) => Some(cf.file.hunks.as_slice()),
             _ => None,
-        }
-        // An untracked file has no patch in the snapshot — its rows are
-        // synthesized from the file's own bytes, and so is its text.
-        .or_else(|| match &overlay.preview {
-            Some((held, Some(file))) if *held == sel.path => Some(file.hunks.as_slice()),
-            _ => None,
+        };
+        let hunks = content_hunks.or_else(|| {
+            let from_snapshot = match &overlay.load {
+                DiffLoad::Ready(snap) => snap
+                    .files
+                    .iter()
+                    .find(|f| f.path == sel.path)
+                    .map(|f| f.hunks.as_slice()),
+                _ => None,
+            };
+            // An untracked file has no patch in the snapshot — its rows are
+            // synthesized from the file's own bytes, and so is its text.
+            from_snapshot.or_else(|| match &overlay.preview {
+                Some((held, Some(file))) if *held == sel.path => Some(file.hunks.as_slice()),
+                _ => None,
+            })
         });
         let Some(hunks) = hunks else {
             return;
@@ -402,6 +429,31 @@ impl LyrelApp {
             return;
         }
         cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text));
+    }
+
+    /// Scroll the overlay to the row a content-aware jump marker names: a
+    /// block header to its source anchor, or an anchor to the block.
+    fn jump_content_row(&mut self, target: RowId, cx: &mut Context<Self>) {
+        let active = self.tabs.active_index();
+        let Some(overlay) = self.tabs.get(active).and_then(|t| t.diff_overlay.as_ref()) else {
+            return;
+        };
+        let index = overlay.rows.iter().position(|row| match row {
+            DiffRow::ContentBlock(head) => {
+                head.index == target.hunk && target.row == CONTENT_HEADER_ROW
+            }
+            DiffRow::ContentAnchor(head) => {
+                head.index == target.hunk && target.row == CONTENT_ANCHOR_ROW
+            }
+            _ => false,
+        });
+        let Some(index) = index else {
+            return;
+        };
+        overlay
+            .list
+            .scroll_to_reveal_item(index);
+        cx.notify();
     }
 
     fn spawn_diff_probe(&mut self, cx: &mut Context<Self>) {
@@ -647,6 +699,11 @@ impl LyrelApp {
             // A new snapshot restarts any untracked preview: the file may
             // have changed with the tree, and the re-read costs one file.
             overlay.preview = None;
+            // The structural reads were of the versions this snapshot just
+            // replaced. Bumping the epoch also fences late landings from
+            // reads still out.
+            overlay.content.clear();
+            overlay.content_epoch = overlay.content_epoch.wrapping_add(1);
             // The rows it was drawn against are gone. A range that survived
             // would keep its coordinates and quietly cover other code.
             overlay.selection = None;
@@ -730,6 +787,7 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         self.spawn_untracked_preview_if_needed(cx);
+        self.spawn_content_fetch_if_needed(cx);
         let rem_size = window.rem_size();
         let ui_font = &cx.theme().font_family;
         let overlay = self.tabs.active_mut()?.diff_overlay.as_mut()?;
@@ -750,7 +808,8 @@ impl LyrelApp {
                 .with_uniform_item_height(measurement.row_height());
             overlay.measurement = Some(measurement);
         }
-        let body = self.sync_diff_rows(cx)?;
+        let inner = content_inner_mode(window.viewport_size().width);
+        let body = self.sync_diff_rows(inner, cx)?;
         let overlay = self
             .tabs
             .get(self.tabs.active_index())?
@@ -1115,6 +1174,12 @@ impl LyrelApp {
                     glyph_unified,
                     L10nKey::DiffViewUnified,
                 ),
+                cell(
+                    2,
+                    DiffViewMode::Content,
+                    glyph_content,
+                    L10nKey::DiffViewContent,
+                ),
             ],
             cx,
         )
@@ -1125,6 +1190,11 @@ impl LyrelApp {
     /// point: `preview` says the answer is in hand, `preview_loading` says it
     /// is on the way.
     fn spawn_untracked_preview_if_needed(&mut self, cx: &mut Context<Self>) {
+        // The Content view reads its own bytes (both versions, structurally),
+        // so the all-added line preview would only duplicate the read.
+        if view_mode(cx) == DiffViewMode::Content {
+            return;
+        }
         let want = {
             let overlay = self
                 .tabs
@@ -1205,13 +1275,263 @@ impl LyrelApp {
             .into_any_element()
     }
 
+    /// Dispatch the structural reads the Content view needs this frame: one
+    /// per expanded textual file (or the focused untracked file), each through
+    /// the owning Host, each only once per snapshot.
+    ///
+    /// Runs from `render`, so the guards are the point: a file with a state
+    /// already in [`DiffOverlayState::content`] is either reading, ready, or
+    /// explained, and none of those needs asking again. States that need no
+    /// Host read (a patch-only comparison, an unsupported file type) are
+    /// installed here, so the view can explain them immediately.
+    fn spawn_content_fetch_if_needed(&mut self, cx: &mut Context<Self>) {
+        if view_mode(cx) != DiffViewMode::Content {
+            return;
+        }
+        let active = self.tabs.active_index();
+        let Some(overlay) = self.tabs.get(active).and_then(|t| t.diff_overlay.as_ref()) else {
+            return;
+        };
+        let DiffLoad::Ready(snap) = &overlay.load else {
+            return;
+        };
+        let supplied = overlay.source.is_supplied();
+        let focused = focused_file(snap, overlay);
+        let oversized = focused.is_none() && snap.stats().oversized;
+
+        struct Want {
+            path: String,
+            old_path: String,
+            plan: Option<crate::ui::content_diff::FetchPlan>,
+            status: FileStatus,
+        }
+        let mut wants: Vec<Want> = Vec::new();
+        for (idx, file) in snap.files.iter().enumerate() {
+            if focused.is_some_and(|f| f != idx) {
+                continue;
+            }
+            let expanded = if focused == Some(idx) {
+                overlay.expanded.get(&file.path).copied().unwrap_or(true)
+            } else {
+                crate::ui::diff_list::file_expanded(file, &overlay.expanded, oversized)
+            };
+            if !expanded || file.binary || overlay.content.contains_key(&file.path) {
+                continue;
+            }
+            let old_path = file.old_path.clone().unwrap_or_else(|| file.path.clone());
+            let plan = if supplied {
+                None
+            } else {
+                plan_for(&overlay.source, &old_path, &file.path)
+            };
+            wants.push(Want {
+                path: file.path.clone(),
+                old_path,
+                plan,
+                status: file.status,
+            });
+        }
+        if let Some(path) = untracked_focus(snap, overlay.focus.as_deref()) {
+            if !overlay.content.contains_key(path) {
+                let plan = if supplied {
+                    None
+                } else {
+                    plan_for(&overlay.source, path, path)
+                };
+                wants.push(Want {
+                    path: path.to_string(),
+                    old_path: path.to_string(),
+                    plan,
+                    status: FileStatus::Added,
+                });
+            }
+        }
+        if wants.is_empty() {
+            return;
+        }
+
+        let (host_id, cwd, source, epoch, root) = (
+            overlay.host_id,
+            overlay.cwd.clone(),
+            overlay.source.clone(),
+            overlay.content_epoch,
+            snap.root.clone(),
+        );
+        // Decide the states that need no Host read, and mark the rest as
+        // reading before anything is dispatched.
+        let mut fetches: Vec<(String, crate::ui::content_diff::FetchPlan, FileStatus)> = Vec::new();
+        {
+            let Some(overlay) = self
+                .tabs
+                .get_mut(active)
+                .and_then(|t| t.diff_overlay.as_mut())
+                .filter(|o| o.host_id == host_id && o.source == source)
+            else {
+                return;
+            };
+            for want in wants {
+                match want.plan {
+                    None => {
+                        overlay
+                            .content
+                            .insert(want.path, ContentState::Failed(ContentFailure::PatchOnly));
+                    }
+                    Some(plan) => {
+                        let supported = lyrel_content_diff::language_for_path(Path::new(
+                            &want.path,
+                        ))
+                        .or_else(|| {
+                            lyrel_content_diff::language_for_path(Path::new(&want.old_path))
+                        })
+                        .is_some();
+                        if supported {
+                            overlay
+                                .content
+                                .insert(want.path.clone(), ContentState::Loading);
+                            fetches.push((want.path, plan, want.status));
+                        } else {
+                            overlay.content.insert(
+                                want.path,
+                                ContentState::Failed(ContentFailure::Unsupported),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
+            self.fail_content_reads(&source, &fetches, cx);
+            return;
+        };
+        for (path, plan, status) in fetches {
+            let key = ContentFetchKey {
+                host: host_id,
+                cwd: cwd.clone(),
+                source: source.clone(),
+                path,
+                epoch,
+            };
+            if self.content_fetches.request(&host, &key) != ContentRequest::Spawn {
+                continue;
+            }
+            let probe_host = host.clone();
+            let read_root = root.clone();
+            lyrel_ui_base::host_ops::HostOps::run(
+                host.clone(),
+                cx,
+                move |h| fetch_content(h, &read_root, &plan, status),
+                move |app, result, cx| app.land_content_fetch(key, probe_host, result, cx),
+            );
+        }
+        cx.notify();
+    }
+
+    /// No live host can answer these reads: explain them instead of leaving
+    /// the cards reading forever.
+    fn fail_content_reads(
+        &mut self,
+        source: &DiffSource,
+        fetches: &[(String, crate::ui::content_diff::FetchPlan, FileStatus)],
+        cx: &mut Context<Self>,
+    ) {
+        let active = self.tabs.active_index();
+        let Some(overlay) = self
+            .tabs
+            .get_mut(active)
+            .and_then(|t| t.diff_overlay.as_mut())
+            .filter(|o| o.source == *source)
+        else {
+            return;
+        };
+        for (path, _, _) in fetches {
+            overlay
+                .content
+                .insert(path.clone(), ContentState::Failed(ContentFailure::ReadFailed));
+        }
+        cx.notify();
+    }
+
+    /// Land one structural read: install it only if the reading host instance
+    /// is still the live one, the overlay still shows the same source, and no
+    /// newer snapshot has replaced the versions it read.
+    fn land_content_fetch(
+        &mut self,
+        key: ContentFetchKey,
+        probe: lyrel_ui_base::host_ops::SharedHost,
+        result: Result<ContentFile, ContentFailure>,
+        cx: &mut Context<Self>,
+    ) {
+        let live = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, key.host);
+        let completion = self.content_fetches.complete(&key, &probe, live.as_ref());
+        let mut touched = false;
+        match completion {
+            ContentCompletion::Superseded => return,
+            ContentCompletion::Deliver => {
+                let state = match result {
+                    Ok(file) => ContentState::Ready(Arc::new(file)),
+                    Err(reason) => ContentState::Failed(reason),
+                };
+                for tab in self.tabs.iter_mut() {
+                    let Some(overlay) = tab
+                        .diff_overlay
+                        .as_mut()
+                        .filter(|o| o.host_id == key.host && o.cwd == key.cwd && o.source == key.source)
+                    else {
+                        continue;
+                    };
+                    if overlay.content_epoch != key.epoch {
+                        continue;
+                    }
+                    overlay.content.insert(key.path.clone(), state.clone());
+                    touched = true;
+                }
+            }
+            ContentCompletion::Retired => {
+                // The host that could answer left. With a live replacement,
+                // drop the state so the next frame asks it; without one, say
+                // so instead of reading forever.
+                for tab in self.tabs.iter_mut() {
+                    let Some(overlay) = tab
+                        .diff_overlay
+                        .as_mut()
+                        .filter(|o| o.host_id == key.host && o.cwd == key.cwd && o.source == key.source)
+                    else {
+                        continue;
+                    };
+                    if overlay.content_epoch != key.epoch {
+                        continue;
+                    }
+                    match live.is_some() {
+                        true => {
+                            overlay.content.remove(&key.path);
+                        }
+                        false => {
+                            overlay
+                                .content
+                                .insert(key.path.clone(), ContentState::Failed(ContentFailure::ReadFailed));
+                        }
+                    }
+                    touched = true;
+                }
+            }
+        }
+        if touched {
+            cx.notify();
+        }
+    }
+
     /// Brings the active overlay's flattened rows up to date with what it is
     /// meant to be showing, and says what to draw.
     ///
     /// Called from `render`, so the [`RowsKey`] comparison is what keeps it
     /// cheap: flattening a twenty-thousand-line patch allocates a row per
     /// line, and nothing about that changes between two frames of scrolling.
-    fn sync_diff_rows(&mut self, cx: &mut Context<Self>) -> Option<DiffBody> {
+    fn sync_diff_rows(
+        &mut self,
+        inner: DiffViewMode,
+        cx: &mut Context<Self>,
+    ) -> Option<DiffBody> {
         let mode = view_mode(cx);
         let active = self.tabs.active_index();
         let overlay = self.tabs.get_mut(active)?.diff_overlay.as_mut()?;
@@ -1234,30 +1554,37 @@ impl LyrelApp {
             DiffLoad::Ready(snap) => Arc::clone(snap),
         };
 
-        // A focused *untracked* file has no patch in the snapshot; its card is
-        // synthesized from the file's own bytes — see `preview`.
-        let preview = match untracked_focus(&snap, overlay.focus.as_deref()) {
-            Some(path) => match &overlay.preview {
+        // A focused *untracked* file has no patch in the snapshot. The line
+        // views synthesize its card from the file's own bytes (`preview`);
+        // the Content view reads both versions itself and draws blocks.
+        let untracked = untracked_focus(&snap, overlay.focus.as_deref());
+        let preview = match (mode, untracked) {
+            (DiffViewMode::Content, _) => None,
+            (_, Some(path)) => match &overlay.preview {
                 Some((held, file)) if held == path => match file {
                     Some(file) => Some(Arc::clone(file)),
                     None => return Some(DiffBody::Message(t(L10nKey::DiffReadFailed))),
                 },
                 _ => return Some(DiffBody::Message(t(L10nKey::DiffReading))),
             },
-            None => None,
+            (_, None) => None,
         };
 
-        // Forget a range the rows under it no longer answer to. The two views
+        // Forget a range the rows under it no longer answer to. The views
         // pair the same lines differently, so a row range drawn in one of them
         // points at other code in the other. Here rather than beside the
         // switch that flips the mode: this is the one place that knows which
         // rows are about to be drawn.
-        let drawn = |path: &str| {
-            preview
+        //
+        // The Content view draws its block lines in the paired or the
+        // single-column layout, so a range made there belongs to that layout.
+        let drawn = |path: &str| match mode {
+            DiffViewMode::Content => inner,
+            mode => preview
                 .as_deref()
                 .filter(|f| f.path == path)
                 .or_else(|| snap.files.iter().find(|f| f.path == path))
-                .map_or(mode, |f| crate::ui::diff_list::file_mode(f, mode))
+                .map_or(mode, |f| crate::ui::diff_list::file_mode(f, mode)),
         };
         if overlay
             .selection
@@ -1276,20 +1603,37 @@ impl LyrelApp {
             focused,
             oversized: focused.is_none() && snap.stats().oversized,
             expanded: &overlay.expanded,
+            content: ContentViews {
+                states: &overlay.content,
+                inner,
+            },
         };
         let stale = overlay
             .rows_key
             .as_ref()
             .is_none_or(|held| !held.describes(&from));
         if stale {
-            let rows = match from.preview {
-                Some(file) => crate::ui::diff_list::preview_rows(file, from.mode),
-                None => crate::ui::diff_list::build_rows(
+            let rows = match (mode, from.preview, untracked) {
+                (DiffViewMode::Content, _, Some(path)) => {
+                    match overlay.content.get(path) {
+                        Some(state) => crate::ui::diff_list::content_preview_rows(
+                            path, state, inner,
+                        ),
+                        None => crate::ui::diff_list::content_preview_rows(
+                            path,
+                            &ContentState::Loading,
+                            inner,
+                        ),
+                    }
+                }
+                (_, Some(file), _) => crate::ui::diff_list::preview_rows(file, from.mode),
+                _ => crate::ui::diff_list::build_rows(
                     from.snap,
                     from.expanded,
                     from.focused,
                     from.mode,
                     from.oversized,
+                    &from.content,
                 ),
             };
             let key = from.to_key();
@@ -1424,6 +1768,7 @@ struct RowsFrom<'a> {
     focused: Option<usize>,
     oversized: bool,
     expanded: &'a HashMap<String, bool>,
+    content: ContentViews<'a>,
 }
 
 impl RowsFrom<'_> {
@@ -1435,6 +1780,8 @@ impl RowsFrom<'_> {
             focused: self.focused,
             oversized: self.oversized,
             expanded: self.expanded.clone(),
+            content: self.content.states.clone(),
+            content_inner: self.content.inner,
         }
     }
 }
@@ -1448,6 +1795,13 @@ struct RowsKey {
     focused: Option<usize>,
     oversized: bool,
     expanded: HashMap<String, bool>,
+    /// Content states by path. `Ready` compares by pointer (a re-read that
+    /// found the same bytes lands a fresh `Arc` over an equal file), so a
+    /// landing that changes nothing visible does not rebuild the rows.
+    content: HashMap<String, ContentState>,
+    /// The layout the content rows were built for; a width bucket change
+    /// rebuilds them.
+    content_inner: DiffViewMode,
 }
 
 impl RowsKey {
@@ -1465,7 +1819,9 @@ impl RowsKey {
         self.mode == from.mode
             && self.focused == from.focused
             && self.oversized == from.oversized
+            && self.content_inner == from.content.inner
             && self.expanded == *from.expanded
+            && self.content == *from.content.states
             && self.same_preview(from)
             && (Arc::ptr_eq(&self.snap, from.snap) || self.snap == *from.snap)
     }
@@ -1646,6 +2002,37 @@ fn diff_row_element(
             drag,
             app,
         ),
+        // Content-aware block lines are the same grids the line views draw;
+        // only the surrounding block chrome is new. Selection and copy work
+        // through the same row ids and the synthesized patch file.
+        DiffRow::ContentSplit { row, at } => copy_menu(
+            diff_split_row(row, at, drag, font, app, cx),
+            ix,
+            at,
+            drag,
+            app,
+        ),
+        DiffRow::ContentUnified { row, at } => copy_menu(
+            diff_unified_row(row, at, drag, font, app, cx),
+            ix,
+            at,
+            drag,
+            app,
+        ),
+        DiffRow::ContentBlock(head) => {
+            padded(content_block_row(head, font, app, cx))
+        }
+        DiffRow::ContentAnchor(head) => {
+            padded(content_anchor_row(head, font, app, cx))
+        }
+        DiffRow::ContentElided { count } => padded(note_row(
+            t_fmt(
+                L10nKey::DiffContentElided,
+                &[("count", &count.to_string())],
+            ),
+            cx,
+        )),
+        DiffRow::ContentStatus(key) => padded(note_row(t(*key).to_string(), cx)),
         DiffRow::Truncated(reason) => {
             let note = match reason {
                 Truncation::PerFile => t_fmt(
@@ -1895,6 +2282,215 @@ fn diff_file_header(
     header.into_any_element()
 }
 
+/// The kind word's ink: the same roles the line views use for added and
+/// removed lines, and the info role for a move — the accent family the app
+/// reserves for "a place you can go".
+fn content_kind_color(kind: BlockKind, cx: &gpui_kit::App) -> Hsla {
+    match kind {
+        BlockKind::Added => cx.theme().success,
+        BlockKind::Deleted => cx.theme().danger,
+        BlockKind::Modified => cx.theme().warning,
+        BlockKind::Moved | BlockKind::MovedEdited => cx.theme().info,
+    }
+}
+
+/// `12–34` or `12` for a one-line span.
+fn content_span_text(span: LineSpan) -> String {
+    match span.start == span.end {
+        true => span.start.to_string(),
+        false => format!("{}–{}", span.start, span.end),
+    }
+}
+
+/// The range annotation on a block header: where the block was, where it is.
+fn content_range_text(head: &ContentHead) -> String {
+    match (head.old, head.new) {
+        (Some(old), Some(new)) if old == new => format!("L{}", content_span_text(old)),
+        (Some(old), Some(new)) => {
+            format!("L{} → L{}", content_span_text(old), content_span_text(new))
+        }
+        (Some(old), None) => format!("L{}", content_span_text(old)),
+        (None, Some(new)) => format!("L{}", content_span_text(new)),
+        (None, None) => String::new(),
+    }
+}
+
+/// The icon-only jump control. A `Button` rather than a clickable glyph: it
+/// carries keyboard focus and activation, and its tooltip names what the two
+/// shapes cannot.
+fn content_jump_button(
+    id: (&'static str, usize),
+    tip: L10nKey,
+    target: RowId,
+    app: &gpui_kit::WeakEntity<LyrelApp>,
+    cx: &gpui_kit::App,
+) -> AnyElement {
+    let _ = cx;
+    let app = app.clone();
+    div()
+        .flex_shrink_0()
+        .occlude()
+        .child(
+            Button::new(id)
+                .icon(Icon::new(IconName::Replace))
+                .xsmall()
+                .tooltip(t(tip))
+                .on_click(move |_, _window, cx| {
+                    app.update(cx, |this, cx| this.jump_content_row(target, cx))
+                        .ok();
+                }),
+        )
+        .into_any_element()
+}
+
+/// A content-aware block header: the kind word, the item family and name, the
+/// original and current positions, and the way to the source anchor.
+fn content_block_row(
+    head: &ContentHead,
+    font: &SharedString,
+    app: &gpui_kit::WeakEntity<LyrelApp>,
+    cx: &gpui_kit::App,
+) -> AnyElement {
+    let ink = content_kind_color(head.kind, cx);
+    let label = match head.formatting_only {
+        true => t(L10nKey::DiffContentFormatting),
+        false => t(kind_label(head.kind)),
+    };
+    let mut row = h_flex()
+        .id(("content-block", head.index))
+        .w_full()
+        .items_center()
+        .gap_2()
+        .h(FILE_ROW_H)
+        .px(ROW_INSET)
+        .rounded(ROW_RADIUS)
+        .when(!head.leads, |r| {
+            r.mt_1().border_t(HAIRLINE_W).border_color(hunk_rule(cx))
+        })
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(rems(META))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(ink)
+                .child(label),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(rems(META))
+                .text_color(cx.theme().muted_foreground)
+                .child(t(item_label(head.label))),
+        );
+    if let Some(name) = head.name.as_ref() {
+        row = row.child(
+            div()
+                .min_w_0()
+                .flex_shrink(1.)
+                .truncate()
+                .text_size(rems(TEXT_MONO))
+                .font_family(font.clone())
+                .child(SharedString::from(name.clone())),
+        );
+    }
+    row.child(div().flex_1())
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(rems(META_MONO))
+                .font_family(font.clone())
+                .font_features(tabular())
+                .text_color(cx.theme().muted_foreground)
+                .child(content_range_text(head)),
+        )
+        .when_some(head.jump, |row, target| {
+            row.child(content_jump_button(
+                ("content-jump-source", head.index),
+                L10nKey::DiffContentJumpSource,
+                target,
+                app,
+                cx,
+            ))
+        })
+        .into_any_element()
+}
+
+/// An old-side anchor: the position a block left, and the way to where it
+/// went. The whole row is the target, so a pointer anywhere on it jumps.
+fn content_anchor_row(
+    head: &ContentAnchorHead,
+    font: &SharedString,
+    app: &gpui_kit::WeakEntity<LyrelApp>,
+    cx: &gpui_kit::App,
+) -> AnyElement {
+    let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().window;
+    let hover = gpui_kit::rgb(sf.hover);
+    let app_click = app.clone();
+    let target = head.jump;
+    let mut row = h_flex()
+        .id(("content-anchor", head.index))
+        .w_full()
+        .items_center()
+        .gap_2()
+        .h(FILE_ROW_H)
+        .px(ROW_INSET)
+        .rounded(ROW_RADIUS)
+        .cursor_pointer()
+        .hover(|s| s.bg(hover))
+        .on_click(move |_, _window, cx| {
+            app_click
+                .update(cx, |this, cx| this.jump_content_row(target, cx))
+                .ok();
+        })
+        .child(
+            Icon::new(IconName::ArrowRight)
+                .size(px(crate::ui::window_chrome::TILE_GLYPH_XS))
+                .flex_shrink_0()
+                .text_color(cx.theme().info),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(rems(META))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(cx.theme().info)
+                .child(t_fmt(
+                    L10nKey::DiffContentToLine,
+                    &[("line", &head.new_start.to_string())],
+                )),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(rems(META))
+                .text_color(cx.theme().muted_foreground)
+                .child(t(item_label(head.label))),
+        );
+    if let Some(name) = head.name.as_ref() {
+        row = row.child(
+            div()
+                .min_w_0()
+                .flex_shrink(1.)
+                .truncate()
+                .text_size(rems(META_MONO))
+                .font_family(font.clone())
+                .text_color(cx.theme().muted_foreground)
+                .child(SharedString::from(name.clone())),
+        );
+    }
+    row.child(div().flex_1())
+        .child(
+            div()
+                .flex_shrink_0()
+                .text_size(rems(META_MONO))
+                .font_family(font.clone())
+                .font_features(tabular())
+                .text_color(cx.theme().muted_foreground)
+                .child(format!("L{}", content_span_text(head.old))),
+        )
+        .into_any_element()
+}
+
 // An untracked file has no patch in the snapshot, so it cannot be expanded in
 // place the way the files above it are — its contents are read one file at a
 // time and shown on their own. The row asks for that read, which until now
@@ -2119,6 +2715,20 @@ fn view_mode(cx: &gpui_kit::App) -> DiffViewMode {
     cx.try_global::<Config>()
         .map(|cfg| cfg.diff_view)
         .unwrap_or_default()
+}
+
+/// The width below which the content-aware view folds its paired columns into
+/// a single sequence. A docked diff is often half a window wide; below this
+/// each of two columns would be too narrow to read code in.
+const CONTENT_PAIRED_MIN_WIDTH: Pixels = px(560.);
+
+/// Which layout a content-aware block's inner lines use: the paired view when
+/// the surface can carry two columns, a single sequence otherwise.
+fn content_inner_mode(width: Pixels) -> DiffViewMode {
+    match f32::from(width) >= f32::from(CONTENT_PAIRED_MIN_WIDTH) {
+        true => DiffViewMode::Split,
+        false => DiffViewMode::Unified,
+    }
 }
 
 /// The change column. `−` is U+2212, matching the split view: the ASCII hyphen
@@ -2754,8 +3364,8 @@ mod tests {
         let shut = |path: &str| -> HashMap<String, bool> {
             [(path.to_string(), false)].into_iter().collect()
         };
-        let open = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Unified, false);
-        let middle_shut = build_rows(&snap, &shut("b.rs"), None, DiffViewMode::Unified, false);
+        let open = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Unified, false, &ContentViews::default());
+        let middle_shut = build_rows(&snap, &shut("b.rs"), None, DiffViewMode::Unified, false, &ContentViews::default());
 
         let (replaced, with) = spliced_range(&open, &middle_shut);
         assert_eq!(
@@ -2782,7 +3392,7 @@ mod tests {
             files: vec![small_file("a.rs", 2)],
             ..Default::default()
         };
-        let rows = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Unified, false);
+        let rows = build_rows(&snap, &HashMap::new(), None, DiffViewMode::Unified, false, &ContentViews::default());
 
         let (replaced, with) = spliced_range(&[], &rows);
         assert_eq!((replaced.start, replaced.end, with), (0, 0, rows.len()));
@@ -2819,6 +3429,7 @@ mod tests {
             focused: None,
             oversized: false,
             expanded: &expanded,
+            content: ContentViews::default(),
         }
         .to_key();
         let landed_from = RowsFrom {
@@ -2828,6 +3439,7 @@ mod tests {
             focused: None,
             oversized: false,
             expanded: &expanded,
+            content: ContentViews::default(),
         };
 
         assert!(
@@ -3370,10 +3982,14 @@ mod overlay_gpui_tests {
     /// unset global or a panicking helper shows up here rather than the first
     /// time somebody opens a commit.
     #[gpui_kit::test]
-    fn every_source_renders_in_both_views(cx: &mut TestAppContext) {
+    fn every_source_renders_in_every_view(cx: &mut TestAppContext) {
         let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
 
-        for mode in [DiffViewMode::Split, DiffViewMode::Unified] {
+        for mode in [
+            DiffViewMode::Split,
+            DiffViewMode::Unified,
+            DiffViewMode::Content,
+        ] {
             app.update_in(&mut vcx, |app, _, cx| {
                 app.update_config(cx, |cfg| cfg.diff_view = mode);
             });
@@ -3426,6 +4042,9 @@ mod overlay_gpui_tests {
 
         app.update_in(&mut vcx, |app, _, cx| app.toggle_diff_view_mode(cx));
         assert_eq!(mode(&mut vcx), DiffViewMode::Unified);
+
+        app.update_in(&mut vcx, |app, _, cx| app.toggle_diff_view_mode(cx));
+        assert_eq!(mode(&mut vcx), DiffViewMode::Content, "and on to the structure");
 
         app.update_in(&mut vcx, |app, _, cx| app.toggle_diff_view_mode(cx));
         assert_eq!(mode(&mut vcx), DiffViewMode::Split, "and back again");
@@ -3864,6 +4483,8 @@ mod selection_gpui_tests {
                 preview_loading: None,
                 selection: None,
                 selecting: false,
+                content: HashMap::new(),
+                content_epoch: 0,
                 list: gpui_kit::ListState::new(0, gpui_kit::ListAlignment::Top, px(256.))
                     .with_uniform_item_height(DIFF_LINE_H),
                 rows: Rc::new(Vec::new()),
@@ -3999,7 +4620,7 @@ mod selection_gpui_tests {
             cx.set_global(cfg);
         });
         app.update_in(&mut vcx, |this, _, cx| {
-            let _ = this.sync_diff_rows(cx);
+            let _ = this.sync_diff_rows(DiffViewMode::Split, cx);
         });
         assert!(selection(&app, &mut vcx).is_none());
     }
@@ -4064,12 +4685,360 @@ mod selection_gpui_tests {
                 let overlay = this.tabs[active].diff_overlay.as_mut().unwrap();
                 overlay.expanded.insert("src/above.rs".to_string(), false);
             }
-            let _ = this.sync_diff_rows(cx);
+            let _ = this.sync_diff_rows(DiffViewMode::Split, cx);
         });
         assert_eq!(
             copied(&app, &mut vcx).as_deref(),
             Some("b\nc\nB"),
             "the range still names the same three lines of the same file"
+        );
+    }
+}
+
+/// The Content-aware view through the Diff workbench seam: a real repository
+/// on the local Host, the production overlay and probe, and the rows it draws.
+#[cfg(test)]
+mod content_view_tests {
+    use super::*;
+    use crate::ui::app::{render_probe, test_window};
+    use crate::ui::content_diff::{ContentFailure, ContentState};
+    use crate::ui::scm::diff::{DiffLine, Hunk};
+    use gpui_kit::{Entity, TestAppContext, VisualTestContext};
+    use lyrel_ui_base::host_ops::HostId;
+    use std::path::PathBuf;
+    use std::time::{Duration, Instant};
+
+    /// A repository whose index holds the "before" file and whose working
+    /// tree holds a moved-and-edited "after". No commit is needed: the
+    /// unstaged comparison is index → working tree.
+    fn repository() -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::tempdir().unwrap();
+        let root = lyrel_core::core::path_spelling::local_spelling_buf(
+            std::fs::canonicalize(temp.path()).unwrap(),
+        );
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .output()
+                .expect("git runs");
+            assert!(out.status.success(), "git {args:?} failed");
+        };
+        git(&["init", "--quiet"]);
+        std::fs::write(
+            root.join("a.rs"),
+            "fn alpha() {}\n\nfn beta() {\n    println!(\"beta\");\n}\n\nfn gamma() {}\n",
+        )
+        .unwrap();
+        git(&["add", "a.rs"]);
+        // beta moved below gamma and its body changed.
+        std::fs::write(
+            root.join("a.rs"),
+            "fn alpha() {}\n\nfn gamma() {}\n\nfn beta() {\n    println!(\"beta v2\");\n}\n",
+        )
+        .unwrap();
+        (temp, root)
+    }
+
+    /// Open the production overlay on `root` in the Content view, letting its
+    /// own probe read the patch; only the expansion choice is seeded, the way
+    /// a reader's click would.
+    fn open(
+        app: &Entity<LyrelApp>,
+        vcx: &mut VisualTestContext,
+        root: &Path,
+        focus: Option<&str>,
+        expanded: &[&str],
+    ) {
+        let root = root.to_path_buf();
+        let focus = focus.map(str::to_string);
+        let expanded: Vec<String> = expanded.iter().map(|p| p.to_string()).collect();
+        app.update_in(vcx, |app, window, cx| {
+            let mut cfg = cx.global::<Config>().clone();
+            cfg.diff_view = DiffViewMode::Content;
+            cx.set_global(cfg);
+            app.open_diff_overlay(
+                HostId::LOCAL,
+                root.clone(),
+                DiffSource::Worktree,
+                focus,
+                window,
+                cx,
+            );
+            let active = app.tabs.active_index();
+            let overlay = app.tabs[active]
+                .diff_overlay
+                .as_mut()
+                .expect("an overlay is open");
+            for path in expanded {
+                overlay.expanded.insert(path, true);
+            }
+        });
+    }
+
+    /// Draw one real frame, so `sync_diff_rows` flattens the rows and the
+    /// content dispatch runs.
+    fn frame(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) {
+        render_probe::arm(10_000);
+        app.update_in(vcx, |_, _, cx| cx.notify());
+        vcx.background_executor.run_until_parked();
+    }
+
+    /// Pump until the overlay's own probe has landed and every named file has
+    /// a content state matching `ready`. A frame is drawn each lap: the
+    /// content reads are dispatched from render.
+    fn pump_until(
+        app: &Entity<LyrelApp>,
+        vcx: &mut VisualTestContext,
+        mut done: impl FnMut(&LyrelApp) -> bool,
+    ) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            vcx.executor().advance_clock(Duration::from_millis(300));
+            vcx.run_until_parked();
+            frame(app, vcx);
+            if app.update_in(vcx, |app, _, _| done(app)) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "condition did not settle");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn overlay_ready(app: &LyrelApp, path: &str) -> bool {
+        let Some(overlay) = app.tabs[app.tabs.active_index()].diff_overlay.as_ref() else {
+            return false;
+        };
+        app.diff_probes.inflight() == 0
+            && !overlay.loading
+            && matches!(overlay.content.get(path), Some(ContentState::Ready(_)))
+    }
+
+    fn rows(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext) -> Rc<Vec<DiffRow>> {
+        app.update_in(vcx, |app, _, _| {
+            Rc::clone(
+                &app.tabs[app.tabs.active_index()]
+                    .diff_overlay
+                    .as_ref()
+                    .expect("an overlay is open")
+                    .rows,
+            )
+        })
+    }
+
+    #[gpui_kit::test]
+    fn a_moved_and_edited_function_reads_as_one_block_with_its_source(cx: &mut TestAppContext) {
+        let (_temp, root) = repository();
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open(&app, &mut vcx, &root, Some("a.rs"), &["a.rs"]);
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        frame(&app, &mut vcx);
+
+        let rows = rows(&app, &mut vcx);
+        let beta = rows
+            .iter()
+            .find_map(|row| match row {
+                DiffRow::ContentBlock(head) if head.name.as_deref() == Some("beta") => Some(head),
+                _ => None,
+            })
+            .expect("beta is a content block");
+        assert_eq!(beta.kind, BlockKind::MovedEdited);
+        assert_eq!(beta.old, Some(LineSpan { start: 3, end: 5 }));
+        assert_eq!(beta.new, Some(LineSpan { start: 5, end: 7 }));
+        assert!(beta.jump.is_some(), "a moved block can jump to its source");
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                DiffRow::ContentAnchor(anchor)
+                    if anchor.name.as_deref() == Some("beta") && anchor.new_start == 5
+            )),
+            "the old position keeps a jumpable anchor"
+        );
+        // The harness window is wide enough for the paired layout.
+        assert!(
+            rows.iter().any(|row| matches!(row, DiffRow::ContentSplit { .. })),
+            "inner edits are drawn in the paired layout"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn copying_a_block_line_takes_the_original_side(cx: &mut TestAppContext) {
+        let (_temp, root) = repository();
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open(&app, &mut vcx, &root, Some("a.rs"), &["a.rs"]);
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        frame(&app, &mut vcx);
+
+        // The removed line inside beta's block: its row id indexes the
+        // synthesized hunk, and the original-side text is what copy takes.
+        let (row_id, original) = app.update_in(&mut vcx, |app, _, _| {
+            let overlay = app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .unwrap();
+            let ContentState::Ready(cf) = overlay.content.get("a.rs").unwrap() else {
+                panic!("content is ready");
+            };
+            for (hunk_ix, hunk) in cf.file.hunks.iter().enumerate() {
+                for (row, line) in hunk.lines.iter().enumerate() {
+                    if line.kind == LineKind::Removed && line.text.contains("println!(\"beta\")") {
+                        return (
+                            RowId {
+                                hunk: hunk_ix,
+                                row,
+                            },
+                            line.text.clone(),
+                        );
+                    }
+                }
+            }
+            panic!("beta's removed line is in the synthesized file");
+        });
+
+        let at = RowAt {
+            path: SharedString::from("a.rs"),
+            id: row_id,
+        };
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.start_diff_selection(&at, DiffViewMode::Split, Some(Side::Old), window, cx);
+            app.extend_diff_selection(&at, Some(Side::Old), Some(MouseButton::Left), cx);
+            app.copy_diff_selection(cx);
+        });
+        let copied = vcx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
+        assert_eq!(copied.as_deref(), Some(original.as_str()));
+    }
+
+    #[gpui_kit::test]
+    fn a_narrow_dock_folds_the_blocks_into_one_column(cx: &mut TestAppContext) {
+        let (_temp, root) = repository();
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open(&app, &mut vcx, &root, Some("a.rs"), &["a.rs"]);
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+
+        vcx.simulate_resize(gpui_kit::size(gpui_kit::px(480.), gpui_kit::px(900.)));
+        frame(&app, &mut vcx);
+        let narrow = rows(&app, &mut vcx);
+        assert!(
+            narrow.iter().any(|row| matches!(row, DiffRow::ContentUnified { .. })),
+            "a narrow dock draws the single-column sequence"
+        );
+        assert!(
+            !narrow.iter().any(|row| matches!(row, DiffRow::ContentSplit { .. })),
+            "and not the paired one"
+        );
+
+        vcx.simulate_resize(gpui_kit::size(gpui_kit::px(900.), gpui_kit::px(900.)));
+        frame(&app, &mut vcx);
+        let wide = rows(&app, &mut vcx);
+        assert!(
+            wide.iter().any(|row| matches!(row, DiffRow::ContentSplit { .. })),
+            "a wide surface pairs the columns again"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn an_unsupported_file_explains_itself_and_keeps_the_line_diff(cx: &mut TestAppContext) {
+        let (_temp, root) = repository();
+        // Intent-to-add makes the new text file part of `git diff`, so the
+        // overlay's own probe lists it and the Content view must explain it.
+        std::fs::write(root.join("notes.txt"), "hello\n").unwrap();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&root)
+                .output()
+                .expect("git runs");
+            assert!(out.status.success(), "git {args:?} failed");
+        };
+        git(&["add", "-N", "notes.txt"]);
+
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        open(&app, &mut vcx, &root, None, &["a.rs", "notes.txt"]);
+        pump_until(&app, &mut vcx, |app| {
+            overlay_ready(app, "a.rs")
+                && app.tabs[app.tabs.active_index()]
+                    .diff_overlay
+                    .as_ref()
+                    .is_some_and(|o| {
+                        matches!(
+                            o.content.get("notes.txt"),
+                            Some(ContentState::Failed(ContentFailure::Unsupported))
+                        )
+                    })
+        });
+        frame(&app, &mut vcx);
+
+        let rows = rows(&app, &mut vcx);
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                DiffRow::ContentStatus(L10nKey::DiffContentUnsupported)
+            )),
+            "the fallback names its reason"
+        );
+        assert!(
+            rows.iter().any(|row| matches!(row, DiffRow::Split { .. })),
+            "and the ordinary line diff still draws"
+        );
+        assert_eq!(
+            vcx.update(|_, cx| cx.global::<Config>().diff_view),
+            DiffViewMode::Content,
+            "a fallback never rewrites the configured mode"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_supplied_patch_is_explained_not_read(cx: &mut TestAppContext) {
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        let root = PathBuf::from("/no/such/lyrel/repo");
+        app.update_in(&mut vcx, |app, window, cx| {
+            let mut cfg = cx.global::<Config>().clone();
+            cfg.diff_view = DiffViewMode::Content;
+            cx.set_global(cfg);
+            let snap = DiffSnapshot {
+                root: root.clone(),
+                source: DiffSource::Patch {
+                    id: "owner/repo#1".into(),
+                    label: None,
+                },
+                branch: "main".into(),
+                files: vec![FileDiff {
+                    path: "a.rs".into(),
+                    old_path: None,
+                    status: FileStatus::Modified,
+                    added: 1,
+                    removed: 1,
+                    binary: false,
+                    truncated: None,
+                    hunks: vec![Hunk {
+                        header: "@@ -1,2 +1,2 @@".into(),
+                        lines: vec![DiffLine {
+                            kind: LineKind::Context,
+                            old_no: Some(1),
+                            new_no: Some(1),
+                            text: "keep".into(),
+                        }],
+                    }],
+                }],
+                ..Default::default()
+            };
+            app.open_supplied_diff(HostId::LOCAL, Arc::new(snap), Some("a.rs".into()), window, cx);
+            let active = app.tabs.active_index();
+            let overlay = app.tabs[active].diff_overlay.as_mut().unwrap();
+            overlay.expanded.insert("a.rs".to_string(), true);
+        });
+        frame(&app, &mut vcx);
+        let rows = rows(&app, &mut vcx);
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                DiffRow::ContentStatus(L10nKey::DiffContentPatchOnly)
+            )),
+            "a patch-only comparison explains itself"
+        );
+        assert_eq!(
+            vcx.update(|_, cx| cx.global::<Config>().diff_view),
+            DiffViewMode::Content
         );
     }
 }

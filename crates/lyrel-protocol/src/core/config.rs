@@ -1713,6 +1713,12 @@ pub enum DiffViewMode {
     #[default]
     Split,
     Unified,
+    /// Structural view: moves, modifications, additions and deletions by
+    /// content, with original-side positions. A build without it folds an
+    /// unknown `"content"` back to the default through `de_lenient`, and the
+    /// view falls back to the line layout with an explanation when a file
+    /// cannot be compared structurally.
+    Content,
 }
 
 /// The detail panel's resting width: the v4 design's 280px column, which is

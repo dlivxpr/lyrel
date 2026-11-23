@@ -138,7 +138,7 @@ pub(crate) enum HunkRows {
 impl HunkRows {
     pub(crate) fn build(mode: DiffViewMode, lines: &[DiffLine]) -> Self {
         match mode {
-            DiffViewMode::Split => Self::Split(split_hunk(lines)),
+            DiffViewMode::Split | DiffViewMode::Content => Self::Split(split_hunk(lines)),
             DiffViewMode::Unified => Self::Unified(unified_rows(lines)),
         }
     }
