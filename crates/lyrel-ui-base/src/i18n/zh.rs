@@ -2503,6 +2503,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::BrowserForward => "前进",
         L10nKey::BrowserReload => "重新加载",
         L10nKey::BrowserOpenExternal => "在系统浏览器中打开",
+        L10nKey::BrowserReconnect => "重新连接",
         L10nKey::BrowserHostLocal => "本机",
         L10nKey::BrowserHostRemote => "{host}",
         L10nKey::BrowserStarting => "正在加载页面",

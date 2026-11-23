@@ -856,6 +856,10 @@ pub(crate) struct PaneForwardCtx {
     /// local daemon — which is what `query_procs` asks — has never heard of
     /// them and answers with an empty list.
     pub(crate) host: Option<lyrel_ui_base::host_ops::SharedHost>,
+    /// The durable Host binding a Side Panel preview of one of this pane's
+    /// ports uses (#392). `None` for a local pane and for a plain SSH pane,
+    /// whose connection has no Workspace identity to restore a tab against.
+    pub(crate) remote_ref: Option<lyrel_core::core::session::RemoteRef>,
 }
 
 /// What a session row draws in its value column.
@@ -3033,6 +3037,14 @@ impl LyrelApp {
                 tiles_wide += 1;
                 let port = p.port;
                 let direct = p.authority();
+                // A managed remote Workspace opens the preview in the Side
+                // Panel, bound to its Host (#392). A socket pinned to one
+                // specific interface is not a loopback forward target, so it
+                // keeps the existing system-browser path.
+                let preview_host = ctx
+                    .remote_ref
+                    .clone()
+                    .filter(|_| lyrel_core::daemon::protocol::PortEntry::reaches_loopback(&p.addr));
                 actions = actions.child(
                     self.info_tile(
                         ("panel-port-open", i),
@@ -3041,7 +3053,7 @@ impl LyrelApp {
                         cx,
                     )
                     .on_click(cx.listener(move |this, _, _window, cx| {
-                        this.open_pane_port(port, direct.clone(), cx)
+                        this.open_pane_port(port, direct.clone(), preview_host.clone(), cx)
                     })),
                 );
             }
@@ -3217,6 +3229,7 @@ impl LyrelApp {
         &mut self,
         port: u16,
         direct_authority: String,
+        preview_host: Option<lyrel_core::core::session::RemoteRef>,
         cx: &mut Context<Self>,
     ) {
         use lyrel_terminal::view::PortRoute;
@@ -3224,6 +3237,14 @@ impl LyrelApp {
             PortRoute::Blocked => {}
             PortRoute::Direct => cx.open_url(&format!("http://{direct_authority}")),
             PortRoute::Forward => {
+                // A managed remote Workspace previews the page in the Side
+                // Panel, bound to its Host: the original `localhost:port`
+                // address stays the page's identity and the browser verifies
+                // the forward before load and external open (#392).
+                if let Some(host) = preview_host {
+                    self.open_web_page(&format!("http://localhost:{port}"), Some(host), cx);
+                    return;
+                }
                 if let Some(f) = self
                     .loopback_panel
                     .managed()
@@ -3314,6 +3335,9 @@ impl LyrelApp {
             host: (!view.host_id().is_local())
                 .then(|| view.host(cx))
                 .flatten(),
+            remote_ref: view.workspace().and_then(|workspace| {
+                lyrel_ui_base::session::WorkspaceStore::remote_ref(cx, workspace.workspace)
+            }),
         })
     }
 

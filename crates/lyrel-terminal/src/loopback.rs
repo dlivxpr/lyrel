@@ -24,8 +24,21 @@ impl LoopbackUrl {
         )
     }
 
+    /// The page's origin as the Host itself spells loopback — what the Side
+    /// Panel address bar keeps showing for a forwarded page (#392).
+    pub fn origin(&self) -> String {
+        format!("{}://{}:{}", self.scheme, self.host.url_host(), self.port)
+    }
+
+    /// The origin a verified forward serves the page on. A forward always
+    /// listens on the desktop's IPv4 loopback, so this is the origin the
+    /// browser's site data is scoped to.
+    pub fn forwarded_origin(&self, local_port: u16) -> String {
+        format!("{}://127.0.0.1:{}", self.scheme, local_port)
+    }
+
     pub fn forwarded_url(&self, local_port: u16) -> String {
-        format!("{}://127.0.0.1:{}{}", self.scheme, local_port, self.suffix)
+        format!("{}{}", self.forwarded_origin(local_port), self.suffix)
     }
 
     pub fn forward_host(&self) -> &'static str {
@@ -151,6 +164,8 @@ mod tests {
         assert_eq!(url.host, LoopbackHost::Localhost);
         assert_eq!(url.port, 3000);
         assert_eq!(url.normalized(), "https://localhost:3000/a?b=1#c");
+        assert_eq!(url.origin(), "https://localhost:3000");
+        assert_eq!(url.forwarded_origin(49152), "https://127.0.0.1:49152");
         assert_eq!(url.forwarded_url(49152), "https://127.0.0.1:49152/a?b=1#c");
 
         assert_eq!(

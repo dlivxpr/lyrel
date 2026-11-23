@@ -40,13 +40,25 @@ pub(crate) fn classify(address: &str) -> Route {
         return Route::Deny;
     };
     let scheme = &trimmed[..sep];
+    let rest = &trimmed[sep + SCHEME_SEP.len()..];
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
     match scheme.to_ascii_lowercase().as_str() {
-        "http" | "https" => Route::Load,
+        // A page needs a host to load: `http://` alone has nowhere to go and
+        // is refused here rather than handed to a host.
+        "http" | "https" if !authority.is_empty() => Route::Load,
         // `about:blank` has no `://`; handled above. Everything else —
         // file:, ftp:, data:, javascript:, custom schemes — stays inside the
         // app's deny path.
         _ => Route::Deny,
     }
+}
+
+/// The origin of `address` when it points at this machine's loopback. The
+/// forwarded-endpoint guard compares exactly this value: the scheme, the
+/// loopback host spelling and the port together are the origin web storage
+/// is scoped to.
+pub(crate) fn loopback_origin(address: &str) -> Option<String> {
+    lyrel_terminal::loopback::parse_loopback_url(address).map(|loopback| loopback.origin())
 }
 
 /// Whether `address` spells the built-in blank page.

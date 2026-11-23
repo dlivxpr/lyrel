@@ -260,6 +260,18 @@ impl TerminalView {
     }
 
     fn open_url(&self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // A loopback link in a managed remote Workspace belongs in the Side
+        // Panel browser, bound to that Host (#392). The app owns the tab and
+        // the verified forward; the terminal must not build a system-browser
+        // URL from a port the app has not verified.
+        if matches!(self.loopback_plan(cx), LoopbackPlan::ForwardOnWorkspace(_))
+            && let Some(loopback) = crate::loopback::parse_loopback_url(url)
+        {
+            cx.emit(lyrel_ui_base::web_preview::OpenWebPageRequested {
+                address: loopback.normalized(),
+            });
+            return;
+        }
         match self.forwarded_loopback_url(url, cx) {
             LoopbackOpen::Forwarded(url) => cx.open_url(&url),
             LoopbackOpen::NotLoopback => cx.open_url(url),

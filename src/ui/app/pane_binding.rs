@@ -330,6 +330,7 @@ impl LyrelApp {
         .detach();
         Self::watch_terminal_scm(view, cx);
         Self::watch_open_file_requests(view, window, cx);
+        Self::watch_open_web_requests(view, window, cx);
         let handle = view.read(cx).focus_handle.clone();
         Self::watch_pane_focus(&handle, view.entity_id(), window, cx);
     }
@@ -431,6 +432,31 @@ impl LyrelApp {
                 {
                     app.open_linked_file(&ev.path, ev.line, ev.column, ev.is_dir, window, cx);
                 }
+            },
+        )
+        .detach();
+    }
+
+    /// A loopback link clicked in a managed remote Workspace pane opens a
+    /// Side Panel page bound to that Workspace's Host (#392). The app builds
+    /// the durable Host binding and the browser verifies the forward before
+    /// anything loads.
+    fn watch_open_web_requests(
+        view: &Entity<TerminalView>,
+        window: &mut Window,
+        cx: &mut Context<LyrelApp>,
+    ) {
+        cx.subscribe_in(
+            view,
+            window,
+            |app, view, ev: &lyrel_ui_base::web_preview::OpenWebPageRequested, _window, cx| {
+                let workspace = view.read(cx).workspace().map(|ws| ws.workspace);
+                let Some(host) = workspace
+                    .and_then(|id| lyrel_ui_base::session::WorkspaceStore::remote_ref(cx, id))
+                else {
+                    return;
+                };
+                app.open_web_page(&ev.address, Some(host), cx);
             },
         )
         .detach();

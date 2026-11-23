@@ -39,3 +39,4 @@ pub mod scm_snapshot;
 pub mod scrollbar;
 pub mod session;
 pub mod ssh_config;
+pub mod web_preview;
