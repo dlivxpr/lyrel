@@ -412,6 +412,7 @@ pub struct LyrelApp {
     pub(crate) lyrel_usage_view: Option<Entity<crate::ui::lyrel_usage::LyrelUsageView>>,
     pub(crate) disk_view: Option<Entity<crate::ui::host_disk::HostDiskView>>,
     pub(crate) notification_bell: Entity<crate::ui::notification_history::NotificationBell>,
+    _notification_bell_sub: Subscription,
     pub(crate) program_attention: crate::ui::program_attention::ProgramAttention,
     pub(crate) status_document_focus: Option<(TabId, bool)>,
     pub(crate) connect: crate::ui::remote_workspace::connection::WindowConnection,

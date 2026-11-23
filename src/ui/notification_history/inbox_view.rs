@@ -27,6 +27,16 @@ pub(crate) struct NotificationBell {
     _navigation: Subscription,
 }
 
+/// The inbox popover opening or closing. The workbench uses this to give way
+/// its native surfaces (#403); the popover itself stays the owner of focus
+/// and dismissal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NotificationBellEvent {
+    OpenChanged(bool),
+}
+
+impl EventEmitter<NotificationBellEvent> for NotificationBell {}
+
 impl NotificationBell {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
         ensure(cx);
@@ -55,6 +65,28 @@ impl NotificationBell {
             _navigation: navigation,
         }
     }
+
+    /// Whether the inbox popover is up. Read by the window's native-surface
+    /// cover check as a second, state-derived signal beside the event.
+    pub(crate) fn is_open(&self) -> bool {
+        self.open
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_open_for_test(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.open == open {
+            return;
+        }
+        self.open = open;
+        if open {
+            self.view.update(cx, |view, cx| {
+                view.detail = None;
+                cx.notify();
+            });
+        }
+        cx.emit(NotificationBellEvent::OpenChanged(open));
+        cx.notify();
+    }
 }
 
 impl Render for NotificationBell {
@@ -74,6 +106,7 @@ impl Render for NotificationBell {
                         cx.notify();
                     });
                 }
+                cx.emit(NotificationBellEvent::OpenChanged(*open));
                 cx.notify();
             }))
             .trigger(

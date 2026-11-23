@@ -563,6 +563,10 @@ impl LyrelApp {
         let detach_caret = self.detach_caret(window, cx);
         let main_layout = self.render_work_area(window, cx);
         let status_bar = self.render_status_bar(window, cx);
+        // Ordinary toasts sit at the content area's lower-right edge while a
+        // web page is visible: clear of the WebView and above the global
+        // status bar. This never hides the page (#403).
+        self.apply_toast_clearance(window, cx);
 
         let window_bg = crate::ui::theme::workspace_background(cx);
         let bg_image = window_background_image_layer(cx);

@@ -10,7 +10,7 @@ use lyrel_ui_base::host_registry::HostId;
 use lyrel_ui_base::session::WorkspaceStore;
 
 mod inbox_view;
-pub(crate) use inbox_view::NotificationBell;
+pub(crate) use inbox_view::{NotificationBell, NotificationBellEvent};
 #[cfg(test)]
 mod tests;
 

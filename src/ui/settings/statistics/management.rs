@@ -96,7 +96,9 @@ impl SettingsWindow {
         });
         let owner = app.downgrade();
         let cancel_owner = owner.clone();
+        let cover = lyrel_ui_base::native_surface::cover(window, cx);
         window.open_dialog(cx, move |dialog, window, _| {
+            let close_cover = cover.clone();
             let body_height = (window.viewport_size().height - window.rem_size() * 12.)
                 .max(window.rem_size() * 8.);
             dialog
@@ -133,6 +135,7 @@ impl SettingsWindow {
                 .on_close({
                     let owner = owner.clone();
                     move |_, _, cx| {
+                        close_cover.release(cx);
                         let _ = owner.update(cx, |app, cx| {
                             if let Some(settings) = app.active_settings_mut() {
                                 settings.statistics.management.surface = None;
