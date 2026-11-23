@@ -3210,7 +3210,7 @@ mod tests {
         let mut opened = false;
         while let Ok(request) = seen.try_recv() {
             if let ControlRequest::Sqlite { request } = request
-                && matches!(&**request, SqliteRequest::Open { .. })
+                && matches!(request.as_ref(), SqliteRequest::Open { .. })
             {
                 opened = true;
             }
