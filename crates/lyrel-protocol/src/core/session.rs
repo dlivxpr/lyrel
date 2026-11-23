@@ -414,9 +414,10 @@ pub struct WindowView {
 
 /// One browser page's durable identity, persisted in a workspace's tool
 /// layout (#391). Live page state — the rendered title, scroll position, an
-/// unsubmitted form — belongs to the surface and is deliberately not here;
-/// the title kept is the last one the page reported, a display hint for the
-/// tab label between restore and the first live update.
+/// unsubmitted form, and an agent preview's originating pane — belongs to the
+/// live window and is deliberately not here; the title kept is the last one
+/// the page reported, a display hint for the tab label between restore and
+/// the first live update.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WebTabState {
     /// The tab's stable instance id: durable across restarts, unique inside
@@ -434,24 +435,22 @@ pub struct WebTabState {
     /// label only — the live page replaces it on the first update.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
-    /// The agent pane that asked for this preview, when one did (#393).
-    /// Persisted with the tab so the explicit screenshot-and-feedback action
-    /// still names its originating pane after a restart; the live check
-    /// happens in the window, which never trusts a remembered id alone.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<PreviewSourceState>,
 }
 
-/// The stable identity of the pane that requested one preview (#393).
+/// The live identity of the pane that requested one preview (#393).
 ///
 /// `workspace` is the machine-side workspace the pane lives in — for a
 /// remote tab, the workspace id inside that machine's tree; the tab's
 /// [`WebTabState::host`] is what turns it into a window. `pane` is the
-/// daemon's pane id, stable for the pane's life. `scratch` is an absolute
-/// directory on the pane's own Host where an explicitly shared screenshot is
-/// written; it was chosen by the requesting process on that Host, never by a
-/// web page.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// daemon's pane id. `scratch` is an absolute directory on the pane's own
+/// Host where an explicitly shared screenshot is written; it was chosen by
+/// the requesting process on that Host, never by a web page.
+///
+/// This value is held only in the live window, never persisted: a numeric
+/// pane id is meaningful only to the daemon incarnation that assigned it.
+/// A restored preview therefore has no source at all, and the window binds
+/// a fresh request to the live view and Host connection it actually found.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewSourceState {
     /// The workspace the requesting pane lives in, as the owning machine
     /// spells it.
@@ -459,7 +458,6 @@ pub struct PreviewSourceState {
     /// The daemon pane id the preview belongs to.
     pub pane: u64,
     /// An absolute directory on that pane's Host for shared screenshots.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub scratch: String,
 }
 
@@ -1042,7 +1040,6 @@ mod tests {
                     address: "http://127.0.0.1:3000".into(),
                     host: None,
                     title: String::new(),
-                    source: None,
                 }),
                 TabEntryState::Tool(Scm),
             ],
@@ -1149,7 +1146,6 @@ mod tests {
             },
             WorkspaceId::new(),
         );
-        let source_workspace = WorkspaceId::new();
         let state = ToolLayoutState {
             version: ToolLayoutState::CURRENT_VERSION,
             order: vec![
@@ -1159,40 +1155,49 @@ mod tests {
                     address: "http://localhost:5173".into(),
                     host: None,
                     title: "Vite".into(),
-                    source: None,
                 }),
                 TabEntryState::Web(WebTabState {
                     id: "web-remote".into(),
                     address: "http://127.0.0.1:8080".into(),
                     host: Some(remote),
                     title: String::new(),
-                    source: Some(PreviewSourceState {
-                        workspace: source_workspace,
-                        pane: 42,
-                        scratch: "/tmp/lyrel-preview".into(),
-                    }),
                 }),
             ],
             active: TabSelectionState::Web("web-remote".into()),
             last_used: Info,
             open: true,
         };
-        let back: ToolLayoutState = serde_json::from_str(&serde_json::to_string(&state).unwrap())
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(
+            !json.contains("\"source\""),
+            "a preview's live pane binding is never part of the saved layout: {json}"
+        );
+        let back: ToolLayoutState = serde_json::from_str(&json)
             .expect("web tabs keep their ids, order, addresses and Host bindings");
         assert_eq!(back, state);
         assert!(
-            matches!(
-                &back.order[2],
-                TabEntryState::Web(tab)
-                    if tab.source.as_ref().is_some_and(|source| source.pane == 42)
-            ),
-            "the requesting pane is part of the tab's durable identity"
-        );
-        // A local tab stays uncluttered: no host field at all.
-        let json = serde_json::to_string(&state).unwrap();
-        assert!(
             json.contains("\"web-local\""),
             "the stable instance id is the durable handle"
+        );
+
+        // A record written by the build that did persist an agent preview's
+        // pane still reads: the remembered number is ignored, so restoration
+        // has no source to send to until a fresh request binds one.
+        let source_workspace = WorkspaceId::new();
+        let legacy = format!(
+            r#"{{"version":2,"order":[{{"id":"web-preview","address":"http://localhost:5173","source":{{"workspace":"{source_workspace}","pane":42,"scratch":"/tmp/lyrel-preview"}}}}],"active":{{"web":"web-preview"}},"last_used":"info","open":true}}"#
+        );
+        let restored: ToolLayoutState = serde_json::from_str(&legacy)
+            .expect("a layout carrying an old preview source stays readable");
+        assert!(matches!(
+            &restored.order[0],
+            TabEntryState::Web(tab)
+                if tab.id == "web-preview" && tab.address == "http://localhost:5173"
+        ));
+        let rewritten = serde_json::to_string(&restored).unwrap();
+        assert!(
+            !rewritten.contains("\"source\""),
+            "the next save drops the stale source: {rewritten}"
         );
     }
 

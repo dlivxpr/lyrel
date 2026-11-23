@@ -389,10 +389,13 @@ fn run_request(
                     "the preview scratch directory must be absolute on this machine",
                 ));
             }
+            // Delivery is targeted to the one link that holds this
+            // workspace and negotiated preview support; `false` means there
+            // is no eligible GUI and nothing was broadcast.
             let delivered =
                 conn.identity
                     .preview_open(&workspace.id.to_string(), pane, url, &scratch);
-            (ReplyOk::Bool(delivered > 0), Vec::new())
+            (ReplyOk::Bool(delivered), Vec::new())
         }
 
         ControlRequest::MachineGet => (

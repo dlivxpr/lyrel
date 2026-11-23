@@ -367,7 +367,7 @@ native-markdown-tests = [
 members = ["crates/*"]
 # 默认成员面向 Windows/macOS；此清单不随构建目标变化。
 # Linux headless 用 CI 与安装指南中的 --workspace --exclude 显式选包。
-default-members = [".", "crates/lyrel-ui-base", "crates/lyrel-terminal", "crates/lyrel-workbench-editor", "crates/lyrel-markdown-editor", "crates/lyrel-document", "crates/lyrel-insights", "crates/lyrel-protocol", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli", "crates/lyrel-updater"]
+default-members = [".", "crates/lyrel-ui-base", "crates/lyrel-terminal", "crates/lyrel-workbench-editor", "crates/lyrel-markdown-editor", "crates/lyrel-content-diff", "crates/lyrel-document", "crates/lyrel-insights", "crates/lyrel-protocol", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli", "crates/lyrel-updater"]
 
 [workspace.package]
 edition = "2024"

@@ -93,11 +93,11 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// without the feature is never asked; the view keeps its line fallback and
 /// names the missing capability instead.
 /// v24 adds `PreviewOpen` and its event: the agent-facing entry point that
-/// asks the GUI process attached to a pane's workspace to show a Side Panel
-/// page without taking keyboard focus. The handshake also grows the optional
-/// `preview` capability, which marks the one connection a GUI process keeps
-/// open to a remote server for exactly this delivery; it is additive on the
-/// wire, while the request and event variants are not.
+/// asks the one control link holding a pane's workspace — and negotiated the
+/// `preview` capability — to show a Side Panel page without taking keyboard
+/// focus. The request is never broadcast: an unclaimed workspace, or one
+/// held by a link that did not ask for previews, has no target. `preview` is
+/// additive on the wire, while the request and event variants are not.
 pub const CONTROL_VERSION: u32 = 24;
 
 const DIALECT_MARKER: &str = "speaks control v";
@@ -426,18 +426,21 @@ pub enum ControlRequest {
         workspace: Option<WorkspaceId>,
     },
 
-    /// An agent's request to show one page in the Side Panel of whatever GUI
-    /// process has the requesting pane's workspace open (#393).
+    /// An agent's request to show one page in the Side Panel of the control
+    /// link that currently holds the requesting pane's workspace and
+    /// negotiated preview delivery (#393).
     ///
     /// The owning daemon resolves `pane` to its workspace and Host from its
     /// own tree — never from a client-supplied workspace — and refuses a
-    /// pane it does not serve. The GUI reveals the page without taking
-    /// keyboard focus or activating a window. `scratch` is an absolute
-    /// directory on that pane's Host where the explicit user share action
-    /// may later write a screenshot; the owning daemon accepts an absolute
-    /// path from its caller and otherwise resolves one in its own temporary
-    /// directory, so a client routed through `-m` never guesses another
-    /// machine's paths. A web page never supplies it.
+    /// pane it does not serve. Delivery is targeted, never broadcast: an
+    /// unclaimed workspace, or one held by a link that did not ask for
+    /// previews, answers `false`. The receiving GUI reveals the page without
+    /// taking keyboard focus or activating a window. `scratch` is an
+    /// absolute directory on that pane's Host where the explicit user share
+    /// action may later write a screenshot; the owning daemon accepts an
+    /// absolute path from its caller and otherwise resolves one in its own
+    /// temporary directory, so a client routed through `-m` never guesses
+    /// another machine's paths. A web page never supplies it.
     PreviewOpen {
         pane: u64,
         url: String,
@@ -1082,9 +1085,10 @@ pub enum ControlEvent {
         #[serde(default)]
         workspace: Option<WorkspaceId>,
     },
-    /// One preview an agent requested, for the GUI that holds the pane's
-    /// workspace (#393). `workspace` is the owning machine's workspace id;
-    /// the receiving GUI maps it (for a remote Host, through its own view
+    /// One preview an agent requested, delivered only to the control link
+    /// that holds the pane's workspace and negotiated preview support
+    /// (#393). `workspace` is the owning machine's workspace id; the
+    /// receiving GUI maps it (for a remote Host, through its own view
     /// record) and refuses to guess another window. `scratch` is the
     /// absolute screenshot directory on the pane's Host.
     PreviewOpen {

@@ -412,10 +412,11 @@ pub(crate) enum PanelTab {
     Web(WebTab),
 }
 
-/// One browser page's identity in the strip. Everything here is durable —
-/// the layout persists it — except that `title` is only a restore-time hint
-/// the live page replaces on its first update; the original `address` is
-/// the tab's persistent identity and never changes.
+/// One browser page's identity in the strip. Id, address and Host are
+/// durable — the layout persists them — and `title` is only a restore-time
+/// hint the live page replaces on its first update; the original `address`
+/// is the tab's persistent identity and never changes. `source` is live-only
+/// and deliberately not persisted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WebTab {
     /// The stable instance id: unique inside the workspace's strip, durable
@@ -430,8 +431,9 @@ pub(crate) struct WebTab {
     /// forwarding for a bound Host is #392's seam.
     pub(crate) host: Option<lyrel_core::core::session::RemoteRef>,
     /// The agent pane that asked for this preview, when one did (#393).
-    /// Durable with the tab so the explicit share still names its origin
-    /// after a restart; the live pane/Host check happens at send time.
+    /// Live-only: never written to the layout, because a daemon-assigned pane
+    /// number cannot identify the same pane after a restart. A restored tab
+    /// has no source until a fresh agent request binds one.
     pub(crate) source: Option<lyrel_core::core::session::PreviewSourceState>,
 }
 
@@ -442,7 +444,6 @@ impl WebTab {
             address: self.address.clone(),
             host: self.host.clone(),
             title: self.title.clone(),
-            source: self.source.clone(),
         }
     }
 
@@ -452,7 +453,7 @@ impl WebTab {
             address: state.address.clone(),
             title: state.title.clone(),
             host: state.host.clone(),
-            source: state.source.clone(),
+            source: None,
         }
     }
 }

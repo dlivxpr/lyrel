@@ -2514,6 +2514,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::BrowserPreviewShareTip => "把截图和反馈发送给请求此预览的智能体窗格",
         L10nKey::BrowserPreviewSource => "{pane}",
         L10nKey::BrowserPreviewSourceMissing => "{pane}（已关闭）",
+        L10nKey::BrowserPreviewSourceStale => "{pane}（未关联）",
         L10nKey::BrowserPreviewSourceTip => "由窗格 {pane} 请求的智能体预览",
         L10nKey::BrowserPreviewFeedbackPlaceholder => "告诉智能体要改什么…",
         L10nKey::BrowserPreviewSend => "发送到 {pane}",
@@ -2528,6 +2529,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::BrowserPreviewHostDisconnected => "预览所属主机未连接，反馈未发送。",
         L10nKey::BrowserPreviewPaneExited => "窗格 {pane} 已退出，反馈未发送。",
         L10nKey::BrowserPreviewPaneLocked => "其他客户端正在操作窗格 {pane}，反馈未发送。",
+        L10nKey::BrowserPreviewSourceUnverified => {
+            "该预览未与请求它的实时窗格关联；请让智能体重新请求预览。"
+        }
         L10nKey::BrowserPreviewScratchInvalid => "该预览在其主机上没有绝对截图画目录。",
         L10nKey::BrowserPreviewCaptureUnavailable => "当前无法截取页面：{error}",
         L10nKey::BrowserPreviewCaptureFailed => "无法截取页面：{error}",

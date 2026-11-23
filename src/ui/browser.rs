@@ -88,9 +88,39 @@ pub(crate) struct WebPage {
     /// the user's first share action, so a page nobody asked about carries no
     /// input state.
     pub(crate) feedback: Option<PreviewFeedback>,
+    /// The live authority for that explicit share (#393): the exact pane
+    /// view and Host connection a fresh agent request was bound to. Nothing
+    /// here is persisted, so a restored page — or a pane view or Host link
+    /// that has since been replaced — has no sendable target.
+    preview: Option<PreviewBinding>,
     /// The next capture id this page mints. A stale native answer must not
     /// be mistaken for the share the user just asked for.
     next_capture: u64,
+}
+
+/// The live pane incarnation one preview may send to (#393).
+///
+/// The pane number alone is not an identity: a restarted daemon assigns
+/// numbers from the beginning again. This binding is recorded only from a
+/// fresh agent request and compared against the live view's `EntityId` and
+/// the exact [`SharedHost`] connection object on every capture and delivery.
+#[derive(Clone)]
+struct PreviewBinding {
+    view: gpui_kit::EntityId,
+    host: SharedHost,
+    source: PreviewSourceState,
+}
+
+impl PreviewBinding {
+    fn same_target(&self, other: &PreviewBinding) -> bool {
+        self.view == other.view
+            && self.source == other.source
+            && std::sync::Arc::ptr_eq(&self.host, &other.host)
+    }
+
+    fn holds(&self, view: gpui_kit::EntityId, host: &SharedHost) -> bool {
+        self.view == view && std::sync::Arc::ptr_eq(&self.host, host)
+    }
 }
 
 /// The explicit share composer for one agent preview (#393).
@@ -110,6 +140,10 @@ pub(crate) struct PreviewFeedback {
 struct CaptureJob {
     request: u64,
     feedback: String,
+    /// The pane view and Host connection verified when the user asked for
+    /// this screenshot. The answer may arrive after a cancel, a newer share,
+    /// or a replaced source; delivery compares against this snapshot.
+    binding: PreviewBinding,
 }
 
 /// Why an explicit share cannot be handed to the remembered pane. Every arm
@@ -123,6 +157,9 @@ enum PreviewTargetError {
     HostDisconnected,
     Exited,
     Locked,
+    /// No fresh request bound this tab to the live view and Host connection
+    /// it claims, or that incarnation has been replaced.
+    Unverified,
 }
 
 impl PreviewTargetError {
@@ -136,6 +173,7 @@ impl PreviewTargetError {
             Self::HostDisconnected => t(L10nKey::BrowserPreviewHostDisconnected).to_string(),
             Self::Exited => t_fmt(L10nKey::BrowserPreviewPaneExited, &[("pane", &pane)]),
             Self::Locked => t_fmt(L10nKey::BrowserPreviewPaneLocked, &[("pane", &pane)]),
+            Self::Unverified => t(L10nKey::BrowserPreviewSourceUnverified).to_string(),
         }
     }
 
@@ -243,6 +281,7 @@ impl WebPage {
             cover_synced: None,
             load_error: None,
             feedback: None,
+            preview: None,
             next_capture: 0,
         }
     }
@@ -395,18 +434,20 @@ impl LyrelApp {
             scratch: scratch.to_string(),
         };
         let mut layout = self.tool_layout();
-        let existing = layout.order.iter().find_map(|entry| match entry {
-            PanelTab::Web(tab)
-                if tab.source.as_ref().is_some_and(|source| {
-                    source.pane == pane && source.workspace == source_workspace
-                }) =>
-            {
-                Some(tab.clone())
-            }
-            _ => None,
+        let existing_ix = layout.order.iter().position(|entry| match entry {
+            PanelTab::Web(tab) => tab
+                .source
+                .as_ref()
+                .is_some_and(|source| source.pane == pane && source.workspace == source_workspace),
+            PanelTab::Tool(_) => false,
         });
-        if let Some(existing) = existing {
+        if let Some(at) = existing_ix {
+            let existing = match &layout.order[at] {
+                PanelTab::Web(tab) => tab.clone(),
+                PanelTab::Tool(_) => unreachable!("the index names a web tab"),
+            };
             let address_changed = existing.address != address;
+            let host_changed = existing.host != expected;
             let tab = WebTab {
                 id: existing.id.clone(),
                 address: address.to_string(),
@@ -414,31 +455,38 @@ impl LyrelApp {
                 host: expected,
                 source: Some(source),
             };
-            for entry in &mut layout.order {
-                if matches!(entry, PanelTab::Web(open) if open.id == tab.id) {
-                    *entry = PanelTab::Web(tab.clone());
-                }
-            }
-            if matches!(&layout.active, PanelTab::Web(open) if open.id == tab.id) {
-                layout.active = PanelTab::Web(tab.clone());
-            }
+            let binding = self.preview_binding_for(&tab, cx);
+            layout.order[at] = PanelTab::Web(tab.clone());
+            // A fresh request always selects its page, even when the user had
+            // moved to Info or another tab in the meantime (#393).
+            layout.active = PanelTab::Web(tab.clone());
             layout.open = true;
             let bound = tab.host.is_some();
-            if let Some(page) = self.right_panel.web_pages.get_mut(&tab.id) {
-                page.display_url = address.to_string();
-                if address_changed {
-                    page.load_error = None;
-                    page.live_title.clear();
-                    page.status = PageStatus::Starting;
-                    page.route = if bound {
-                        RouteState::Unverified
-                    } else {
-                        RouteState::Local
-                    };
-                }
+            if host_changed {
+                // The page runtime was created for the old Host (its site-data
+                // partition and route guard). A host rebinding starts a fresh
+                // page rather than reusing another Host's surface.
+                self.right_panel.web_pages.remove(&tab.id);
+            }
+            let page = self
+                .right_panel
+                .web_pages
+                .entry(tab.id.clone())
+                .or_insert_with(WebPage::new);
+            page.preview = binding;
+            page.display_url = address.to_string();
+            if address_changed || host_changed {
+                page.load_error = None;
+                page.live_title.clear();
+                page.status = PageStatus::Starting;
+                page.route = if bound {
+                    RouteState::Unverified
+                } else {
+                    RouteState::Local
+                };
             }
             self.store_tool_layout(&layout, cx);
-            if address_changed {
+            if address_changed || host_changed {
                 self.navigate_web_tab(&tab.id, address, cx);
             }
             cx.notify();
@@ -452,6 +500,7 @@ impl LyrelApp {
             host: expected,
             source: Some(source),
         };
+        let binding = self.preview_binding_for(&tab, cx);
         let tab_id = tab.id.clone();
         layout.show_web(tab);
         let page = self
@@ -459,6 +508,7 @@ impl LyrelApp {
             .web_pages
             .entry(tab_id)
             .or_insert_with(WebPage::new);
+        page.preview = binding;
         page.display_url = address.to_string();
         page.route = if bound {
             RouteState::Unverified
@@ -480,20 +530,20 @@ impl LyrelApp {
     ) -> Option<gpui_kit::SharedString> {
         let source = tab.source.as_ref()?;
         let pane = format!("%{}", source.pane);
-        let available = self.preview_target(tab, source, cx).is_ok();
-        let key = if available {
-            L10nKey::BrowserPreviewSource
-        } else {
-            L10nKey::BrowserPreviewSourceMissing
+        let key = match self.preview_target(tab, source, cx) {
+            Ok(_) => L10nKey::BrowserPreviewSource,
+            Err(PreviewTargetError::Unverified) => L10nKey::BrowserPreviewSourceStale,
+            Err(_) => L10nKey::BrowserPreviewSourceMissing,
         };
         Some(t_fmt(key, &[("pane", &pane)]).into())
     }
 
     /// Resolves the remembered source pane to a live view on the preview's
-    /// verified Host. Every check the share depends on is here: window
-    /// workspace, pane ownership, Host route, connection, and whether the
-    /// pane's stream can take input at all.
-    fn preview_target(
+    /// verified Host. Every route check the share depends on is here: window
+    /// workspace, pane ownership, Host route and connection. It does not yet
+    /// claim that this is the same pane incarnation that asked for the page —
+    /// [`Self::preview_target`] compares the live binding for that.
+    fn preview_identity(
         &self,
         tab: &WebTab,
         source: &PreviewSourceState,
@@ -554,7 +604,77 @@ impl LyrelApp {
         if !host.is_connected() {
             return Err(PreviewTargetError::HostDisconnected);
         }
-        if let Some(error) = terminal.agent_prompt_error(cx) {
+        Ok((view, host))
+    }
+
+    /// Records the live authority a fresh agent request just established.
+    /// `None` means the pane is not live right now; the tab still shows the
+    /// request, but no share is sendable until a later request succeeds.
+    fn preview_binding_for(&self, tab: &WebTab, cx: &gpui_kit::App) -> Option<PreviewBinding> {
+        let source = tab.source.as_ref()?;
+        self.preview_identity(tab, source, cx)
+            .ok()
+            .map(|(view, host)| PreviewBinding {
+                view: view.entity_id(),
+                host,
+                source: source.clone(),
+            })
+    }
+
+    /// The authoritative share target: the pane number must resolve to the
+    /// same live view and Host connection a fresh agent request bound, and
+    /// the pane's stream must be able to take input now.
+    fn preview_target(
+        &self,
+        tab: &WebTab,
+        source: &PreviewSourceState,
+        cx: &gpui_kit::App,
+    ) -> Result<(Entity<TerminalView>, SharedHost), PreviewTargetError> {
+        let (view, host) = self.preview_identity(tab, source, cx)?;
+        let binding = self
+            .right_panel
+            .web_pages
+            .get(&tab.id)
+            .and_then(|page| page.preview.as_ref())
+            .ok_or(PreviewTargetError::Unverified)?;
+        if &binding.source != source || !binding.holds(view.entity_id(), &host) {
+            return Err(PreviewTargetError::Unverified);
+        }
+        if let Some(error) = view.read(cx).agent_prompt_error(cx) {
+            return Err(PreviewTargetError::from_agent_prompt(error));
+        }
+        Ok((view, host))
+    }
+
+    /// Revalidates a capture or a delivery against the exact incarnation
+    /// verified when the user asked for the share. A cancelled share, a
+    /// newer request, a replaced pane view, or a reconnected Host all fail
+    /// here rather than reaching whatever pane now owns the number.
+    fn preview_binding_holds(
+        &self,
+        tab_id: &str,
+        expected: &PreviewBinding,
+        cx: &gpui_kit::App,
+    ) -> Result<(Entity<TerminalView>, SharedHost), PreviewTargetError> {
+        let tab = self.web_tab(tab_id).ok_or(PreviewTargetError::Unverified)?;
+        let source = tab.source.as_ref().ok_or(PreviewTargetError::Unverified)?;
+        if source != &expected.source {
+            return Err(PreviewTargetError::Unverified);
+        }
+        let (view, host) = self.preview_identity(&tab, source, cx)?;
+        if !expected.holds(view.entity_id(), &host) {
+            return Err(PreviewTargetError::Unverified);
+        }
+        let page_binding = self
+            .right_panel
+            .web_pages
+            .get(tab_id)
+            .and_then(|page| page.preview.as_ref())
+            .ok_or(PreviewTargetError::Unverified)?;
+        if !expected.same_target(page_binding) {
+            return Err(PreviewTargetError::Unverified);
+        }
+        if let Some(error) = view.read(cx).agent_prompt_error(cx) {
             return Err(PreviewTargetError::from_agent_prompt(error));
         }
         Ok((view, host))
@@ -676,10 +796,18 @@ impl LyrelApp {
         {
             return;
         }
-        if let Err(error) = self.preview_target(&tab, &source, cx) {
-            self.set_preview_feedback_error(tab_id, error.message(source.pane), cx);
-            return;
-        }
+        let (view, host) = match self.preview_target(&tab, &source, cx) {
+            Ok(target) => target,
+            Err(error) => {
+                self.set_preview_feedback_error(tab_id, error.message(source.pane), cx);
+                return;
+            }
+        };
+        let binding = PreviewBinding {
+            view: view.entity_id(),
+            host,
+            source: source.clone(),
+        };
         let feedback_text = self
             .right_panel
             .web_pages
@@ -702,6 +830,7 @@ impl LyrelApp {
             feedback.pending_capture = Some(CaptureJob {
                 request,
                 feedback: feedback_text.trim().to_string(),
+                binding,
             });
             request
         };
@@ -760,9 +889,11 @@ impl LyrelApp {
         cx.notify();
     }
 
-    /// A screenshot arrived for the share the user asked for. The bytes are
-    /// written through the pane's own Host (which may be remote), then the
-    /// prompt is delivered only if the pane still passes the same checks.
+    /// A screenshot arrived for the share the user asked for. The request
+    /// stays pending — and keeps its identity — through the Host write; the
+    /// bytes are written through the pane's own Host (which may be remote),
+    /// then the prompt is delivered only if the same live incarnation still
+    /// owns the capture the user asked for.
     fn preview_capture_ready(
         &mut self,
         tab_id: &str,
@@ -770,39 +901,47 @@ impl LyrelApp {
         png: Vec<u8>,
         cx: &mut Context<Self>,
     ) {
-        let job = {
-            let Some(feedback) = self
-                .right_panel
-                .web_pages
-                .get_mut(tab_id)
-                .and_then(|page| page.feedback.as_mut())
-            else {
-                return;
-            };
-            let Some(job) = feedback
-                .pending_capture
-                .take()
-                .filter(|job| job.request == request)
-            else {
-                return;
-            };
-            feedback.pending = false;
-            job
-        };
-        let Some(tab) = self.web_tab(tab_id) else {
+        let Some((feedback_text, binding)) = self
+            .right_panel
+            .web_pages
+            .get(tab_id)
+            .and_then(|page| page.feedback.as_ref())
+            .and_then(|feedback| feedback.pending_capture.as_ref())
+            .filter(|job| job.request == request)
+            .map(|job| (job.feedback.clone(), job.binding.clone()))
+        else {
+            // A cancelled or superseded share: never consume the newer
+            // request that may be pending now.
             return;
         };
-        let Some(source) = tab.source.clone() else {
-            return;
-        };
-        let host = match self.preview_target(&tab, &source, cx) {
-            Ok((_, host)) => host,
+        let (_, host) = match self.preview_binding_holds(tab_id, &binding, cx) {
+            Ok(target) => target,
             Err(error) => {
-                self.set_preview_feedback_error(tab_id, error.message(source.pane), cx);
+                self.set_preview_feedback_error(tab_id, error.message(binding.source.pane), cx);
                 return;
             }
         };
-        let scratch = std::path::PathBuf::from(&source.scratch);
+        let Some(tab) = self.web_tab(tab_id) else {
+            self.set_preview_feedback_error(
+                tab_id,
+                PreviewTargetError::Unverified.message(binding.source.pane),
+                cx,
+            );
+            return;
+        };
+        let address = self
+            .right_panel
+            .web_pages
+            .get(tab_id)
+            .map(|page| {
+                if page.display_url.is_empty() {
+                    tab.address.clone()
+                } else {
+                    page.display_url.clone()
+                }
+            })
+            .unwrap_or_else(|| tab.address.clone());
+        let scratch = std::path::PathBuf::from(&binding.source.scratch);
         if !host.is_absolute(&scratch) {
             self.set_preview_feedback_error(
                 tab_id,
@@ -813,15 +952,14 @@ impl LyrelApp {
         }
         let file_name = format!(
             "preview-{}-{}.png",
-            source.pane,
+            binding.source.pane,
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|elapsed| elapsed.as_millis())
                 .unwrap_or_default()
         );
-        let pane = source.pane;
-        let feedback = job.feedback;
         let tab = tab_id.to_string();
+        let landing_binding = binding.clone();
         lyrel_ui_base::host_ops::HostOps::run(
             host,
             cx,
@@ -832,7 +970,15 @@ impl LyrelApp {
                 Ok(file)
             },
             move |app, result, cx| {
-                app.preview_share_landed(&tab, pane, feedback, result, cx);
+                app.preview_share_landed(
+                    &tab,
+                    request,
+                    landing_binding,
+                    feedback_text,
+                    address,
+                    result,
+                    cx,
+                );
             },
         );
         cx.notify();
@@ -841,11 +987,25 @@ impl LyrelApp {
     fn preview_share_landed(
         &mut self,
         tab_id: &str,
-        pane: u64,
+        request: u64,
+        binding: PreviewBinding,
         feedback: String,
+        address: String,
         result: std::io::Result<std::path::PathBuf>,
         cx: &mut Context<Self>,
     ) {
+        // Only the share the user is still waiting on may finish. A cancel,
+        // a newer share, or a replaced page leaves the newer state alone.
+        let still_pending = self
+            .right_panel
+            .web_pages
+            .get(tab_id)
+            .and_then(|page| page.feedback.as_ref())
+            .and_then(|feedback| feedback.pending_capture.as_ref())
+            .is_some_and(|job| job.request == request);
+        if !still_pending {
+            return;
+        }
         let path = match result {
             Ok(path) => path,
             Err(error) => {
@@ -861,36 +1021,20 @@ impl LyrelApp {
             }
         };
         let path_text = path.to_string_lossy().into_owned();
-        let Some(tab) = self.web_tab(tab_id) else {
-            return;
-        };
-        let Some(source) = tab.source.clone() else {
-            return;
-        };
-        let address = self
-            .right_panel
-            .web_pages
-            .get(tab_id)
-            .map(|page| {
-                if page.display_url.is_empty() {
-                    tab.address.clone()
-                } else {
-                    page.display_url.clone()
-                }
-            })
-            .unwrap_or_else(|| tab.address.clone());
         let prompt = crate::core::agent_prompt::build_preview_feedback_prompt(
             &feedback,
             Some(&path_text),
             &address,
         );
-        let target = self.preview_target(&tab, &source, cx);
+        let target = self.preview_binding_holds(tab_id, &binding, cx);
         let outcome = match (target, prompt) {
             (Ok((view, _)), Some(prompt)) => view
                 .read(cx)
                 .deliver_agent_prompt(&prompt, cx)
-                .map_err(|error| PreviewTargetError::from_agent_prompt(error).message(source.pane)),
-            (Err(error), _) => Err(error.message(source.pane)),
+                .map_err(|error| {
+                    PreviewTargetError::from_agent_prompt(error).message(binding.source.pane)
+                }),
+            (Err(error), _) => Err(error.message(binding.source.pane)),
             (Ok(_), None) => Err(t(L10nKey::BrowserPreviewNoSource).to_string()),
         };
         let Some(share) = self
@@ -901,12 +1045,22 @@ impl LyrelApp {
         else {
             return;
         };
+        // Re-checked after delivery so a share replaced in between keeps its
+        // own pending request and result.
+        if !share
+            .pending_capture
+            .as_ref()
+            .is_some_and(|job| job.request == request)
+        {
+            return;
+        }
+        share.pending_capture = None;
         share.pending = false;
         match outcome {
             Ok(()) => {
                 let sent = t_fmt(
                     L10nKey::BrowserPreviewSent,
-                    &[("pane", &format!("%{pane}"))],
+                    &[("pane", &format!("%{}", binding.source.pane))],
                 );
                 share.notice = Some(sent);
                 share.error = None;
