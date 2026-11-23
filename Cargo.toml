@@ -229,17 +229,34 @@ libc = "0.2.191"
 # app appearance to match the active theme (see `ui::theme::sync_native_appearance`)
 # so the native traffic-light buttons render in the right light/dark style.
 [target.'cfg(target_os = "macos")'.dependencies]
-# The Side Panel browser's WKWebView child surface (`ui::browser::surface`).
-# The same pinned line the draw.io document engine uses; no custom protocol
-# or IPC handler is installed for the browser.
-wry = { version = "=0.57.2", default-features = false }
+# The Side Panel browser's native WKWebView (`ui::browser::surface`). It is
+# driven directly rather than through wry's child host (#392): the browser
+# needs an identified WKWebsiteDataStore per Host and the WKNavigationAction
+# metadata that tells a user-clicked link from a script-opened popup. No
+# custom protocol, message handler or page → workbench bridge is installed.
+objc2-web-kit = { version = "0.3.2", default-features = false, features = [
+    "block2",
+    "objc2-app-kit",
+    "WKNavigation",
+    "WKNavigationAction",
+    "WKNavigationDelegate",
+    "WKNavigationResponse",
+    "WKUIDelegate",
+    "WKWebView",
+    "WKWebViewConfiguration",
+    "WKWebsiteDataStore",
+    "WKWindowFeatures",
+    "WKFrameInfo",
+    "WKSecurityOrigin",
+    "WKOpenPanelParameters",
+] }
 raw-window-handle = "0.6"
 # CFStringTokenizer FFI for dictionary-based CJK word segmentation on
 # double-click (`terminal::smart_select`). Already in the tree transitively,
 # and it makes the Windows jieba fallback unnecessary here.
 core-foundation = "0.10.1"
-objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem", "NSSpellChecker"] }
+objc2 = { version = "0.6.5", features = ["disable-encoding-assertions"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem", "NSSpellChecker", "NSView", "NSWindow"] }
 # NSData feeds the runtime Dock icon for bare (non-bundled) binaries — see
 # `set_dock_icon_for_bare_binary` in main.rs.
 # NSUserNotification is the click-to-reveal notification path — see
@@ -250,7 +267,25 @@ objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "
 # NSMenu/NSMenuItem back the native-menu key-equivalent repair in
 # `ui::theme::fix_native_menu_key_equivalents` (gpui 0.3.9 does not map
 # "enter"/"tab", so the app rewrites those equivalents itself).
-objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSString", "NSUserDefaults", "NSUserNotification", "NSLocale", "NSArray", "NSRange"] }
+objc2-foundation = { version = "0.3", features = [
+    "NSData",
+    "NSDictionary",
+    "NSString",
+    "NSUserDefaults",
+    "NSUserNotification",
+    "NSLocale",
+    "NSArray",
+    "NSRange",
+    # The Side Panel browser's WKWebView host (#392): the data-store UUID,
+    # the initial NSURLRequest, error text for a failed load, the AppKit
+    # geometry and the KVO title observer.
+    "NSGeometry",
+    "NSError",
+    "NSKeyValueObserving",
+    "NSURL",
+    "NSURLRequest",
+    "NSUUID",
+] }
 # `oneshot::Receiver` appears in the `Platform` trait's prompt/screen-capture
 # signatures, which the full-delegation wrapper in `ui::platform` must name.
 # Already in the tree at 0.3.34 via gpui.

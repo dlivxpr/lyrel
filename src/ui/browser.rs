@@ -16,6 +16,7 @@
 //! are the commands.
 
 pub(crate) mod policy;
+pub(crate) mod route;
 pub(crate) mod surface;
 
 #[cfg(test)]
@@ -27,7 +28,9 @@ pub(crate) use surface::{BrowserCommand, BrowserEvent, BrowserParentWindow, Brow
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme as _, Disableable as _, Icon, IconName, Sizable as _, h_flex, v_flex,
+};
 use gpui_kit::{
     AnyElement, Bounds, Context, Entity, Pixels, Subscription, Window, div, prelude::*, px,
 };
@@ -43,10 +46,19 @@ pub(crate) struct WebPage {
     surface: Option<BrowserSurfaceHost>,
     events: Option<gpui_kit::Task<()>>,
     pub(crate) status: PageStatus,
-    /// The URL the page is actually on — what the address bar shows and what
-    /// the surface last reported. The tab's original address outlives it in
+    /// The URL the surface is actually on (the forwarded endpoint for a
+    /// Host-bound loopback page). The tab's original address outlives it in
     /// the layout.
     pub(crate) current_url: String,
+    /// What the address bar shows: the Host's own spelling for a forwarded
+    /// page, the surface URL otherwise.
+    pub(crate) display_url: String,
+    /// The Host-bound route state (#392).
+    pub(crate) route: RouteState,
+    /// Bumped for every verification so a slow answer from a replaced route
+    /// cannot land on the new one.
+    route_epoch: u64,
+    route_pending: bool,
     pub(crate) live_title: String,
     pub(crate) can_back: bool,
     pub(crate) can_forward: bool,
@@ -61,6 +73,60 @@ pub(crate) struct WebPage {
     pub(crate) load_error: Option<String>,
 }
 
+/// The Host-bound route a page has at this moment (#392).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RouteState {
+    /// This machine's page, or a remote page that has not navigated to
+    /// loopback: addresses load as written.
+    Local,
+    /// A Host-bound loopback page with no verified forward yet.
+    Unverified,
+    /// The verified route the surface may load.
+    Verified(route::VerifiedRoute),
+    /// The forward is gone or could not be built. The last verified route is
+    /// kept so a stale forwarded history entry can be translated back to the
+    /// Host's spelling before it is verified again.
+    Lost {
+        message: String,
+        last: Option<route::VerifiedForward>,
+    },
+}
+
+impl RouteState {
+    fn last_forward(&self) -> Option<&route::VerifiedForward> {
+        match self {
+            Self::Verified(route::VerifiedRoute::Forwarded(forward)) => Some(forward),
+            Self::Lost { last, .. } => last.as_ref(),
+            _ => None,
+        }
+    }
+
+    fn verified(&self) -> Option<&route::VerifiedRoute> {
+        match self {
+            Self::Verified(route) => Some(route),
+            _ => None,
+        }
+    }
+}
+
+/// What a load is for, so a verified route can be applied to the right
+/// consumer without keeping a `Window` alive across the verification.
+enum PageLoad {
+    /// Create the native surface on its first paint. `parent` is `None` only
+    /// in the automated workbench fixture, which starts the recording
+    /// surface instead of a real WebView.
+    Start {
+        parent: Option<BrowserParentWindow>,
+        bounds: Bounds<Pixels>,
+        scale: f32,
+        site: route::BrowserSiteData,
+    },
+    /// Navigate an existing surface.
+    Navigate { url: String },
+    /// Hand the URL to the system browser.
+    External { url: String },
+}
+
 /// What the chrome renders over the page area.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PageStatus {
@@ -68,6 +134,10 @@ pub(crate) enum PageStatus {
     Idle,
     Starting,
     Ready,
+    /// A Host-bound page whose forward could not be verified or was lost.
+    /// The overlay explains and offers an explicit reconnect; no loopback
+    /// load is attempted until it succeeds (#392).
+    RouteUnverified(String),
     Failed(String),
     /// No native host (a platform without one, or an automated test that did
     /// not attach the recording surface).
@@ -81,6 +151,10 @@ impl WebPage {
             events: None,
             status: PageStatus::Idle,
             current_url: String::new(),
+            display_url: String::new(),
+            route: RouteState::Local,
+            route_epoch: 0,
+            route_pending: false,
             live_title: String::new(),
             can_back: false,
             can_forward: false,
@@ -160,6 +234,7 @@ impl LyrelApp {
         host: Option<lyrel_core::core::session::RemoteRef>,
         cx: &mut Context<Self>,
     ) {
+        let bound = host.is_some();
         let tab = WebTab {
             id: self.new_web_tab_id(),
             address: address.to_string(),
@@ -169,45 +244,50 @@ impl LyrelApp {
         let tab_id = tab.id.clone();
         let mut layout = self.tool_layout();
         layout.show_web(tab);
-        self.right_panel
+        let page = self
+            .right_panel
             .web_pages
             .entry(tab_id)
             .or_insert_with(WebPage::new);
+        page.display_url = address.to_string();
+        page.route = if bound {
+            RouteState::Unverified
+        } else {
+            RouteState::Local
+        };
         self.store_tool_layout(&layout, cx);
         cx.notify();
     }
 
     /// The explicit system-browser action on the page chrome (#382): hands
-    /// the page the surface is actually on to the OS. Remote loopback pages
-    /// go through the verified forwarded endpoint — that route is #392's;
-    /// until it lands, a remote-bound tab's external open uses the original
-    /// address and never a same-numbered local port.
+    /// the page the surface is actually on to the OS. A Host-bound loopback
+    /// page is verified first and opened at its forwarded endpoint; when the
+    /// forward cannot be verified nothing opens — never the original address,
+    /// which could now be a coincident desktop service (#392).
     pub(crate) fn browser_open_external(&mut self, tab_id: &str, cx: &mut Context<Self>) {
-        let url = {
-            let page_url = self
-                .right_panel
-                .web_pages
-                .get(tab_id)
-                .map(|page| page.current_url.clone())
-                .unwrap_or_default();
-            if page_url.is_empty() {
-                let layout = self.tool_layout();
-                layout
-                    .order
-                    .iter()
-                    .find_map(|entry| match entry {
-                        PanelTab::Web(tab) if tab.id == tab_id => Some(tab.address.clone()),
-                        _ => None,
-                    })
-                    .unwrap_or_default()
-            } else {
-                page_url
-            }
+        let Some(tab) = self.web_tab(tab_id) else {
+            return;
         };
+        let url = self
+            .right_panel
+            .web_pages
+            .get(tab_id)
+            .map(|page| {
+                if page.display_url.is_empty() {
+                    tab.address.clone()
+                } else {
+                    page.display_url.clone()
+                }
+            })
+            .unwrap_or_else(|| tab.address.clone());
         if matches!(
             policy::classify(&url),
             policy::Route::Blank | policy::Route::Deny
         ) {
+            return;
+        }
+        if tab.host.is_some() && route::is_loopback(&url) {
+            self.begin_web_load(tab_id, PageLoad::External { url }, cx);
             return;
         }
         cx.open_url(&url);
@@ -240,25 +320,32 @@ impl LyrelApp {
 
     /// Navigates the page's surface and records what the page is on. The
     /// layout's original address does not move — it is the tab's identity.
+    /// A loopback address on a Host-bound page is verified through the Host
+    /// first and loaded at the forwarded endpoint (#392).
     pub(crate) fn navigate_web_tab(&mut self, tab_id: &str, url: &str, cx: &mut Context<Self>) {
-        let command = BrowserCommand::Navigate {
-            url: url.to_string(),
-        };
         if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
             page.load_error = None;
-            match page.surface.as_mut() {
-                Some(surface) => match surface.command(command) {
-                    Ok(()) => page.status = PageStatus::Starting,
-                    Err(error) => page.status = PageStatus::Failed(error.to_string()),
-                },
-                None => {
-                    // No surface yet (the tab has not painted): this is the
-                    // URL `start` will navigate to.
-                    page.current_url = url.to_string();
-                }
-            }
+            page.display_url = url.to_string();
         }
-        cx.notify();
+        let bound = self.web_tab(tab_id).is_some_and(|tab| tab.host.is_some());
+        if bound && route::is_loopback(url) {
+            self.begin_web_load(
+                tab_id,
+                PageLoad::Navigate {
+                    url: url.to_string(),
+                },
+                cx,
+            );
+            return;
+        }
+        self.deliver_web_load(
+            tab_id,
+            PageLoad::Navigate {
+                url: url.to_string(),
+            },
+            None,
+            cx,
+        );
     }
 
     pub(crate) fn browser_back(&mut self, tab_id: &str, cx: &mut Context<Self>) {
@@ -269,8 +356,428 @@ impl LyrelApp {
         self.browser_command(tab_id, BrowserCommand::Forward, cx);
     }
 
+    /// Reload re-verifies a Host-bound loopback page before it loads. The
+    /// surface's own reload would hit the remembered local port, which may
+    /// now be a different service (#392).
     pub(crate) fn browser_reload(&mut self, tab_id: &str, cx: &mut Context<Self>) {
+        let Some(tab) = self.web_tab(tab_id) else {
+            return;
+        };
+        let url = self
+            .right_panel
+            .web_pages
+            .get(tab_id)
+            .map(|page| {
+                if page.display_url.is_empty() {
+                    tab.address.clone()
+                } else {
+                    page.display_url.clone()
+                }
+            })
+            .unwrap_or_else(|| tab.address.clone());
+        if tab.host.is_some() && route::is_loopback(&url) {
+            self.begin_web_load(
+                tab_id,
+                PageLoad::Navigate {
+                    url: url.clone(),
+                },
+                cx,
+            );
+            return;
+        }
+        if let Some(page) = self.right_panel.web_pages.get(tab_id)
+            && page.surface.is_none()
+        {
+            // The first load failed before a surface existed: let the next
+            // paint try again.
+            if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                page.surface_attempted = false;
+                page.surface_pending = false;
+                page.status = PageStatus::Starting;
+            }
+            cx.notify();
+            return;
+        }
         self.browser_command(tab_id, BrowserCommand::Reload, cx);
+    }
+
+    /// The explicit recovery action on a lost forward (#392): verify again
+    /// and load the original address through the new endpoint. The address
+    /// itself never changes, so the tab keeps its identity.
+    pub(crate) fn browser_reconnect(&mut self, tab_id: &str, cx: &mut Context<Self>) {
+        let Some(tab) = self.web_tab(tab_id) else {
+            return;
+        };
+        let url = self
+            .right_panel
+            .web_pages
+            .get(tab_id)
+            .map(|page| {
+                if page.display_url.is_empty() {
+                    tab.address.clone()
+                } else {
+                    page.display_url.clone()
+                }
+            })
+            .unwrap_or_else(|| tab.address.clone());
+        if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+            page.load_error = None;
+        }
+        if tab.host.is_some() && route::is_loopback(&url) {
+            if self
+                .right_panel
+                .web_pages
+                .get(tab_id)
+                .is_some_and(|page| page.surface.is_none())
+            {
+                // No surface yet: reset the start attempt and let the next
+                // paint run verification from scratch.
+                if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                    page.surface_attempted = false;
+                    page.surface_pending = false;
+                    page.status = PageStatus::Starting;
+                    page.route = RouteState::Unverified;
+                }
+                cx.notify();
+                return;
+            }
+            self.begin_web_load(
+                tab_id,
+                PageLoad::Navigate {
+                    url: url.clone(),
+                },
+                cx,
+            );
+            return;
+        }
+        self.browser_reload(tab_id, cx);
+    }
+
+    /// The tab entry a web page id names.
+    fn web_tab(&self, tab_id: &str) -> Option<WebTab> {
+        self.tool_layout()
+            .order
+            .iter()
+            .find_map(|entry| match entry {
+                PanelTab::Web(tab) if tab.id == tab_id => Some(tab.clone()),
+                _ => None,
+            })
+    }
+
+    /// Verifies the Host route for `load` when it needs one, then delivers
+    /// it. A non-loopback load and a page with no Host binding go straight
+    /// through.
+    fn begin_web_load(&mut self, tab_id: &str, load: PageLoad, cx: &mut Context<Self>) {
+        let Some(tab) = self.web_tab(tab_id) else {
+            return;
+        };
+        let url = match &load {
+            PageLoad::Start { .. } => self
+                .right_panel
+                .web_pages
+                .get(tab_id)
+                .map(|page| {
+                    if page.display_url.is_empty() {
+                        tab.address.clone()
+                    } else {
+                        page.display_url.clone()
+                    }
+                })
+                .unwrap_or_else(|| tab.address.clone()),
+            PageLoad::Navigate { url } | PageLoad::External { url } => url.clone(),
+        };
+        if tab.host.is_none() || !route::is_loopback(&url) {
+            self.deliver_web_load(tab_id, load, None, cx);
+            return;
+        }
+        let plan = match route::route_plan(&tab, &url, cx) {
+            Ok(plan) => plan,
+            Err(failure) => {
+                self.fail_web_route(tab_id, failure.message, cx);
+                return;
+            }
+        };
+        match plan {
+            route::RoutePlan::Shared { origin } => {
+                let verified = route::VerifiedRoute::Shared { origin };
+                self.apply_route_and_load(tab_id, verified, load, cx);
+            }
+            route::RoutePlan::Forward { route, loopback } => {
+                // While the route is being verified, no loopback load is
+                // safe: the previous endpoint may already be a coincident
+                // local service (#392).
+                self.set_page_guard(tab_id, surface::RouteGuard::DenyLoopback);
+                let epoch = {
+                    let Some(page) = self.right_panel.web_pages.get_mut(tab_id) else {
+                        return;
+                    };
+                    page.route_pending = true;
+                    page.route_epoch = page.route_epoch.wrapping_add(1);
+                    page.status = PageStatus::Starting;
+                    page.route_epoch
+                };
+                let verifier = cx
+                    .default_global::<route::BrowserForwardVerifier>()
+                    .0
+                    .clone();
+                let tab_host = tab.host.clone();
+                let async_tab_id = tab_id.to_string();
+                let verify_host = loopback.forward_host().to_string();
+                let verify_port = loopback.port;
+                cx.spawn(async move |this, cx| {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            verifier.verify(&route, &verify_host, verify_port)
+                        })
+                        .await;
+                    let _ = this.update(cx, |app, cx| {
+                        let current = app.right_panel.web_pages.get(async_tab_id.as_str()).is_some_and(|page| {
+                            page.route_epoch == epoch
+                                && app.web_tab(&async_tab_id).and_then(|tab| tab.host) == tab_host
+                        });
+                        if !current {
+                            return; // A newer route or tab owns the answer now.
+                        }
+                        match result {
+                            Ok(local_port) => {
+                                let forward = route::VerifiedForward::from_loopback(
+                                    &loopback,
+                                    local_port,
+                                );
+                                let verified = route::VerifiedRoute::Forwarded(forward);
+                                app.apply_route_and_load(&async_tab_id, verified, load, cx);
+                            }
+                            Err(message) => {
+                                app.fail_web_route(&async_tab_id, message, cx);
+                            }
+                        }
+                    });
+                })
+                .detach();
+            }
+        }
+    }
+
+    /// Stores a verified route, sends it to the surface as the approved
+    /// origin, then performs the load it was verified for.
+    fn apply_route_and_load(
+        &mut self,
+        tab_id: &str,
+        verified: route::VerifiedRoute,
+        load: PageLoad,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+            page.route = RouteState::Verified(verified.clone());
+            page.route_pending = false;
+        }
+        self.deliver_web_load(tab_id, load, Some(verified), cx);
+    }
+
+    /// Sends the surface the current loopback rule. A Host-bound page with
+    /// no verified route gets [`surface::RouteGuard::DenyLoopback`], so even a
+    /// page-initiated reload cannot reach the old endpoint (#392).
+    fn set_page_guard(&mut self, tab_id: &str, guard: surface::RouteGuard) {
+        if let Some(page) = self.right_panel.web_pages.get_mut(tab_id)
+            && let Some(surface) = page.surface.as_mut()
+        {
+            let _ = surface.command(BrowserCommand::SetRouteGuard { guard });
+        }
+    }
+
+    fn fail_web_route(&mut self, tab_id: &str, message: String, cx: &mut Context<Self>) {
+        self.set_page_guard(tab_id, surface::RouteGuard::DenyLoopback);
+        if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+            page.route = RouteState::Lost {
+                message: message.clone(),
+                last: page.route.last_forward().cloned(),
+            };
+            page.status = PageStatus::RouteUnverified(message);
+            page.surface_attempted = true;
+        }
+        cx.notify();
+    }
+
+    /// Performs one load with the route (if any) it was verified against.
+    fn deliver_web_load(
+        &mut self,
+        tab_id: &str,
+        load: PageLoad,
+        verified: Option<route::VerifiedRoute>,
+        cx: &mut Context<Self>,
+    ) {
+        let guard = match &verified {
+            Some(verified) => BrowserCommand::SetRouteGuard {
+                guard: surface::RouteGuard::Origin(verified.approved_origin().to_string()),
+            },
+            None => BrowserCommand::SetRouteGuard {
+                guard: surface::RouteGuard::Open,
+            },
+        };
+        match load {
+            PageLoad::External { url } => {
+                let target = verified
+                    .as_ref()
+                    .and_then(|verified| verified.forwarded_url(&url))
+                    .unwrap_or(url);
+                if matches!(
+                    policy::classify(&target),
+                    policy::Route::Blank | policy::Route::Deny
+                ) {
+                    return;
+                }
+                cx.open_url(&target);
+            }
+            PageLoad::Navigate { url } => {
+                let target = verified
+                    .as_ref()
+                    .and_then(|verified| verified.forwarded_url(&url))
+                    .unwrap_or_else(|| url.clone());
+                if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                    page.load_error = None;
+                    page.display_url = url;
+                    if let Some(surface) = page.surface.as_mut() {
+                        if surface.command(guard).is_ok()
+                            && surface
+                                .command(BrowserCommand::Navigate {
+                                    url: target.clone(),
+                                })
+                                .is_ok()
+                        {
+                            page.current_url = target;
+                            page.status = PageStatus::Starting;
+                        } else {
+                            page.status = PageStatus::Failed(
+                                "the browser surface could not navigate".to_string(),
+                            );
+                        }
+                    } else {
+                        page.current_url = target;
+                        page.status = PageStatus::Starting;
+                    }
+                }
+                cx.notify();
+            }
+            PageLoad::Start {
+                parent,
+                bounds,
+                scale,
+                site,
+            } => {
+                let original = self
+                    .right_panel
+                    .web_pages
+                    .get(tab_id)
+                    .map(|page| page.display_url.clone())
+                    .filter(|url| !url.is_empty())
+                    .or_else(|| self.web_tab(tab_id).map(|tab| tab.address.clone()))
+                    .unwrap_or_default();
+                let target = verified
+                    .as_ref()
+                    .and_then(|verified| verified.forwarded_url(&original))
+                    .unwrap_or_else(|| initial_navigate_url(&original));
+                let route_guard = match &verified {
+                    Some(verified) => {
+                        surface::RouteGuard::Origin(verified.approved_origin().to_string())
+                    }
+                    None => surface::RouteGuard::Open,
+                };
+                self.start_web_surface(tab_id, parent, bounds, scale, site, target, route_guard, cx);
+            }
+        }
+    }
+
+    /// Creates the surface at a verified start URL (or, in automated workbench
+    /// tests, the recording surface that observes the same commands).
+    #[allow(clippy::too_many_arguments)]
+    fn start_web_surface(
+        &mut self,
+        tab_id: &str,
+        parent: Option<BrowserParentWindow>,
+        bounds: Bounds<Pixels>,
+        scale: f32,
+        site: route::BrowserSiteData,
+        start_url: String,
+        guard: surface::RouteGuard,
+        cx: &mut Context<Self>,
+    ) {
+        let tab_id = tab_id.to_string();
+        if let Some(page) = self.right_panel.web_pages.get_mut(&tab_id) {
+            page.surface_pending = true;
+            page.status = PageStatus::Starting;
+            page.current_url = start_url.clone();
+        }
+        #[cfg(any(test, feature = "test-support"))]
+        if test_support::is_automated(cx) {
+            if let Some(page) = self.right_panel.web_pages.get_mut(&tab_id) {
+                let (sender, receiver) = smol::channel::unbounded();
+                page.surface = Some(BrowserSurfaceHost::test(sender));
+                page.surface_attempted = true;
+                page.surface_pending = false;
+                page.events = Some(browser_event_pump(tab_id.clone(), receiver, cx));
+                if let Some(surface) = page.surface.as_mut() {
+                    let _ = surface.command(BrowserCommand::SetRouteGuard { guard });
+                    let _ = surface.command(BrowserCommand::Navigate { url: start_url });
+                }
+            }
+            cx.notify();
+            return;
+        }
+        let Some(parent) = parent else {
+            if let Some(page) = self.right_panel.web_pages.get_mut(&tab_id) {
+                page.surface_attempted = true;
+                page.surface_pending = false;
+                page.status = PageStatus::Unsupported(
+                    t(L10nKey::BrowserSurfaceAutomated).to_string(),
+                );
+            }
+            cx.notify();
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let dir_ready = std::fs::create_dir_all(&site.dir).map(|_| site.dir.clone());
+            let _ = this.update(cx, |view, cx| {
+                let Some(page) = view.right_panel.web_pages.get_mut(&tab_id) else {
+                    return;
+                };
+                page.surface_pending = false;
+                match dir_ready {
+                    Ok(dir) => {
+                        let (sender, receiver) = smol::channel::unbounded();
+                        match BrowserSurfaceHost::start(
+                            parent,
+                            bounds,
+                            scale,
+                            &start_url,
+                            route::BrowserSiteData {
+                                key: site.key.clone(),
+                                dir,
+                            },
+                            guard,
+                            sender,
+                        ) {
+                            Ok(surface) => {
+                                page.surface = Some(surface);
+                                page.surface_attempted = true;
+                                page.events =
+                                    Some(browser_event_pump(tab_id.clone(), receiver, cx));
+                            }
+                            Err(error) => {
+                                page.surface_attempted = true;
+                                page.status = PageStatus::Failed(error.to_string());
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        page.surface_attempted = true;
+                        page.status = PageStatus::Failed(error.to_string());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn browser_command(&mut self, tab_id: &str, command: BrowserCommand, cx: &mut Context<Self>) {
@@ -336,13 +843,20 @@ impl LyrelApp {
                 can_forward,
             } => {
                 if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                    page.display_url = page
+                        .route
+                        .verified()
+                        .and_then(|verified| verified.original_url(&url))
+                        .unwrap_or_else(|| url.clone());
                     page.current_url = url;
                     page.can_back = can_back;
                     page.can_forward = can_forward;
                     page.load_error = None;
                     if !matches!(
                         page.status,
-                        PageStatus::Failed(_) | PageStatus::Unsupported(_)
+                        PageStatus::Failed(_)
+                            | PageStatus::Unsupported(_)
+                            | PageStatus::RouteUnverified(_)
                     ) {
                         page.status = PageStatus::Ready;
                     }
@@ -359,7 +873,17 @@ impl LyrelApp {
             }
             BrowserEvent::NewWindow { url } => {
                 // A user-initiated new window becomes a sibling tab on the
-                // same Host; the surface itself never opens a window.
+                // same Host; the surface itself never opens a window. The
+                // sibling keeps the Host's spelling of the address, so its
+                // own first load verifies the route (#392).
+                let page = self.right_panel.web_pages.get(tab_id);
+                let url = page
+                    .and_then(|page| {
+                        page.route
+                            .last_forward()
+                            .and_then(|forward| forward.original_url(&url))
+                    })
+                    .unwrap_or(url);
                 let layout = self.tool_layout();
                 if let Some(tab) = layout.order.iter().find_map(|entry| match entry {
                     PanelTab::Web(tab) if tab.id == tab_id => Some(tab),
@@ -369,10 +893,54 @@ impl LyrelApp {
                     self.open_web_page(&url, tab.host.clone(), cx);
                 }
             }
+            BrowserEvent::RouteBlocked { url } => {
+                // The surface refused a loopback load the guard did not
+                // approve. Translate a stale forwarded history entry back to
+                // the Host's spelling, then verify it and load the new
+                // endpoint. No load happens if verification fails.
+                let Some(tab) = self.web_tab(tab_id) else {
+                    return;
+                };
+                let original = self
+                    .right_panel
+                    .web_pages
+                    .get(tab_id)
+                    .map(|page| route::original_loopback_url(&url, page.route.last_forward()))
+                    .unwrap_or(url);
+                if tab.host.is_some() && route::is_loopback(&original) {
+                    if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                        page.display_url = original.clone();
+                    }
+                    self.begin_web_load(
+                        tab_id,
+                        PageLoad::Navigate { url: original },
+                        cx,
+                    );
+                }
+            }
             BrowserEvent::LoadFailed { url, message } => {
+                let host_bound = self.web_tab(tab_id).is_some_and(|tab| tab.host.is_some());
                 if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                    page.display_url = page
+                        .route
+                        .verified()
+                        .and_then(|verified| verified.original_url(&url))
+                        .unwrap_or_else(|| url.clone());
                     page.current_url = url;
-                    page.load_error = Some(message);
+                    page.load_error = Some(message.clone());
+                    if host_bound && page.route.verified().is_some() {
+                        // The forward may be gone. The page is covered by the
+                        // reconnect overlay; nothing reloads the old local
+                        // port.
+                        page.route = RouteState::Lost {
+                            message: message.clone(),
+                            last: page.route.last_forward().cloned(),
+                        };
+                        page.status = PageStatus::RouteUnverified(message);
+                    }
+                }
+                if host_bound {
+                    self.set_page_guard(tab_id, surface::RouteGuard::DenyLoopback);
                 }
             }
             BrowserEvent::Blocked { reason } => {
@@ -425,17 +993,6 @@ impl LyrelApp {
         if page.surface_pending || page.surface_attempted {
             return;
         }
-        // Automated window tests scope this per-App: report the surface as
-        // not started instead of creating a real WebView. Production and the
-        // native harness never set the marker, so they take the real path —
-        // the same seam the diagram surface has.
-        #[cfg(any(test, feature = "test-support"))]
-        if test_support::is_automated(cx) {
-            page.surface_attempted = true;
-            page.status = PageStatus::Unsupported(t(L10nKey::BrowserSurfaceAutomated).to_string());
-            cx.notify();
-            return;
-        }
         let tab = {
             let layout = self.tool_layout();
             layout.order.iter().find_map(|entry| match entry {
@@ -446,68 +1003,44 @@ impl LyrelApp {
         let Some(tab) = tab else {
             return;
         };
-        let Some(page) = self.right_panel.web_pages.get_mut(tab_id) else {
+        let Some(site) = route::browser_site_data(&tab) else {
+            if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                page.surface_attempted = true;
+                page.status =
+                    PageStatus::Unsupported(t(L10nKey::BrowserSurfaceNoDataDir).to_string());
+            }
+            cx.notify();
             return;
         };
-        let parent = match BrowserParentWindow::from_window(window) {
-            Ok(parent) => parent,
-            Err(error) => {
-                page.status = PageStatus::Unsupported(error.to_string());
-                return;
+        #[cfg(any(test, feature = "test-support"))]
+        let automated = test_support::is_automated(cx);
+        #[cfg(not(any(test, feature = "test-support")))]
+        let automated = false;
+        let parent = if automated {
+            None
+        } else {
+            match BrowserParentWindow::from_window(window) {
+                Ok(parent) => Some(parent),
+                Err(error) => {
+                    if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                        page.surface_attempted = true;
+                        page.status = PageStatus::Unsupported(error.to_string());
+                    }
+                    return;
+                }
             }
         };
-        let partition = browser_partition_dir(&tab);
-        let start_url = if page.current_url.is_empty() {
-            initial_navigate_url(&tab.address)
-        } else {
-            page.current_url.clone()
-        };
-        page.surface_pending = true;
-        page.status = PageStatus::Starting;
         let tab_id = tab_id_owned;
-        cx.spawn(async move |this, cx| {
-            // The partition directory is prepared off the render path.
-            let dir_ready = partition
-                .as_ref()
-                .map(|dir| std::fs::create_dir_all(dir).map(|_| dir.clone()));
-            let _ = this.update(cx, |view, cx| {
-                let Some(page) = view.right_panel.web_pages.get_mut(&tab_id) else {
-                    return; // The tab went away between scheduling and now.
-                };
-                page.surface_pending = false;
-                match dir_ready {
-                    Some(Ok(dir)) => {
-                        let (sender, receiver) = smol::channel::unbounded();
-                        match BrowserSurfaceHost::start(
-                            parent, bounds, scale, &start_url, dir, sender,
-                        ) {
-                            Ok(surface) => {
-                                page.surface = Some(surface);
-                                page.surface_attempted = true;
-                                page.events =
-                                    Some(browser_event_pump(tab_id.clone(), receiver, cx));
-                            }
-                            Err(error) => {
-                                page.surface_attempted = true;
-                                page.status = PageStatus::Failed(error.to_string());
-                            }
-                        }
-                    }
-                    Some(Err(error)) => {
-                        page.surface_attempted = true;
-                        page.status = PageStatus::Failed(error.to_string());
-                    }
-                    None => {
-                        page.surface_attempted = true;
-                        page.status = PageStatus::Unsupported(
-                            t(L10nKey::BrowserSurfaceNoDataDir).to_string(),
-                        );
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
+        self.begin_web_load(
+            &tab_id,
+            PageLoad::Start {
+                parent,
+                bounds,
+                scale,
+                site,
+            },
+            cx,
+        );
     }
 
     /// Watchdog for pages whose paint stopped — tab switch, panel collapse,
@@ -623,21 +1156,6 @@ pub(crate) fn initial_navigate_url(address: &str) -> String {
     }
 }
 
-/// The durable per-Host site-data partition for `tab`'s surface: one
-/// directory per bound Host under the app config's `browser/` folder, the
-/// local machine's pages in `browser/local`. `None` only when the config dir
-/// itself is unavailable — the surface then reports Unsupported rather than
-/// borrowing a shared profile.
-pub(crate) fn browser_partition_dir(tab: &WebTab) -> Option<std::path::PathBuf> {
-    let root = lyrel_core::core::config::config_dir_path()?;
-    let key = tab
-        .host
-        .as_ref()
-        .map(|host| format!("host-{}", host.host_id().0))
-        .unwrap_or_else(|| "local".to_string());
-    Some(root.join("browser").join(key))
-}
-
 /// The Host label the chrome shows: the bound Host's route label, or the
 /// local-machine wording for a page that lives here.
 pub(crate) fn browser_host_label(tab: &WebTab) -> gpui_kit::SharedString {
@@ -665,7 +1183,7 @@ pub(crate) fn render_browser_page(
     use gpui_kit::component::button::ButtonCustomVariant;
     let theme = cx.theme();
     let (muted, border, foreground) = (theme.muted_foreground, theme.border, theme.foreground);
-    let (can_back, can_forward, status, current_url, load_error) = app
+    let (can_back, can_forward, status, display_url, load_error) = app
         .right_panel
         .web_pages
         .get(&tab.id)
@@ -674,15 +1192,17 @@ pub(crate) fn render_browser_page(
                 page.can_back,
                 page.can_forward,
                 page.status.clone(),
-                page.current_url.clone(),
+                page.display_url.clone(),
                 page.load_error.clone(),
             )
         })
         .unwrap_or((false, false, PageStatus::Idle, String::new(), None));
-    let address = if current_url.is_empty() {
-        initial_navigate_url(&tab.address)
+    // A Host-bound page keeps the Host's spelling in the address bar: the
+    // forwarded endpoint is an implementation detail (#392).
+    let address = if display_url.is_empty() {
+        tab.address.clone()
     } else {
-        current_url.clone()
+        display_url
     };
 
     if app.browser_chrome.is_none() {
@@ -691,7 +1211,6 @@ pub(crate) fn render_browser_page(
     app.sync_browser_address_input(&tab.id, &address, window, cx);
     let chrome = app.browser_chrome.as_ref().expect("chrome just ensured");
     let input = chrome.input.clone();
-    let tab_id = tab.id.clone();
 
     let icon_button =
         |id: &'static str,
@@ -699,6 +1218,7 @@ pub(crate) fn render_browser_page(
          tip: L10nKey,
          enabled: bool,
          action: fn(&mut LyrelApp, &str, &mut Context<LyrelApp>)| {
+            let tab_id = tab.id.clone();
             Button::new(id)
                 .icon(Icon::new(icon))
                 .custom(
@@ -850,12 +1370,14 @@ fn browser_overlay(
     let message = match status {
         PageStatus::Ready => load_error.map(str::to_owned),
         PageStatus::Idle | PageStatus::Starting => Some(t(L10nKey::BrowserStarting).to_string()),
+        PageStatus::RouteUnverified(message) => Some(message.clone()),
         PageStatus::Failed(message) | PageStatus::Unsupported(message) => Some(message.clone()),
     }?;
+    let route_unverified = matches!(status, PageStatus::RouteUnverified(_));
     let tab_id = tab_id.to_string();
     Some(
         v_flex()
-            .id(("browser-overlay", tab_id.clone()))
+            .id(format!("browser-overlay-{tab_id}"))
             .test_support()
             .absolute()
             .inset_0()
@@ -873,18 +1395,33 @@ fn browser_overlay(
                     .child(message),
             )
             .when(
-                load_error.is_some() || matches!(status, PageStatus::Failed(_)),
+                load_error.is_some()
+                    || route_unverified
+                    || matches!(status, PageStatus::Failed(_)),
                 |col| {
-                    col.child(
+                    let col = col.child(
                         div()
                             .id("browser-overlay-address")
                             .test_support()
                             .text_xs()
                             .text_color(muted)
                             .child(address.to_string()),
-                    )
-                    .child(
-                        Button::new(("browser-overlay-open", tab_id.clone()))
+                    );
+                    let col = if route_unverified {
+                        let reconnect_id = tab_id.clone();
+                        col.child(
+                            Button::new(format!("browser-overlay-reconnect-{tab_id}"))
+                                .label(t(L10nKey::BrowserReconnect))
+                                .small()
+                                .on_click(cx.listener(move |this, _, _window, cx| {
+                                    this.browser_reconnect(&reconnect_id, cx);
+                                })),
+                        )
+                    } else {
+                        col
+                    };
+                    col.child(
+                        Button::new(format!("browser-overlay-open-{tab_id}"))
                             .label(t(L10nKey::BrowserOpenExternal))
                             .small()
                             .on_click(cx.listener(move |this, _, _window, cx| {

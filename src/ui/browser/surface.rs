@@ -1,23 +1,25 @@
 //! The Side Panel browser's native surface: one WebView2 child window on
-//! Windows (through `webview2-com`) or one WKWebView on macOS (through
-//! `wry`), exposed to the panel as [`BrowserSurfaceHost`]. This is a
-//! browsing surface, not the draw.io document engine: there is no privileged
-//! bridge, no fixed origin, no custom protocol, no page → workbench message
-//! channel at all. The only ways out are the events below, and the only ways
-//! in are the commands below — plus geometry and visibility, which the panel
-//! drives from its paint, the same lifecycle the diagram surface uses.
+//! Windows (through `webview2-com`) or one native WKWebView on macOS
+//! (through `objc2-web-kit`), exposed to the panel as
+//! [`BrowserSurfaceHost`]. This is a browsing surface, not the draw.io
+//! document engine: there is no privileged bridge, no fixed origin, no custom
+//! protocol, no page → workbench message channel at all. The only ways out
+//! are the events below, and the only ways in are the commands below — plus
+//! geometry and visibility, which the panel drives from its paint, the same
+//! lifecycle the diagram surface uses.
 //!
 //! Policy (#382): top-level navigation is limited to HTTP, HTTPS and the
 //! built-in blank page by every host before any request is made; device
 //! permissions are denied by default; downloads and unsolicited popups never
 //! leave the surface; a new-window request becomes an event only when the
-//! platform can show it was user-initiated (WebView2's
-//! `IsUserInitiated`); the wry-based macOS host cannot attest that and
-//! denies every popup instead.
+//! platform can show it was user-initiated (WebView2's `IsUserInitiated`,
+//! WKWebView's `WKNavigationTypeLinkActivated`). A Host-bound page is also
+//! held to [`RouteGuard`]: only the loopback origin the panel verified may
+//! load, so a reload, history entry or redirect cannot reach a coincident
+//! desktop service (#392).
 
 use gpui_kit::{Bounds, Pixels};
 use smol::channel::Sender;
-use std::path::PathBuf;
 
 /// One native event the browsing surface reports to the panel.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,6 +52,14 @@ pub enum BrowserEvent {
         url: String,
         message: String,
     },
+    /// A Host-bound page tried to load a loopback origin the panel has not
+    /// verified (a reload, a history entry, a redirect, an absolute link to
+    /// another port). The navigation was cancelled before it could reach a
+    /// coincident desktop service; the panel re-verifies the route and then
+    /// loads the forwarded URL itself (#392).
+    RouteBlocked {
+        url: String,
+    },
     /// Something the policy refused: a denied scheme, an unsolicited popup,
     /// a download, a permission. Diagnostic — the page stays where it was.
     Blocked {
@@ -74,6 +84,43 @@ pub enum BrowserCommand {
     Navigate {
         url: String,
     },
+    /// Sets the loopback rule for the surface. A Host-bound page starts at
+    /// [`RouteGuard::DenyLoopback`] until the panel verifies its forward, then
+    /// moves to [`RouteGuard::Origin`]. Any loopback origin the guard does not
+    /// approve is cancelled and reported as [`BrowserEvent::RouteBlocked`]
+    /// until the panel verifies it and sets a new origin (#392).
+    SetRouteGuard {
+        guard: RouteGuard,
+    },
+}
+
+/// Which loopback origins a surface may load.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RouteGuard {
+    /// A page with no Host binding: loopback is this machine's own.
+    Open,
+    /// A Host-bound page whose forward is not verified: no loopback load is
+    /// safe, because the original address could now be a coincident local
+    /// service.
+    DenyLoopback,
+    /// The one verified origin serving the Host-bound page.
+    Origin(String),
+}
+
+impl RouteGuard {
+    /// Whether this rule permits loading `address`. Every non-loopback URL
+    /// is allowed (an ordinary external page); loopback is decided by the
+    /// rule. The surface hosts call this from their navigation handlers, so a
+    /// reload, a history entry, a redirect or a page's own loopback link can
+    /// never bypass the panel's verification.
+    pub fn allows(&self, address: &str) -> bool {
+        match self {
+            Self::Open => true,
+            Self::DenyLoopback => super::policy::loopback_origin(address).is_none(),
+            Self::Origin(origin) => super::policy::loopback_origin(address)
+                .is_none_or(|candidate| candidate == *origin),
+        }
+    }
 }
 
 /// Why a surface operation could not run.
@@ -172,10 +219,10 @@ pub struct BrowserTestSurface {
 }
 
 /// Creates and owns one child browsing surface. Windows uses WebView2
-/// directly; macOS uses a WKWebView through wry's child host. The platform
-/// hosts compile in every feature combination; `Test` is added for automated
-/// builds, and which variant one presentation holds is a runtime decision
-/// made by the panel view.
+/// directly; macOS owns a native WKWebView. The platform hosts compile in
+/// every feature combination; `Test` is added for automated builds, and which
+/// variant one presentation holds is a runtime decision made by the panel
+/// view.
 pub struct BrowserSurfaceHost {
     inner: Inner,
 }
@@ -212,20 +259,23 @@ impl BrowserSurfaceHost {
     }
 
     /// Starts one surface at `bounds` (window coordinates, physical scaling
-    /// applied by the Windows host) showing `url`. `data_dir` is the
-    /// per-Host site-data partition the panel prepared; it already exists.
-    /// `events` receives every [`BrowserEvent`] until the host is dropped.
+    /// applied by the Windows host) showing `url`. `site` is the named
+    /// per-Host site-data partition the panel prepared. `guard` is the
+    /// loopback rule for the page; when it is [`RouteGuard::Origin`] the panel
+    /// has already verified that origin and `url` is on it. `events` receives every
+    /// [`BrowserEvent`] until the host is dropped.
     pub fn start(
         parent: BrowserParentWindow,
         bounds: Bounds<Pixels>,
         scale: f32,
         url: &str,
-        data_dir: PathBuf,
+        site: super::route::BrowserSiteData,
+        guard: RouteGuard,
         events: Sender<BrowserEvent>,
     ) -> Result<Self, BrowserSurfaceError> {
         #[cfg(windows)]
         {
-            windows_host::Host::start(parent, bounds, scale, url, data_dir, events).map(|host| {
+            windows_host::Host::start(parent, bounds, scale, url, site, guard, events).map(|host| {
                 Self {
                     inner: Inner::Windows(host),
                 }
@@ -234,7 +284,7 @@ impl BrowserSurfaceHost {
         #[cfg(target_os = "macos")]
         {
             let _ = scale;
-            return macos_host::Host::start(parent, bounds, url, data_dir, events).map(|host| {
+            return macos_host::Host::start(parent, bounds, url, site, guard, events).map(|host| {
                 Self {
                     inner: Inner::Macos(host),
                 }
@@ -242,7 +292,7 @@ impl BrowserSurfaceHost {
         }
         #[cfg(not(any(windows, target_os = "macos")))]
         {
-            let _ = (parent, bounds, scale, url, data_dir, events);
+            let _ = (parent, bounds, scale, url, site, guard, events);
             Err(BrowserSurfaceError::Unsupported(
                 "the Side Panel browser has no host on this platform",
             ))

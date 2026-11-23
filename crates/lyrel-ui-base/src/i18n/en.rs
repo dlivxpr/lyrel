@@ -2785,6 +2785,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::BrowserForward => "Forward",
         L10nKey::BrowserReload => "Reload",
         L10nKey::BrowserOpenExternal => "Open in System Browser",
+        L10nKey::BrowserReconnect => "Reconnect",
         L10nKey::BrowserHostLocal => "This machine",
         L10nKey::BrowserHostRemote => "{host}",
         L10nKey::BrowserStarting => "Loading page",

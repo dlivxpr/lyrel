@@ -49,6 +49,14 @@ pub(crate) fn classify(address: &str) -> Route {
     }
 }
 
+/// The origin of `address` when it points at this machine's loopback. The
+/// forwarded-endpoint guard compares exactly this value: the scheme, the
+/// loopback host spelling and the port together are the origin web storage
+/// is scoped to.
+pub(crate) fn loopback_origin(address: &str) -> Option<String> {
+    lyrel_terminal::loopback::parse_loopback_url(address).map(|loopback| loopback.origin())
+}
+
 /// Whether `address` spells the built-in blank page.
 pub(crate) fn is_blank(address: &str) -> bool {
     let lower = address.trim().to_ascii_lowercase();

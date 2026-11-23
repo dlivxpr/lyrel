@@ -2147,6 +2147,8 @@ l10n_keys! {
     BrowserForward,
     BrowserReload,
     BrowserOpenExternal,
+    // The explicit recovery action when a Host-bound page's forward is gone.
+    BrowserReconnect,
     // The Host chip under the address: a page on this machine / a bound Host.
     BrowserHostLocal,
     BrowserHostRemote,

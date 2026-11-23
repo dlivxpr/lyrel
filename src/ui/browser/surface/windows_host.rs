@@ -7,11 +7,11 @@
 //! launches. Every route the policy denies is cancelled before it leaves the
 //! process, and every answer the page gets is the one this file writes.
 
-use super::{BrowserCommand, BrowserEvent, BrowserParentWindow, BrowserSurfaceError};
+use super::super::route::BrowserSiteData;
+use super::{BrowserCommand, BrowserEvent, BrowserParentWindow, BrowserSurfaceError, RouteGuard};
 use gpui_kit::{Bounds, Pixels};
 use smol::channel::Sender;
 use std::cell::RefCell;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::result::Result;
 use webview2_com::Microsoft::Web::WebView2::Win32::*;
@@ -34,6 +34,8 @@ struct Shared {
     visible: bool,
     rect: RECT,
     closed: bool,
+    /// The loopback rule the panel set for this page (#392).
+    guard: RouteGuard,
     sender: Sender<BrowserEvent>,
 }
 
@@ -48,7 +50,8 @@ impl Host {
         bounds: Bounds<Pixels>,
         scale: f32,
         url: &str,
-        data_dir: PathBuf,
+        site: BrowserSiteData,
+        guard: RouteGuard,
         events: Sender<BrowserEvent>,
     ) -> Result<Self, BrowserSurfaceError> {
         let rect = physical_rect(bounds, scale)?;
@@ -82,12 +85,13 @@ impl Host {
             visible: true,
             rect,
             closed: false,
+            guard,
             sender: events,
         }));
         unsafe {
             let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
         }
-        Self::create_environment(&shared, &data_dir);
+        Self::create_environment(&shared, &site.dir);
         Ok(Self { shared, host })
     }
 
@@ -265,6 +269,20 @@ impl Host {
                                 reason: format!("navigation to {uri}"),
                             },
                         );
+                        return Ok(());
+                    }
+                    // The verified-forward guard (#392): a Host-bound page
+                    // may only load the loopback origin the panel verified.
+                    // A reload, a history entry, a redirect or a page's own
+                    // loopback link is cancelled here before it can reach a
+                    // coincident desktop service.
+                    let allowed = match nav_shared.try_borrow() {
+                        Ok(state) => state.guard.allows(&uri),
+                        Err(_) => false,
+                    };
+                    if !allowed {
+                        let _ = args.SetCancel(true);
+                        emit(&nav_shared, BrowserEvent::RouteBlocked { url: uri });
                     }
                     Ok(())
                 })),
@@ -322,6 +340,17 @@ impl Host {
                             BrowserEvent::Blocked {
                                 reason: format!("a new window to {uri}"),
                             },
+                        );
+                        return Ok(());
+                    }
+                    let allowed = match new_window_shared.try_borrow() {
+                        Ok(state) => state.guard.allows(&uri),
+                        Err(_) => false,
+                    };
+                    if !allowed {
+                        emit(
+                            &new_window_shared,
+                            BrowserEvent::RouteBlocked { url: uri },
                         );
                         return Ok(());
                     }
@@ -586,6 +615,9 @@ impl Host {
                     webview
                         .Navigate(&HSTRING::from(url.as_str()))
                         .map_err(|error| BrowserSurfaceError::Platform(error.to_string()))?;
+                }
+                BrowserCommand::SetRouteGuard { guard } => {
+                    self.shared.borrow_mut().guard = guard;
                 }
             }
         }

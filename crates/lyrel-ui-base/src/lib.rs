@@ -35,6 +35,7 @@ pub mod presets;
 pub mod rounding;
 pub mod route;
 pub mod scm_snapshot;
+pub mod web_preview;
 pub mod scrollbar;
 pub mod session;
 pub mod ssh_config;
