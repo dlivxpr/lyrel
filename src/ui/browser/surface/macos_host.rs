@@ -181,17 +181,15 @@ impl Host {
                 };
                 let shared = self.shared.clone();
                 let handler: block2::RcBlock<dyn Fn(*mut NSImage, *mut NSError)> =
-                    block2::RcBlock::new(move |image, error| {
-                        match capture_png(image, error) {
-                            Ok(png) => emit(&shared, BrowserEvent::Captured { request, png }),
-                            Err(message) => emit(
-                                &shared,
-                                BrowserEvent::CaptureFailed {
-                                    request,
-                                    message: format!("the page could not be captured: {message}"),
-                                },
-                            ),
-                        }
+                    block2::RcBlock::new(move |image, error| match capture_png(image, error) {
+                        Ok(png) => emit(&shared, BrowserEvent::Captured { request, png }),
+                        Err(message) => emit(
+                            &shared,
+                            BrowserEvent::CaptureFailed {
+                                request,
+                                message: format!("the page could not be captured: {message}"),
+                            },
+                        ),
                     });
                 unsafe {
                     self.webview
@@ -217,13 +215,14 @@ fn capture_png(image: *mut NSImage, error: *mut NSError) -> Result<Vec<u8>, Stri
     }
     // SAFETY: the completion's image is valid for the callback.
     let image = unsafe { Retained::retain(image) }.ok_or("the page returned no image")?;
-    let tiff = image.TIFFRepresentation().ok_or("the image has no bitmap data")?;
+    let tiff = image
+        .TIFFRepresentation()
+        .ok_or("the image has no bitmap data")?;
     let bitmap = NSBitmapImageRep::initWithData(NSBitmapImageRep::alloc(), &tiff)
         .ok_or("the image could not be read as a bitmap")?;
     let properties = NSDictionary::<NSBitmapImageRepPropertyKey, AnyObject>::new();
     let png: Retained<NSData> = unsafe {
-        bitmap
-            .representationUsingType_properties(NSBitmapImageFileType::PNG, &properties)
+        bitmap.representationUsingType_properties(NSBitmapImageFileType::PNG, &properties)
     }
     .ok_or("the bitmap could not be encoded as PNG")?;
     Ok(png.to_vec())

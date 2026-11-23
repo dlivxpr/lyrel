@@ -139,8 +139,7 @@ pub fn connect_blocking(
 
     // This machine's desktop consumes agent previews from the remote server;
     // `gui` stays false because no GUI runs on that Host (#393).
-    let hello =
-        ControlHello::host_rpc(new_session_token(), client_hostname()).with_preview();
+    let hello = ControlHello::host_rpc(new_session_token(), client_hostname()).with_preview();
     let host = handshake(stream, &target.connection_key(), &hello).map_err(|e| {
         t_fmt(
             L10nKey::RemoteHostNotLyrel,

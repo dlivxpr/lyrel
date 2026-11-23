@@ -131,9 +131,7 @@ impl PreviewTargetError {
         match self {
             Self::WorkspaceChanged => t(L10nKey::BrowserPreviewWorkspaceChanged).to_string(),
             Self::PaneGone => t_fmt(L10nKey::BrowserPreviewPaneGone, &[("pane", &pane)]),
-            Self::PaneElsewhere => {
-                t_fmt(L10nKey::BrowserPreviewPaneElsewhere, &[("pane", &pane)])
-            }
+            Self::PaneElsewhere => t_fmt(L10nKey::BrowserPreviewPaneElsewhere, &[("pane", &pane)]),
             Self::HostMismatch => t(L10nKey::BrowserPreviewHostMismatch).to_string(),
             Self::HostDisconnected => t(L10nKey::BrowserPreviewHostDisconnected).to_string(),
             Self::Exited => t_fmt(L10nKey::BrowserPreviewPaneExited, &[("pane", &pane)]),
@@ -585,15 +583,12 @@ impl LyrelApp {
             .or_insert_with(WebPage::new);
         if page.feedback.is_none() {
             let input = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
-            let subscription = cx.subscribe_in(
-                &input,
-                window,
-                move |app, _input, event, window, cx| {
+            let subscription =
+                cx.subscribe_in(&input, window, move |app, _input, event, window, cx| {
                     if matches!(event, InputEvent::PressEnter { .. }) {
                         app.browser_preview_feedback_send(&submit_tab, window, cx);
                     }
-                },
-            );
+                });
             page.feedback = Some(PreviewFeedback {
                 input,
                 open: true,
@@ -617,11 +612,7 @@ impl LyrelApp {
         cx.notify();
     }
 
-    pub(crate) fn browser_preview_feedback_cancel(
-        &mut self,
-        tab_id: &str,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn browser_preview_feedback_cancel(&mut self, tab_id: &str, cx: &mut Context<Self>) {
         if let Some(feedback) = self
             .right_panel
             .web_pages
@@ -895,11 +886,10 @@ impl LyrelApp {
         );
         let target = self.preview_target(&tab, &source, cx);
         let outcome = match (target, prompt) {
-            (Ok((view, _)), Some(prompt)) => {
-                view.read(cx).deliver_agent_prompt(&prompt, cx).map_err(|error| {
-                    PreviewTargetError::from_agent_prompt(error).message(source.pane)
-                })
-            }
+            (Ok((view, _)), Some(prompt)) => view
+                .read(cx)
+                .deliver_agent_prompt(&prompt, cx)
+                .map_err(|error| PreviewTargetError::from_agent_prompt(error).message(source.pane)),
             (Err(error), _) => Err(error.message(source.pane)),
             (Ok(_), None) => Err(t(L10nKey::BrowserPreviewNoSource).to_string()),
         };

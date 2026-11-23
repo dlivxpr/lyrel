@@ -465,7 +465,10 @@ mod gui_registry_tests {
             ),
             0
         );
-        assert!(registry.open_gui(None, None), "GUI registration is separate");
+        assert!(
+            registry.open_gui(None, None),
+            "GUI registration is separate"
+        );
     }
 
     #[test]

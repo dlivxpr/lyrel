@@ -1853,12 +1853,8 @@ fn deliver_preview_event(
         return;
     };
     let _ = app.update(cx, |app, cx| {
-        if let Err(error) =
-            app.reveal_agent_preview(source_workspace, pane, &url, &scratch, cx)
-        {
-            log::warn!(
-                "preview from {host:?} for pane %{pane} was refused: {error}"
-            );
+        if let Err(error) = app.reveal_agent_preview(source_workspace, pane, &url, &scratch, cx) {
+            log::warn!("preview from {host:?} for pane %{pane} was refused: {error}");
         }
     });
 }

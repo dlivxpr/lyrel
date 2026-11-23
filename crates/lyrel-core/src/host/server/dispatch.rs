@@ -342,11 +342,7 @@ fn run_request(
             ReplyOk::Bool(conn.identity.open_gui(path, workspace)),
             Vec::new(),
         ),
-        ControlRequest::PreviewOpen {
-            pane,
-            url,
-            scratch,
-        } => {
+        ControlRequest::PreviewOpen { pane, url, scratch } => {
             let url = url.trim();
             if !lyrel_protocol::core::web::is_preview_address(url) {
                 return Err(io::Error::new(
@@ -361,12 +357,7 @@ fn run_request(
             let workspace = tree
                 .workspaces
                 .iter()
-                .find(|workspace| {
-                    workspace
-                        .tabs
-                        .iter()
-                        .any(|tab| tab.root.contains(pane))
-                })
+                .find(|workspace| workspace.tabs.iter().any(|tab| tab.root.contains(pane)))
                 .ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::InvalidInput,
@@ -398,12 +389,9 @@ fn run_request(
                     "the preview scratch directory must be absolute on this machine",
                 ));
             }
-            let delivered = conn.identity.preview_open(
-                &workspace.id.to_string(),
-                pane,
-                url,
-                &scratch,
-            );
+            let delivered =
+                conn.identity
+                    .preview_open(&workspace.id.to_string(), pane, url, &scratch);
             (ReplyOk::Bool(delivered > 0), Vec::new())
         }
 

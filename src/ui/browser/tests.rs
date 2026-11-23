@@ -289,9 +289,7 @@ fn wait_for_inputs(
 }
 
 #[gpui_kit::test]
-fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(
-    cx: &mut TestAppContext,
-) {
+fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     settle(&mut vcx);
     let scratch = tempfile::tempdir().unwrap();
@@ -299,14 +297,8 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(
     let (focused, first) = app.update_in(&mut vcx, |app, window, cx| {
         app.focus_active(window, cx);
         let focused = window.focused(cx).expect("terminal content owns focus");
-        app.reveal_agent_preview(
-            app.workspace,
-            1,
-            "http://localhost:5173/app",
-            &scratch,
-            cx,
-        )
-        .expect("a local preview is eligible");
+        app.reveal_agent_preview(app.workspace, 1, "http://localhost:5173/app", &scratch, cx)
+            .expect("a local preview is eligible");
         let first = layout_active_web(&app.tool_layout()).expect("the preview is selected");
         assert!(app.right_panel_visible, "the panel reveals for the preview");
         (focused, first)
@@ -332,14 +324,8 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(
     // A second request from the same agent pane reuses its preview tab and
     // moves that page rather than piling up tabs.
     app.update_in(&mut vcx, |app, _window, cx| {
-        app.reveal_agent_preview(
-            app.workspace,
-            1,
-            "http://localhost:5173/next",
-            &scratch,
-            cx,
-        )
-        .expect("the same pane may move its preview");
+        app.reveal_agent_preview(app.workspace, 1, "http://localhost:5173/next", &scratch, cx)
+            .expect("the same pane may move its preview");
     });
     app.read_with(&vcx, |app, _| {
         let layout = app.tool_layout();
@@ -352,10 +338,7 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(
             })
             .collect();
         assert_eq!(web, [first.clone()], "one preview tab per agent pane");
-        assert_eq!(
-            layout_active_web(&layout).as_deref(),
-            Some(first.as_str())
-        );
+        assert_eq!(layout_active_web(&layout).as_deref(), Some(first.as_str()));
         assert_eq!(
             app.web_tab(&first).expect("the tab").address,
             "http://localhost:5173/next"
@@ -364,9 +347,7 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(
 }
 
 #[gpui_kit::test]
-fn an_explicit_share_writes_the_screenshot_and_prompts_the_original_pane(
-    cx: &mut TestAppContext,
-) {
+fn an_explicit_share_writes_the_screenshot_and_prompts_the_original_pane(cx: &mut TestAppContext) {
     let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
     settle(&mut vcx);
     let scratch = tempfile::tempdir().unwrap();

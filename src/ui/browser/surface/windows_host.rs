@@ -668,9 +668,7 @@ impl Host {
                                 .map_err(|error| error.to_string())
                                 .and_then(|()| stream_png(&read_back));
                             match captured {
-                                Ok(png) => {
-                                    emit(&shared, BrowserEvent::Captured { request, png })
-                                }
+                                Ok(png) => emit(&shared, BrowserEvent::Captured { request, png }),
                                 Err(message) => emit(
                                     &shared,
                                     BrowserEvent::CaptureFailed {

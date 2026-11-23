@@ -2809,9 +2809,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::BrowserPreviewSending => "Sending…",
         L10nKey::BrowserPreviewSent => "Sent to {pane}",
         L10nKey::BrowserPreviewNoSource => "This page was not opened by an agent.",
-        L10nKey::BrowserPreviewPaneGone => {
-            "Pane {pane} is gone; the feedback was not sent."
-        }
+        L10nKey::BrowserPreviewPaneGone => "Pane {pane} is gone; the feedback was not sent.",
         L10nKey::BrowserPreviewPaneElsewhere => {
             "Pane {pane} belongs to another workspace now; the feedback was not sent."
         }
@@ -2824,9 +2822,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::BrowserPreviewHostDisconnected => {
             "The preview's Host is not connected; the feedback was not sent."
         }
-        L10nKey::BrowserPreviewPaneExited => {
-            "Pane {pane} has exited; the feedback was not sent."
-        }
+        L10nKey::BrowserPreviewPaneExited => "Pane {pane} has exited; the feedback was not sent.",
         L10nKey::BrowserPreviewPaneLocked => {
             "Another client is driving pane {pane}; the feedback was not sent."
         }

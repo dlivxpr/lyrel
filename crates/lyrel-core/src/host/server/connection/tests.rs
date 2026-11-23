@@ -271,13 +271,7 @@ fn an_agent_preview_resolves_its_workspace_and_targets_only_preview_consumers() 
     let store = MachineStore::open(dir.path().join(machine::MACHINE_FILE));
     let workspace = store.workspace_create(None, None, None).unwrap().id;
     store
-        .tab_create(
-            workspace,
-            None,
-            machine::PaneSeed::bare(7),
-            None,
-            None,
-        )
+        .tab_create(workspace, None, machine::PaneSeed::bare(7), None, None)
         .unwrap();
     let services = Services::with_machine(Arc::clone(&store));
 
