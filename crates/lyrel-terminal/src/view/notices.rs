@@ -322,8 +322,10 @@ impl TerminalView {
     }
 
     fn resolve_event_source(&self, window: &mut Window, cx: &mut App) -> Option<Source> {
-        cx.try_global::<lyrel_ui_base::notification_history::NotificationSourceResolver>()?
-            .resolve(self.event_origin_pane(), window, cx)
+        let resolve =
+            cx.try_global::<lyrel_ui_base::notification_history::NotificationSourceResolver>()?
+                .resolver();
+        resolve(self.event_origin_pane(), window, cx)
     }
 
     /// Record one qualified pane event in the per-installation history.

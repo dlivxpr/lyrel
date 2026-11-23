@@ -758,7 +758,7 @@ impl Tab {
                 let view = leaf.read(cx);
                 view.agent()?;
                 let session = view.agent_session();
-                let status = session.map(|s| s.status).unwrap_or(AgentStatus::Idle);
+                let status = session.as_ref().map(|s| s.status).unwrap_or(AgentStatus::Idle);
                 let row = ActivityState::of_agent(
                     status,
                     session.and_then(|s| s.readout.result.as_ref().map(|r| r.outcome)),
@@ -783,16 +783,14 @@ impl Tab {
             .filter(|l| {
                 let v = l.read(cx);
                 let session = v.agent_session();
-                session.is_some_and(|s| s.status == AgentStatus::Done)
-                    && session
-                        .and_then(|s| {
-                            ActivityState::of_agent(
-                                s.status,
-                                s.readout.result.as_ref().map(|r| r.outcome),
-                            )
-                        })
+                session.is_some_and(|s| {
+                    s.status == AgentStatus::Done
+                        && ActivityState::of_agent(
+                            s.status,
+                            s.readout.result.as_ref().map(|r| r.outcome),
+                        )
                         .is_some_and(|row| activity.channels(row).tab)
-                    && v.agent_result_unread()
+                }) && v.agent_result_unread()
             })
             .count()
     }

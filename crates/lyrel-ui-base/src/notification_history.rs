@@ -278,6 +278,15 @@ impl NotificationSourceResolver {
     ) -> Option<Source> {
         (self.resolve)(origin, window, cx)
     }
+
+    /// The stored callback itself: callers that need the function without
+    /// holding the `&App` borrow the global was read through can lift it
+    /// out, then invoke it with `&mut App`.
+    pub fn resolver(
+        &self,
+    ) -> fn(Option<(WorkspaceId, ScopedPane)>, &mut Window, &mut App) -> Option<Source> {
+        self.resolve
+    }
 }
 
 impl Global for NotificationSourceResolver {}

@@ -1,7 +1,7 @@
 //! The General page: the session the app opens on — workspace, editor and
 //! tab-bar rows. Its editor group moved here from a module of its own, so the
 //! page a row renders on is the module that owns it.
-
+use super::kit::Tk;
 use super::shell::MenuEntry;
 use super::*;
 
@@ -240,14 +240,17 @@ impl SettingsWindow {
             ),
             self.settings_group(
                 Some(t(L10nKey::SettingsProgramActivity)),
-                Some(t(L10nKey::SettingsProgramActivityDesc)),
+                Some(t(L10nKey::SettingsProgramActivityDesc).to_string()),
                 [
                     self.activity_matrix_header(cx),
                     self.activity_row(
                         t(L10nKey::ActivityRowRunning),
                         t(L10nKey::ActivityRowRunningDesc),
                         lyrel_core::core::config::ActivityState::Running,
-                        cx.global::<Config>().program_activity.running,
+                        lyrel_core::core::config::ActivityChannels {
+                            tab: cx.global::<Config>().program_activity.running.tab,
+                            ..Default::default()
+                        },
                         cx,
                     ),
                     self.activity_row(
@@ -288,7 +291,7 @@ impl SettingsWindow {
                 .flex()
                 .justify_center()
                 .text_xs()
-                .text_color(cx.theme().foreground.opacity(0.5))
+                .text_color(Tk::of(&*cx).k5)
                 .child(t(key))
         };
         h_flex()
@@ -309,13 +312,13 @@ impl SettingsWindow {
     /// are placeholders so the grid still lines up.
     fn activity_row(
         &self,
-        label: SharedString,
-        desc: SharedString,
+        label: &str,
+        desc: &str,
         activity: lyrel_core::core::config::ActivityState,
         channels: lyrel_core::core::config::ActivityChannels,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let cell = |channel: ActivityChannel, on: bool| {
+        let mut cell = |channel: ActivityChannel, on: bool| {
             div()
                 .w(px(56.))
                 .flex()
@@ -344,7 +347,8 @@ impl SettingsWindow {
                 .child(cell(ActivityChannel::Desktop, channels.desktop))
                 .child(cell(ActivityChannel::Sound, channels.sound))
         };
-        self.settings_row(label, desc, controls, cx)
+        self.settings_row(label, desc, controls.into_any_element(), cx)
+            .into_any_element()
     }
 
     fn render_tabs_group(&self, cx: &mut Context<Self>) -> AnyElement {

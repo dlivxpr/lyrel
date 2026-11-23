@@ -2790,7 +2790,7 @@ l10n_keys! {
     PanePark,
     PaneRestoreParked,
     ParkedDeckTitle,
-    /// Title-bar Park entry badge: the active tab's parked count.
+    // Title-bar Park entry badge: the active tab's parked count.
     ParkedEntryCount,
     ParkedRestore,
     ParkedAlive,
