@@ -255,10 +255,17 @@ impl LyrelApp {
         cx.subscribe_in(
             view,
             window,
-            |app, view, _: &lyrel_terminal::view::AgentSessionChanged, window, cx| {
-                app.save_session(cx);
-                app.note_agent_session_changed(view, window, cx);
-                cx.notify();
+            |_app, view, _: &lyrel_terminal::view::AgentSessionChanged, window, cx| {
+                // The pane emits this from inside its own update. Saving
+                // session state reads every pane — this one included — and
+                // the exact-resume check reads it too, so hand both to the
+                // next effect cycle instead of re-entering the view.
+                let view = view.clone();
+                cx.defer_in(window, move |app, window, cx| {
+                    app.save_session(cx);
+                    app.note_agent_session_changed(&view, window, cx);
+                    cx.notify();
+                });
             },
         )
         .detach();

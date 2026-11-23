@@ -5,7 +5,7 @@ use super::*;
 use gpui_kit::component::ActiveTheme as _;
 use lyrel_protocol::core::pane_sidecar::ScopedPane;
 use lyrel_ui_base::notification_history::{
-    Record, Severity, Source, ensure, history, stable_record_id,
+    Record, Severity, attach_source, ensure, history, stable_record_id,
 };
 
 pub const INTEGRATION_GRACE: std::time::Duration = std::time::Duration::from_secs(8);
@@ -152,11 +152,10 @@ impl TerminalView {
             self.event_source_prefix(),
             self.terminal.prompt_cycle()
         );
-        let source = self.resolve_event_source(window, cx);
         // Ordinary results have their own desktop toggle, separate from the
         // OSC one and from the activity matrix; history intake is untouched.
         let deliver = deliver && cx.global::<Config>().terminal_notifications.command_desktop;
-        if self.record_pane_event(&identity, severity, &body, source, cx) && deliver {
+        if self.record_pane_event(&identity, severity, &body, window, cx) && deliver {
             self.notify_pane(None, &body, cx);
         }
     }
@@ -178,14 +177,13 @@ impl TerminalView {
             self.event_source_prefix(),
             self.terminal.prompt_cycle()
         );
-        let source = self.resolve_event_source(window, cx);
         // A plain agent ending is an Ended activity event: its desktop and
         // sound channels govern, the shared timing rides in `deliver`.
         let channels = cx
             .global::<Config>()
             .program_activity
             .channels(lyrel_core::core::config::ActivityState::Ended);
-        if self.record_pane_event(&identity, Severity::Info, &body, source, cx) {
+        if self.record_pane_event(&identity, Severity::Info, &body, window, cx) {
             if deliver && channels.sound {
                 crate::desktop_notification::play_activity_sound();
             }
@@ -251,17 +249,16 @@ impl TerminalView {
             return;
         }
         // The budget bounds intake into the history exactly as it bounds
-        // delivery to the desktop; the rest are counted dropped and said
-        // once when a flood stops, as before.
+        // delivery to the desktop; a poll that starts dropping the remainder
+        // says so once, under the same stable identity.
         let (notes, dropped) = self
             .terminal
             .pace_osc_notes(notes, std::time::Instant::now());
         let agent = self.terminal.foreground_agent().map(|a| a.display_name());
-        let source = self.resolve_event_source(window, cx);
-        if dropped && show {
+        if dropped {
             let body = t(L10nKey::ProgramNotesDropped).to_string();
             let identity = format!("osc-dropped|{}", self.event_source_prefix());
-            if self.record_pane_event(&identity, Severity::Warning, &body, source.clone(), cx) {
+            if self.record_pane_event(&identity, Severity::Warning, &body, window, cx) && show {
                 self.notify_pane(agent, &body, cx);
             }
         }
@@ -271,9 +268,7 @@ impl TerminalView {
                 None => body.clone(),
             };
             let identity = format!("osc|{}|{title:?}|{body}", self.event_source_prefix());
-            if self.record_pane_event(&identity, Severity::Info, &message, source.clone(), cx)
-                && show
-            {
+            if self.record_pane_event(&identity, Severity::Info, &message, window, cx) && show {
                 match &title {
                     Some(title) => crate::desktop_notification::notify_desktop_for_pane(
                         Some(title),
@@ -323,35 +318,46 @@ impl TerminalView {
         Some((workspace, pane))
     }
 
-    fn resolve_event_source(&self, window: &mut Window, cx: &mut App) -> Option<Source> {
-        let resolve = cx
-            .try_global::<lyrel_ui_base::notification_history::NotificationSourceResolver>()?
-            .resolver();
-        resolve(self.event_origin_pane(), window, cx)
-    }
-
     /// Record one qualified pane event in the per-installation history.
     /// Returns whether this call is the process-wide first observation — the
     /// same event, replayed or reported by another viewer, lands on the same
     /// stable id and is a no-op, which is also what keeps a duplicate from
     /// becoming a second desktop interruption.
+    ///
+    /// The record lands without its source: this runs inside the pane's own
+    /// update, and asking the app to name the focused pane would read this
+    /// very view back through the resolver. The source is resolved in a
+    /// window effect once that update has returned — the same deferred
+    /// source seam application toasts use.
     fn record_pane_event(
         &self,
         identity: &str,
         severity: Severity,
         message: &str,
-        source: Option<Source>,
-        cx: &mut App,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> bool {
         ensure(cx);
         let id = stable_record_id(identity);
-        history(cx).clone().update(cx, |inbox, cx| {
-            let fresh = inbox.append(Record::event(id, severity, message, source));
+        let fresh = history(cx).clone().update(cx, |inbox, cx| {
+            let fresh = inbox.append(Record::event(id, severity, message, None));
             if fresh {
                 cx.notify();
             }
             fresh
-        })
+        });
+        let resolver = cx
+            .try_global::<lyrel_ui_base::notification_history::NotificationSourceResolver>()
+            .map(|resolver| resolver.resolver());
+        if fresh && let Some(resolve) = resolver {
+            let origin = self.event_origin_pane();
+            window.defer(cx, move |window, cx| {
+                if let Some(source) = resolve(origin, window, cx) {
+                    attach_source(cx, id, source);
+                }
+            });
+        }
+        fresh
     }
 
     /// One agent notice: recorded with its stable session identity. Its
@@ -362,8 +368,8 @@ impl TerminalView {
     fn emit_agent_notice(
         &self,
         notice: &crate::agent_activity::AgentNotice,
-        source: Option<Source>,
         deliver: bool,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let identity = format!("{}|{}", self.event_source_prefix(), notice.identity);
@@ -371,7 +377,7 @@ impl TerminalView {
             .global::<Config>()
             .program_activity
             .channels(notice.activity);
-        if self.record_pane_event(&identity, notice.severity, &notice.body, source, cx) {
+        if self.record_pane_event(&identity, notice.severity, &notice.body, window, cx) {
             if deliver && channels.sound {
                 crate::desktop_notification::play_activity_sound();
             }
@@ -513,25 +519,25 @@ impl TerminalView {
             cx.emit(crate::view::AgentStatusChanged);
         }
         if let Some(notice) = update.notice {
-            // The source is resolved at the transition, while the pane's
-            // window is at hand; a delayed (settling) notice carries it into
-            // the timer task, and a superseding status drops that task before
-            // anything is recorded or delivered.
-            let source = self.resolve_event_source(window, cx);
+            // The notice carries its stable identity, not a pre-read source:
+            // this poll runs inside the pane's own update, so the source is
+            // resolved in a window effect after that update returns. A
+            // superseding status still drops the delayed task before anything
+            // is recorded or delivered.
             if notice.delayed {
                 let task = cx.spawn(async move |this, cx| {
                     cx.background_executor()
                         .timer(crate::agent_activity::DONE_SETTLE)
                         .await;
-                    this.update(cx, |view, cx| {
+                    this.update_in(cx, |view, window, cx| {
                         view.agent_activity.notice_delivered();
-                        view.emit_agent_notice(&notice, source, notify_allowed, cx);
+                        view.emit_agent_notice(&notice, notify_allowed, window, cx);
                     })
                     .ok();
                 });
                 self.agent_activity.await_notice(task);
             } else {
-                self.emit_agent_notice(&notice, source, notify_allowed, cx);
+                self.emit_agent_notice(&notice, notify_allowed, window, cx);
             }
         }
         if update.changed {

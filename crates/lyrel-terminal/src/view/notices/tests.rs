@@ -972,6 +972,11 @@ fn replayed_agent_turn_does_not_recreate_its_history_record(cx: &mut TestAppCont
         1,
         "the live view recorded the settled turn"
     );
+    assert_eq!(
+        take_notifications().len(),
+        1,
+        "the live turn interrupted once"
+    );
 
     // The same daemon pane, reattached the way a restored tab is: the replay
     // is where this pane starts, not a result that just arrived.
@@ -1008,7 +1013,7 @@ fn replayed_agent_turn_does_not_recreate_its_history_record(cx: &mut TestAppCont
 /// bounds the desktop, and the rate-limited remainder is said once.
 #[gpui_kit::test]
 fn osc_notes_record_within_the_ingress_budget(cx: &mut TestAppContext) {
-    use lyrel_core::core::osc::{NOTE_WINDOW, NOTES_PER_WINDOW};
+    use lyrel_core::core::osc::NOTES_PER_WINDOW;
     let _capture = crate::desktop_notification::capture_test_notifications();
     let _ = take_notifications();
     let (_window, mut daemon) = harness(cx);
@@ -1017,27 +1022,31 @@ fn osc_notes_record_within_the_ingress_budget(cx: &mut TestAppContext) {
     configure_notifications(cx, lyrel_core::core::config::NotifyMode::Always, 0);
     let baseline = record_count(cx);
 
-    let mut flood = Vec::new();
-    for index in 0..NOTES_PER_WINDOW + 2 {
-        flood.extend(format!("\x1b]9;t395-flood-{index}\x1b\\").into_bytes());
-    }
-    lyrel_core::daemon::protocol::DaemonMsg::Output(flood)
-        .encode(&mut daemon)
-        .unwrap();
-    // Pump until the whole batch has been read, then let the budget window
-    // roll so the dropped remainder is said once. Deliveries accumulate
-    // across pumps — each drain takes only what landed since the last one.
+    // One note per poll: the transport keeps only the newest few of a single
+    // burst, so a flood must arrive across polls for the rate budget — not
+    // the queue cap — to decide what is shown and what is dropped.
     let mut delivered = Vec::new();
-    for _ in 0..400 {
-        pump_foreground(cx);
-        delivered.extend(take_notifications());
-        if delivered.len() >= NOTES_PER_WINDOW {
-            break;
+    for index in 0..NOTES_PER_WINDOW + 2 {
+        let note = format!("\x1b]9;t395-flood-{index}\x1b\\").into_bytes();
+        lyrel_core::daemon::protocol::DaemonMsg::Output(note)
+            .encode(&mut daemon)
+            .unwrap();
+        let want = (index + 1).min(NOTES_PER_WINDOW + 1);
+        for _ in 0..400 {
+            pump_foreground(cx);
+            delivered.extend(take_notifications());
+            if delivered.len() >= want {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    cx.executor().advance_clock(NOTE_WINDOW * 2);
-    pump_foreground(cx);
+    // Let the note past the budget land; it must not add a second banner
+    // beyond the one note that says the rest were not shown.
+    for _ in 0..20 {
+        pump_foreground(cx);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
     delivered.extend(take_notifications());
     assert_eq!(
         delivered.len(),

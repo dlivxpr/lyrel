@@ -9,7 +9,8 @@
 //!
 //! 终端与 agent 事件经同一个 Inbox 进入历史（`stable_record_id` 给出进程级
 //! 稳定的事件身份）：相同身份的记录只落一条，跨窗口、跨视图重建和重放都去重；
-//! 桌面横幅只在首次记录时投递一次。持久化内容有长度上限，不保存凭据或终端流。
+//! 桌面横幅只在首次记录时投递一次。终端与 wire 事件的内容有长度上限；应用自己的
+//! Toast 保留完整文本供详情和复制使用。不保存凭据或终端流。
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -24,11 +25,13 @@ use crate::session::WorkspaceId;
 
 const RETENTION: usize = 500;
 
-/// Longest message text persisted with a record, in chars. Record content
-/// comes off the terminal and the wire (OSC payloads, command labels, an
-/// agent's own words), so it is attacker-shaped; the desktop boundary clamps
-/// what it shows, and history clamps what it keeps — no raw terminal streams,
-/// no credentials, only bounded notice text.
+/// Longest message text kept for one terminal or agent event, in chars.
+/// The ingress content comes off the terminal and the wire (OSC payloads,
+/// command labels, an agent's own words), so it is attacker-shaped; the
+/// desktop boundary clamps what it shows, and event construction clamps what
+/// the inbox keeps — no raw terminal streams, no credentials, only bounded
+/// notice text. Application toasts are app-authored and keep their full text
+/// (the inbox promises complete content and copy in the details).
 const RECORD_MESSAGE_MAX: usize = 1024;
 
 /// The v5 namespace for stable pane-event identities. Any fixed UUID works;
@@ -95,11 +98,12 @@ impl Record {
         message: impl Into<String>,
         source: Option<Source>,
     ) -> Self {
+        let message = message.into();
         Self {
             id,
             timestamp: chrono::Utc::now().timestamp(),
             severity,
-            message: message.into(),
+            message: bounded_message(&message),
             source,
             unread: true,
         }
@@ -355,6 +359,19 @@ pub fn history(cx: &App) -> &Entity<Inbox> {
     &cx.global::<InboxGlobal>().0
 }
 
+/// Attach a resolved source to a record that was already appended.
+///
+/// Terminal ingress appends the record while its own pane is still inside an
+/// update, so it resolves the source after that update returns and lands it
+/// here — reading the pane again from inside its update would re-enter it. A
+/// record cleared or trimmed in between is simply not found.
+pub fn attach_source(cx: &mut App, id: uuid::Uuid, source: Source) {
+    history(cx).clone().update(cx, |inbox, cx| {
+        inbox.attach_source(id, source);
+        cx.notify();
+    });
+}
+
 pub fn ensure(cx: &mut App) {
     if cx.has_global::<InboxGlobal>() {
         return;
@@ -538,10 +555,6 @@ impl Inbox {
         {
             return false;
         }
-        let record = Record {
-            message: bounded_message(&record.message),
-            ..record
-        };
         self.send(Operation::Append(record.clone()));
         self.snapshot.append(record);
         true
@@ -705,7 +718,7 @@ mod tests {
     }
 
     #[test]
-    fn persisted_message_content_is_bounded() {
+    fn terminal_event_content_is_bounded() {
         let mut inbox = Inbox::open(temp_path("bounded"));
         let long = "x".repeat(RECORD_MESSAGE_MAX * 2);
         inbox.append(record(stable_record_id("long"), &long));
@@ -715,5 +728,24 @@ mod tests {
             long.starts_with(stored.message()),
             "the bound keeps a prefix, never mangles the middle"
         );
+    }
+
+    #[test]
+    fn application_toasts_keep_their_full_text_for_copy() {
+        let mut inbox = Inbox::open(temp_path("full-app"));
+        // Application toasts are app-authored, not terminal ingress: the
+        // details view promises the complete content and copy, so the inbox
+        // must not clamp them the way it clamps a wire event.
+        let long = "SSH failure: permission denied\n".repeat(RECORD_MESSAGE_MAX);
+        inbox.append(Record {
+            id: stable_record_id("app-toast"),
+            timestamp: chrono::Utc::now().timestamp(),
+            severity: Severity::Error,
+            message: long.clone(),
+            source: None,
+            unread: true,
+        });
+        let stored = inbox.records().next().expect("the toast landed");
+        assert_eq!(stored.message(), long.as_str());
     }
 }
