@@ -197,6 +197,10 @@ fn unsupported_language_and_unknown_extension() {
 
 #[test]
 fn oversized_inputs_decline_named_budgets() {
+    let huge_bytes = "x".repeat(lyrel_content_diff::MAX_FILE_BYTES + 1);
+    let err = structural_diff("rust", &huge_bytes, "fn a() {}\n").unwrap_err();
+    assert_eq!(err, ContentError::OverBudget("1 MiB"), "{err}");
+
     let huge_lines = "x\n".repeat((lyrel_content_diff::MAX_LINES + 1) as usize);
     let err = structural_diff("rust", &huge_lines, "fn a() {}\n").unwrap_err();
     assert!(matches!(err, ContentError::OverBudget(_)), "{err}");
@@ -350,4 +354,616 @@ fn line_numbers_are_file_global() {
     let ctx = b.edits.iter().find(|e| e.kind == EditKind::Context).unwrap();
     assert_eq!(ctx.old, Some(5));
     assert_eq!(ctx.new, Some(5));
+}
+
+// ---- hand-labeled before/after fixtures for every added format (#390) ----
+//
+// Each fixture below was written by reading both versions line by line. The
+// assertions name the block family, the identity the reader sees, the
+// original-side range and the source anchor, plus the comment/string/whitespace
+// change that must stay visible inside the block.
+
+fn block_named<'a>(diff: &'a lyrel_content_diff::StructuralDiff, name: &str) -> &'a Block {
+    blocks(diff)
+        .into_iter()
+        .find(|b| b.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("no block named {name}"))
+}
+
+fn anchor_named(diff: &lyrel_content_diff::StructuralDiff, name: &str) -> Option<(LineSpan, u32)> {
+    diff.items.iter().find_map(|item| match item {
+        Item::Source { name: Some(n), old, new_start, .. } if n == name => {
+            Some((*old, *new_start))
+        }
+        _ => None,
+    })
+}
+
+#[test]
+fn javascript_moves_keep_function_and_variable_identity() {
+    let old = r#"function greet(name) {
+  // say hello
+  return "hello, " + name;
+}
+
+const retries = 3;
+
+function main() {
+  console.log(greet("world"));
+}
+"#;
+    let new = r#"function main() {
+  console.log(greet("world"));
+}
+
+const retries = 5;
+
+function greet(name) {
+  // say hi
+  return "hi, " + name;
+}
+"#;
+    let diff = structural_diff("javascript", old, new).expect("javascript parses");
+
+    let greet = block_named(&diff, "greet");
+    assert_eq!(greet.label, "function");
+    assert_eq!(greet.kind, BlockKind::MovedEdited);
+    assert_eq!(greet.old, Some(LineSpan { start: 1, end: 4 }));
+    assert_eq!(greet.new, Some(LineSpan { start: 7, end: 10 }));
+    assert!(!greet.formatting_only, "a comment and a literal changed: {greet:?}");
+    assert_eq!(
+        anchor_named(&diff, "greet"),
+        Some((LineSpan { start: 1, end: 4 }, 7)),
+        "the old position stays jumpable"
+    );
+    let removed: Vec<Option<u32>> = greet
+        .edits
+        .iter()
+        .filter(|e| e.kind == EditKind::Removed)
+        .map(|e| e.old)
+        .collect();
+    assert_eq!(removed, vec![Some(2), Some(3)], "{:?}", greet.edits);
+
+    let retries = block_named(&diff, "retries");
+    assert_eq!(retries.label, "variable");
+    assert_eq!(retries.kind, BlockKind::MovedEdited);
+    assert_eq!(retries.old, Some(LineSpan { start: 6, end: 6 }));
+    assert_eq!(retries.new, Some(LineSpan { start: 5, end: 5 }));
+    assert_eq!(anchor_named(&diff, "retries"), Some((LineSpan { start: 6, end: 6 }, 5)));
+
+    let main = block_named(&diff, "main");
+    assert_eq!(main.kind, BlockKind::Moved);
+    assert!(!main.formatting_only, "a move reads as a move, not as formatting");
+    assert!(main.edits.is_empty(), "an exact move has no inner edits");
+    assert_eq!(anchor_named(&diff, "main"), Some((LineSpan { start: 8, end: 10 }, 1)));
+}
+
+#[test]
+fn javascript_whitespace_only_edits_collapse() {
+    let old = "function run() {\n  const x = 1;\n  return x;\n}\n";
+    let new = "function run() {\n    const x = 1;\n\n    return x;\n}\n";
+    let diff = structural_diff("javascript", old, new).expect("javascript parses");
+    let run = block_named(&diff, "run");
+    assert_eq!(run.kind, BlockKind::Modified);
+    assert!(run.formatting_only, "{run:?}");
+    assert!(run.edits.is_empty(), "formatting-only blocks carry no edit rows");
+}
+
+#[test]
+fn typescript_declarations_keep_their_identity_across_moves() {
+    let old = r#"export interface Options {
+  retries: number;
+}
+
+type Mode = "fast" | "safe";
+
+enum Phase {
+  Idle = "idle",
+  Busy = "busy",
+}
+
+export function run(options: Options): void {
+  console.log("running", options.retries);
+}
+"#;
+    let new = r#"type Mode = "fast" | "careful";
+
+enum Phase {
+  Idle = "idle",
+  Busy = "working",
+}
+
+export function run(options: Options): void {
+  console.log("running", options.retries);
+}
+
+export interface Options {
+  retries: number;
+  timeout: number;
+}
+"#;
+    let diff = structural_diff("typescript", old, new).expect("typescript parses");
+
+    // A TS interface is a type item, and the `export` wrapper stays part of
+    // its range, so the moved block starts on the `export` line.
+    let options = block_named(&diff, "Options");
+    assert_eq!(options.label, "type");
+    assert_eq!(options.kind, BlockKind::MovedEdited);
+    assert_eq!(options.old, Some(LineSpan { start: 1, end: 3 }));
+    assert_eq!(options.new, Some(LineSpan { start: 12, end: 15 }));
+    assert_eq!(
+        anchor_named(&diff, "Options"),
+        Some((LineSpan { start: 1, end: 3 }, 12))
+    );
+    assert!(
+        options.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(14)),
+        "the added field stays visible: {:?}",
+        options.edits
+    );
+
+    let mode = block_named(&diff, "Mode");
+    assert_eq!(mode.label, "type");
+    assert_eq!(mode.kind, BlockKind::MovedEdited);
+    assert_eq!(mode.old, Some(LineSpan { start: 5, end: 5 }));
+    assert_eq!(mode.new, Some(LineSpan { start: 1, end: 1 }));
+    assert_eq!(anchor_named(&diff, "Mode"), Some((LineSpan { start: 5, end: 5 }, 1)));
+
+    let phase = block_named(&diff, "Phase");
+    assert_eq!(phase.label, "enum");
+    assert_eq!(phase.kind, BlockKind::MovedEdited);
+    assert_eq!(phase.old, Some(LineSpan { start: 7, end: 10 }));
+    assert_eq!(phase.new, Some(LineSpan { start: 3, end: 6 }));
+    assert!(
+        phase.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(9))
+            && phase.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(5)),
+        "the enum literal change is a real edit: {:?}",
+        phase.edits
+    );
+
+    let run = block_named(&diff, "run");
+    assert_eq!(run.kind, BlockKind::Moved);
+    assert_eq!(anchor_named(&diff, "run"), Some((LineSpan { start: 12, end: 14 }, 8)));
+}
+
+#[test]
+fn typescript_export_and_ambient_wrappers_stay_in_the_item() {
+    // Dropping `export` is a change to the item, not an invisible keyword.
+    let old = "export function parse(input: string) {\n  return Number(input);\n}\n";
+    let new = "function parse(input: string) {\n  return Number(input);\n}\n";
+    let diff = structural_diff("typescript", old, new).expect("typescript parses");
+    let parse = block_named(&diff, "parse");
+    assert_eq!(parse.kind, BlockKind::Modified);
+    assert_eq!(parse.old, Some(LineSpan { start: 1, end: 3 }));
+    assert_eq!(parse.new, Some(LineSpan { start: 1, end: 3 }));
+    assert!(
+        parse.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(1))
+            && parse.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(1)),
+        "the export line is the edit: {:?}",
+        parse.edits
+    );
+
+    // Ambient signatures are classified through `declare`.
+    let old = "declare function parse(input: string): number;\n";
+    let new = "declare function parse(input: string): bigint;\n";
+    let diff = structural_diff("typescript", old, new).expect("typescript parses");
+    let parse = block_named(&diff, "parse");
+    assert_eq!(parse.label, "function");
+    assert_eq!(parse.kind, BlockKind::Modified);
+    assert_eq!(parse.old, Some(LineSpan { start: 1, end: 1 }));
+    assert_eq!(parse.new, Some(LineSpan { start: 1, end: 1 }));
+}
+
+#[test]
+fn tsx_components_move_with_their_jsx_literals() {
+    let old = r#"export function Card() {
+  // render the card
+  return <div className="card">old</div>;
+}
+
+export function Shell() {
+  return <main><Card /></main>;
+}
+"#;
+    let new = r#"export function Shell() {
+  return <main><Card /></main>;
+}
+
+export function Card() {
+  // render the panel
+  return <div className="card">new</div>;
+}
+"#;
+    let diff = structural_diff("tsx", old, new).expect("tsx parses JSX");
+
+    let card = block_named(&diff, "Card");
+    assert_eq!(card.label, "function");
+    assert_eq!(card.kind, BlockKind::MovedEdited);
+    assert_eq!(card.old, Some(LineSpan { start: 1, end: 4 }));
+    assert_eq!(card.new, Some(LineSpan { start: 5, end: 8 }));
+    assert_eq!(
+        anchor_named(&diff, "Card"),
+        Some((LineSpan { start: 1, end: 4 }, 5))
+    );
+    let removed: Vec<Option<u32>> = card
+        .edits
+        .iter()
+        .filter(|e| e.kind == EditKind::Removed)
+        .map(|e| e.old)
+        .collect();
+    assert_eq!(removed, vec![Some(2), Some(3)], "{:?}", card.edits);
+
+    let shell = block_named(&diff, "Shell");
+    assert_eq!(shell.kind, BlockKind::Moved);
+    assert_eq!(anchor_named(&diff, "Shell"), Some((LineSpan { start: 6, end: 8 }, 1)));
+}
+
+#[test]
+fn python_decorated_definitions_move_with_their_decorator() {
+    let old = r#"def helper():
+    # greet the user
+    return "hello"
+
+@cached
+def build():
+    return helper()
+
+class Store:
+    pass
+"#;
+    let new = r#"class Store:
+    pass
+
+@cached
+def build():
+    return helper()
+
+def helper():
+    # greet the operator
+    return "hi"
+"#;
+    let diff = structural_diff("python", old, new).expect("python parses");
+
+    // The decorator is part of the definition's range.
+    let build = block_named(&diff, "build");
+    assert_eq!(build.kind, BlockKind::Moved);
+    assert_eq!(build.old, Some(LineSpan { start: 5, end: 7 }));
+    assert_eq!(build.new, Some(LineSpan { start: 4, end: 6 }));
+    assert_eq!(anchor_named(&diff, "build"), Some((LineSpan { start: 5, end: 7 }, 4)));
+
+    let helper = block_named(&diff, "helper");
+    assert_eq!(helper.kind, BlockKind::MovedEdited);
+    assert_eq!(helper.old, Some(LineSpan { start: 1, end: 3 }));
+    assert_eq!(helper.new, Some(LineSpan { start: 8, end: 10 }));
+    assert!(!helper.formatting_only);
+    let removed: Vec<Option<u32>> = helper
+        .edits
+        .iter()
+        .filter(|e| e.kind == EditKind::Removed)
+        .map(|e| e.old)
+        .collect();
+    assert_eq!(removed, vec![Some(2), Some(3)], "{:?}", helper.edits);
+
+    let store = block_named(&diff, "Store");
+    assert_eq!(store.label, "class");
+    assert_eq!(store.kind, BlockKind::Moved);
+    assert_eq!(anchor_named(&diff, "Store"), Some((LineSpan { start: 9, end: 10 }, 1)));
+}
+
+#[test]
+fn python_decorator_changes_are_edits() {
+    let old = "@cache\ndef build():\n    return 1\n";
+    let new = "@lru_cache(maxsize=8)\ndef build():\n    return 1\n";
+    let diff = structural_diff("python", old, new).expect("python parses");
+    let build = block_named(&diff, "build");
+    assert_eq!(build.kind, BlockKind::Modified);
+    assert_eq!(build.old, Some(LineSpan { start: 1, end: 3 }));
+    assert_eq!(build.new, Some(LineSpan { start: 1, end: 3 }));
+    assert!(
+        build.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(1))
+            && build.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(1)),
+        "the decorator line is the edit: {:?}",
+        build.edits
+    );
+}
+
+#[test]
+fn python_dedent_is_a_real_edit_and_internal_spacing_is_formatting() {
+    // Dedenting `two()` out of the `if` keeps the token order but changes
+    // meaning: indentation is structure, not formatting.
+    let old = "def run(flag):\n    if flag:\n        one()\n        two()\n";
+    let new = "def run(flag):\n    if flag:\n        one()\n    two()\n";
+    let diff = structural_diff("python", old, new).expect("python parses");
+    let run = block_named(&diff, "run");
+    assert_eq!(run.kind, BlockKind::Modified);
+    assert!(!run.formatting_only, "{run:?}");
+    assert!(
+        run.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(4))
+            && run.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(4)),
+        "{:?}",
+        run.edits
+    );
+
+    // Extra spaces between tokens are still formatting.
+    let old = "def build():\n    return [1,    2]\n";
+    let new = "def build():\n    return [1, 2]\n";
+    let diff = structural_diff("python", old, new).expect("python parses");
+    let build = block_named(&diff, "build");
+    assert!(build.formatting_only, "{build:?}");
+    assert!(build.edits.is_empty());
+}
+
+#[test]
+fn go_type_const_and_method_moves_keep_their_source() {
+    let old = r#"package main
+
+type Config struct {
+	// the display name
+	Name string
+}
+
+const (
+	Retries = 3
+	Timeout = 30
+)
+
+func (c Config) Label() string {
+	return "config: " + c.Name
+}
+"#;
+    let new = r#"package main
+
+func (c Config) Label() string {
+	return "cfg: " + c.Name
+}
+
+const (
+	Retries = 5
+	Timeout = 30
+)
+
+type Config struct {
+	// the shown name
+	Name string
+	Mode string
+}
+"#;
+    let diff = structural_diff("go", old, new).expect("go parses");
+
+    let config = block_named(&diff, "Config");
+    assert_eq!(config.label, "type");
+    assert_eq!(config.kind, BlockKind::MovedEdited);
+    assert_eq!(config.old, Some(LineSpan { start: 3, end: 6 }));
+    assert_eq!(config.new, Some(LineSpan { start: 12, end: 16 }));
+    assert_eq!(
+        anchor_named(&diff, "Config"),
+        Some((LineSpan { start: 3, end: 6 }, 12))
+    );
+    assert!(
+        config.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(4))
+            && config.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(13)),
+        "the comment and the added field are edits: {:?}",
+        config.edits
+    );
+
+    let retries = block_named(&diff, "Retries");
+    assert_eq!(retries.label, "constant");
+    assert_eq!(retries.kind, BlockKind::MovedEdited);
+    assert_eq!(retries.old, Some(LineSpan { start: 9, end: 9 }));
+    assert_eq!(retries.new, Some(LineSpan { start: 8, end: 8 }));
+
+    let timeout = block_named(&diff, "Timeout");
+    assert_eq!(timeout.kind, BlockKind::Moved);
+    assert_eq!(anchor_named(&diff, "Timeout"), Some((LineSpan { start: 10, end: 10 }, 9)));
+
+    let label = block_named(&diff, "Label");
+    assert_eq!(label.label, "method");
+    assert_eq!(label.kind, BlockKind::MovedEdited);
+    assert_eq!(anchor_named(&diff, "Label"), Some((LineSpan { start: 13, end: 15 }, 3)));
+}
+
+#[test]
+fn go_type_alias_moves_with_its_name() {
+    let old = "package main\n\ntype Alias = string\n\nfunc main() {}\n";
+    let new = "package main\n\nfunc main() {}\n\ntype Alias = int\n";
+    let diff = structural_diff("go", old, new).expect("go parses");
+    let alias = block_named(&diff, "Alias");
+    assert_eq!(alias.label, "type");
+    assert_eq!(alias.kind, BlockKind::MovedEdited);
+    assert_eq!(alias.old, Some(LineSpan { start: 3, end: 3 }));
+    assert_eq!(alias.new, Some(LineSpan { start: 5, end: 5 }));
+    assert_eq!(anchor_named(&diff, "Alias"), Some((LineSpan { start: 3, end: 3 }, 5)));
+}
+
+#[test]
+fn json_pairs_move_and_keep_their_nested_literals() {
+    let old = r#"{
+  "name": "lyrel",
+  "server": {
+    "host": "localhost",
+    "port": 8080
+  },
+  "retries": 3
+}
+"#;
+    let new = r#"{
+  "retries": 5,
+  "name": "lyrel",
+  "server": {
+    "host": "localhost",
+    "port": 9090
+  }
+}
+"#;
+    let diff = structural_diff("json", old, new).expect("json parses");
+
+    let retries = block_named(&diff, "\"retries\"");
+    assert_eq!(retries.label, "key");
+    assert_eq!(retries.kind, BlockKind::MovedEdited);
+    assert_eq!(retries.old, Some(LineSpan { start: 7, end: 7 }));
+    assert_eq!(retries.new, Some(LineSpan { start: 2, end: 2 }));
+    assert_eq!(
+        anchor_named(&diff, "\"retries\""),
+        Some((LineSpan { start: 7, end: 7 }, 2))
+    );
+
+    let server = block_named(&diff, "\"server\"");
+    assert_eq!(server.kind, BlockKind::MovedEdited);
+    assert_eq!(server.old, Some(LineSpan { start: 3, end: 6 }));
+    assert_eq!(server.new, Some(LineSpan { start: 4, end: 7 }));
+    assert!(
+        server.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(5))
+            && server.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(6)),
+        "the nested port literal is an edit: {:?}",
+        server.edits
+    );
+
+    let name = block_named(&diff, "\"name\"");
+    assert_eq!(name.kind, BlockKind::Moved);
+    assert_eq!(anchor_named(&diff, "\"name\""), Some((LineSpan { start: 2, end: 2 }, 3)));
+}
+
+#[test]
+fn toml_tables_move_and_keep_their_comments() {
+    let old = r#"[package]
+# the product name
+name = "lyrel"
+version = "0.1.0"
+
+[dependencies]
+tree-sitter = "0.26"
+
+[profile.release]
+opt-level = 3
+"#;
+    let new = r#"[profile.release]
+opt-level = 3
+
+[dependencies]
+tree-sitter = "0.26.13"
+
+[package]
+# the product label
+name = "lyrel"
+version = "0.2.0"
+"#;
+    let diff = structural_diff("toml", old, new).expect("toml parses");
+
+    let package = block_named(&diff, "[package]");
+    assert_eq!(package.label, "section");
+    assert_eq!(package.kind, BlockKind::MovedEdited);
+    assert_eq!(package.old, Some(LineSpan { start: 1, end: 4 }));
+    assert_eq!(package.new, Some(LineSpan { start: 7, end: 10 }));
+    assert_eq!(
+        anchor_named(&diff, "[package]"),
+        Some((LineSpan { start: 1, end: 4 }, 7))
+    );
+    assert!(
+        package.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(2))
+            && package.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(8)),
+        "the comment is a real edit: {:?}",
+        package.edits
+    );
+
+    let dependencies = block_named(&diff, "[dependencies]");
+    assert_eq!(dependencies.kind, BlockKind::MovedEdited);
+    assert_eq!(dependencies.old, Some(LineSpan { start: 6, end: 7 }));
+    assert_eq!(dependencies.new, Some(LineSpan { start: 4, end: 5 }));
+
+    let profile = block_named(&diff, "[profile.release]");
+    assert_eq!(profile.kind, BlockKind::Moved);
+    assert_eq!(anchor_named(&diff, "[profile.release]"), Some((LineSpan { start: 9, end: 10 }, 1)));
+}
+
+#[test]
+fn yaml_pairs_move_and_keep_their_nested_comments() {
+    let old = r#"name: lyrel
+retries: 3
+server:
+  host: localhost
+  # the listening port
+  port: 8080
+"#;
+    let new = r#"server:
+  host: localhost
+  # the exposed port
+  port: 9090
+retries: 5
+name: lyrel
+"#;
+    let diff = structural_diff("yaml", old, new).expect("yaml parses");
+
+    let server = block_named(&diff, "server");
+    assert_eq!(server.label, "key");
+    assert_eq!(server.kind, BlockKind::MovedEdited);
+    assert_eq!(server.old, Some(LineSpan { start: 3, end: 6 }));
+    assert_eq!(server.new, Some(LineSpan { start: 1, end: 4 }));
+    assert_eq!(
+        anchor_named(&diff, "server"),
+        Some((LineSpan { start: 3, end: 6 }, 1))
+    );
+    assert!(
+        server.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(5))
+            && server.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(3)),
+        "the nested comment is a real edit: {:?}",
+        server.edits
+    );
+
+    let retries = block_named(&diff, "retries");
+    assert_eq!(retries.kind, BlockKind::MovedEdited);
+    assert_eq!(retries.old, Some(LineSpan { start: 2, end: 2 }));
+    assert_eq!(retries.new, Some(LineSpan { start: 5, end: 5 }));
+
+    let name = block_named(&diff, "name");
+    assert_eq!(name.kind, BlockKind::Moved);
+    assert_eq!(anchor_named(&diff, "name"), Some((LineSpan { start: 1, end: 1 }, 6)));
+}
+
+#[test]
+fn yaml_indentation_is_structure_not_formatting() {
+    let old = "server:\n  host: localhost\n";
+    let new = "server:\n    host: localhost\n";
+    let diff = structural_diff("yaml", old, new).expect("yaml parses");
+    let server = block_named(&diff, "server");
+    assert_eq!(server.kind, BlockKind::Modified);
+    assert!(!server.formatting_only, "leading whitespace is structure: {server:?}");
+    assert!(
+        server.edits.iter().any(|e| e.kind == EditKind::Removed && e.old == Some(2))
+            && server.edits.iter().any(|e| e.kind == EditKind::Added && e.new == Some(2)),
+        "{:?}",
+        server.edits
+    );
+}
+
+#[test]
+fn every_advertised_extension_dispatches_to_its_own_grammar() {
+    let cases = [
+        ("a.js", "javascript"),
+        ("a.mjs", "javascript"),
+        ("a.cjs", "javascript"),
+        ("a.jsx", "javascript"),
+        ("a.ts", "typescript"),
+        ("a.mts", "typescript"),
+        ("a.cts", "typescript"),
+        ("a.tsx", "tsx"),
+        ("a.py", "python"),
+        ("a.pyi", "python"),
+        ("a.go", "go"),
+        ("a.json", "json"),
+        ("a.toml", "toml"),
+        ("a.yaml", "yaml"),
+        ("a.yml", "yaml"),
+    ];
+    for (path, language) in cases {
+        assert_eq!(
+            language_for_path(std::path::Path::new(path)),
+            Some(language),
+            "{path} must dispatch to {language}"
+        );
+    }
+    // TS and TSX are separate grammars: an interface parses as TypeScript and
+    // JSX parses as TSX.
+    let interface = "interface Options {\n  retries: number;\n}\n";
+    assert!(structural_diff("typescript", interface, "").is_ok());
+    let component = "const Card = () => <div>old</div>;\n";
+    assert!(structural_diff("tsx", component, "").is_ok());
 }

@@ -687,5 +687,13 @@ mod tests {
             ContentFailure::RemoteUnsupported.message(),
             L10nKey::DiffContentRemoteUnsupported
         );
+        assert_eq!(
+            ContentFailure::Binary.message(),
+            L10nKey::DiffContentReadFailed
+        );
+        assert_eq!(
+            ContentFailure::ReadFailed.message(),
+            L10nKey::DiffContentReadFailed
+        );
     }
 }

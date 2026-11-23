@@ -6161,6 +6161,27 @@ mod content_view_tests {
             rows.iter().any(|row| matches!(row, DiffRow::ContentSplit { .. })),
             "inner edits are drawn in the paired layout"
         );
+
+        // gamma only changed position. It reads as a move, not as a
+        // formatting-only block, and its old position keeps an anchor.
+        let gamma = rows
+            .iter()
+            .find_map(|row| match row {
+                DiffRow::ContentBlock(head) if head.name.as_deref() == Some("gamma") => Some(head),
+                _ => None,
+            })
+            .expect("gamma is a pure move");
+        assert_eq!(gamma.kind, BlockKind::Moved);
+        assert!(!gamma.formatting_only, "a pure move is not a formatting change");
+        assert_eq!(gamma.edits, 0, "a pure move has no inner rows");
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                DiffRow::ContentAnchor(anchor)
+                    if anchor.name.as_deref() == Some("gamma") && anchor.new_start == 3
+            )),
+            "gamma's old position keeps a jumpable anchor"
+        );
     }
 
     #[gpui_kit::test]
