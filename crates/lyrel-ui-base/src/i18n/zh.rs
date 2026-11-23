@@ -3228,6 +3228,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::AppPaneNoCodingAgent => "此窗格未运行编码 agent",
         L10nKey::AppForkNoCommand => "lyrel 没有用于 {name} 的 fork 命令",
+        L10nKey::AppForkIndependentUnavailable => {
+            "lyrel 暂时无法为 {name} 创建独立 Fork 会话"
+        }
         L10nKey::AppForkLocalOnly => "无法在 SSH 或 WSL 会话里 fork {name} 会话",
         L10nKey::AppForkNoSessionId => {
             "lyrel 尚未在此窗格中看到 {name} 的会话 ID，请在“设置 → 集成”中安装其 hook"

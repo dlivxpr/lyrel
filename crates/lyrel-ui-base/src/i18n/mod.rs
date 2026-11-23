@@ -2891,6 +2891,7 @@ l10n_keys! {
     AppWorktreeRemovedBranchKept,
     AppPaneNoCodingAgent,
     AppForkNoCommand,
+    AppForkIndependentUnavailable,
     AppForkLocalOnly,
     AppForkNoSessionId,
     AppForkSessionIdNotToken,
