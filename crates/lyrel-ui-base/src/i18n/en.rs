@@ -3102,6 +3102,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatusCaffeineFooterHolding => "Keeping this computer awake",
         L10nKey::StatusCaffeineFooterWaiting => "Waiting for an agent to start working",
         L10nKey::StatusCaffeineFooterError => "Couldn't keep the computer awake: {error}",
+        L10nKey::StatusCaffeineAccessName => "{title}, {mode}: {state}",
         L10nKey::HomeTimeJustNow => "just now",
         L10nKey::HomeTimeMinutesAgo => "{count} min ago",
         L10nKey::HomeTimeHourAgo => "1 hour ago",

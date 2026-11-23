@@ -66,6 +66,13 @@ pub struct Neutrals {
     /// The tab title ink on `rail`, floored the way `sidebar_fg` is.
     pub rail_fg: u32,
     pub accent: u32,
+    /// The theme accent cleared for use as ink: walked to `TEXT_FLOOR` on
+    /// every neutral surface, the same treatment the semantic inks get.
+    /// What a glyph that must read at text contrast gets when it should stay
+    /// recognisably the accent — the status-bar Caffeine cup's live hold
+    /// (#401). `accent` itself is only cleared as a fill (`ACCENT_FLOOR` on
+    /// the window), which is why the cup no longer paints from it.
+    pub accent_ink: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -163,6 +170,13 @@ pub struct ActiveAccent(pub u32);
 
 impl Global for ActiveAccent {}
 
+/// The theme accent cleared as ink (`Neutrals::accent_ink`): what status
+/// glyphs that must read at text contrast paint, the Caffeine cup's live
+/// hold among them (#401).
+pub struct ActiveAccentInk(pub u32);
+
+impl Global for ActiveAccentInk {}
+
 /// How many lanes of the commit graph get a colour of their own.
 ///
 /// Six because that is how many hues of the ANSI set survive being pulled to a
@@ -256,6 +270,11 @@ impl Theme {
                 false => title,
             }
         };
+        // The accent as ink, not fill: the status-bar Caffeine cup's live hold
+        // (#401) is a glyph that must clear the text floor on every surface it
+        // can be painted on — the same fold `clear_ink` runs for the semantic
+        // inks, seeded from the authored accent like `Semantics::info` is.
+        let accent_ink = clear_ink_on([bg, sidebar, rail, popover], self.accent, TEXT_FLOOR);
         Neutrals {
             background: bg,
             foreground: fg,
@@ -281,6 +300,7 @@ impl Theme {
             rail,
             rail_fg: title_ink(rail, rail_title_floor),
             accent: legible_accent(bg, self.accent),
+            accent_ink,
         }
     }
 
@@ -372,9 +392,7 @@ impl Theme {
     /// darkest one.
     fn clear_ink(&self, seed: u32, floor: f32) -> u32 {
         let m = self.neutrals();
-        [m.background, m.sidebar, m.rail, m.popover]
-            .into_iter()
-            .fold(seed, |ink, surface| legible_ink(surface, ink, floor))
+        clear_ink_on([m.background, m.sidebar, m.rail, m.popover], seed, floor)
     }
 
     /// One entry of the theme's own ANSI ramp, legible as chrome text.
@@ -827,6 +845,15 @@ fn legible_ink(bg: u32, seed: u32, floor: f32) -> u32 {
 
 fn legible_accent(bg: u32, accent: u32) -> u32 {
     legible_ink(bg, accent, ACCENT_FLOOR)
+}
+
+/// Walk `seed` to `floor` on every surface it can be painted on, in order.
+/// The one place the neutral-surface list for inks lives; `Theme::clear_ink`
+/// and `Theme::neutrals`' accent ink both go through it.
+fn clear_ink_on(surfaces: [u32; 4], seed: u32, floor: f32) -> u32 {
+    surfaces
+        .into_iter()
+        .fold(seed, |ink, surface| legible_ink(surface, ink, floor))
 }
 
 fn legible_foreground(bg: u32, fg: u32) -> u32 {
@@ -1645,6 +1672,48 @@ mod tests {
                 ratio >= 4.0,
                 "{}: fg/bg contrast too low ({ratio:.2})",
                 t.id
+            );
+        }
+    }
+
+    #[test]
+    fn accent_ink_clears_the_text_floor_on_every_neutral_surface() {
+        // The status-bar Caffeine cup's live hold is painted in the theme
+        // accent at text contrast (#401), so the role has to stand at
+        // `TEXT_FLOOR` on every neutral surface it can land on — in every
+        // builtin theme, light, dark and custom alike.
+        for t in builtins() {
+            let m = t.neutrals();
+            for (name, surface) in [
+                ("window", m.background),
+                ("sidebar", m.sidebar),
+                ("rail", m.rail),
+                ("popover", m.popover),
+            ] {
+                assert!(
+                    contrast(m.accent_ink, surface) >= TEXT_FLOOR - 0.01,
+                    "{}/{}: accent_ink {:#08x} is only {:.2}:1",
+                    t.id,
+                    name,
+                    m.accent_ink,
+                    contrast(m.accent_ink, surface),
+                );
+            }
+            assert_ne!(
+                m.accent_ink, m.background,
+                "{}: accent_ink must not vanish into the window",
+                t.id
+            );
+            // The walk toward black or white only bends lightness enough to
+            // clear the floor: the result must stay on the accent's own side
+            // of the window/foreground midpoint, or it stops reading as the
+            // accent at all.
+            let toward_fg = contrast(m.accent_ink, m.background)
+                <= contrast(m.foreground, m.background) + 0.5;
+            assert!(
+                toward_fg,
+                "{}: accent_ink {:#08x} drifted onto the foreground side",
+                t.id, m.accent_ink,
             );
         }
     }
