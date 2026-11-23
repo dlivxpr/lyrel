@@ -21,7 +21,7 @@ use std::collections::HashMap;
 
 use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{
-    App, DismissEvent, EntityId, Focusable as _, Global, Subscription, WeakEntity, WindowId,
+    App, DismissEvent, EntityId, Focusable as _, Global, Subscription, WeakEntity, Window, WindowId,
 };
 
 /// One overlay that takes visual and input precedence over the window's
@@ -124,35 +124,41 @@ pub(crate) fn install_popup_menu_presence(cx: &mut App) {
         state.menus.push(menu.downgrade());
         state.subscriptions.insert(entity_id, dismiss);
         release.detach();
+        notify_live_apps(cx);
     })
     .detach();
 }
 
 /// Whether a menu in `window` currently holds focus. Submenus never do, so
 /// they do not keep the page concealed after the top-level menu closes.
-pub(crate) fn popup_menu_open(window: WindowId, cx: &mut App) -> bool {
-    let Some(state) = cx.try_global::<PopupMenus>() else {
-        return false;
-    };
-    let menus: Vec<gpui_kit::FocusHandle> = state
-        .menus
-        .iter()
-        .filter_map(|menu| menu.upgrade())
-        .map(|menu| menu.read(cx).focus_handle(cx))
-        .collect();
-    if menus.is_empty() {
-        return false;
-    }
-    let Some(handle) = cx.windows().into_iter().find(|h| h.window_id() == window) else {
-        return false;
-    };
-    menus.iter().any(|focus| {
-        handle
-            .update(cx, |_, window, cx| {
+pub(crate) fn popup_menu_open(window: &Window, cx: &App) -> bool {
+    cx.try_global::<PopupMenus>().is_some_and(|state| {
+        state
+            .menus
+            .iter()
+            .filter_map(WeakEntity::upgrade)
+            .any(|menu| {
+                let focus = menu.read(cx).focus_handle(cx);
                 focus.is_focused(window) || focus.contains_focused(window, cx)
             })
-            .unwrap_or(false)
     })
+}
+
+pub(crate) fn popup_menu_open_for_window(id: WindowId, cx: &mut App) -> bool {
+    if cx
+        .try_global::<PopupMenus>()
+        .is_none_or(|state| state.menus.is_empty())
+    {
+        return false;
+    }
+    cx.windows()
+        .into_iter()
+        .find(|handle| handle.window_id() == id)
+        .is_some_and(|handle| {
+            handle
+                .update(cx, |_, window, cx| popup_menu_open(window, cx))
+                .unwrap_or(false)
+        })
 }
 
 /// The whole workbench's surfaces re-read the cover set after a menu opens,

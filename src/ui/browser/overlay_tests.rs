@@ -225,3 +225,30 @@ fn a_dialog_cover_conceals_and_releases_the_page(cx: &mut TestAppContext) {
         Some(true)
     );
 }
+
+#[gpui_kit::test]
+fn focused_popup_menu_stays_above_the_native_page(cx: &mut TestAppContext) {
+    use gpui_kit::Focusable as _;
+    use gpui_kit::component::menu::PopupMenu;
+
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    let tab = open_page(&app, &mut vcx, "https://example.test/popup");
+    let menu = vcx.update(|window, cx| {
+        crate::ui::surface_coordinator::install_popup_menu_presence(cx);
+        let menu = PopupMenu::build(window, cx, |menu, _, _| menu);
+        window.focus(&menu.read(cx).focus_handle(cx), cx);
+        menu
+    });
+    frame(&mut vcx);
+    assert_eq!(
+        app.read_with(&vcx, |app, _| visibility(app, &tab)),
+        Some(false)
+    );
+
+    drop(menu);
+    frame(&mut vcx);
+    assert_eq!(
+        app.read_with(&vcx, |app, _| visibility(app, &tab)),
+        Some(true)
+    );
+}

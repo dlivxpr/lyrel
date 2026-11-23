@@ -970,10 +970,10 @@ impl LyrelApp {
     /// state, the inbox popover, a deferred popup (dropdown, select,
     /// combobox), a focused `PopupMenu` (context menus), and a dialog or
     /// sheet registered through `lyrel_ui_base::native_surface`.
-    pub(crate) fn native_surface_covered(
+    fn native_surface_cover_registered(
         &self,
         window: gpui_kit::WindowId,
-        cx: &mut gpui_kit::App,
+        cx: &gpui_kit::App,
     ) -> bool {
         self.surface_coordinator.is_covered()
             || self
@@ -982,8 +982,12 @@ impl LyrelApp {
             || self.parked_deck.read(cx).covers_native_surface(cx)
             || self.notification_bell.read(cx).is_open()
             || gpui_kit::base::GlobalState::is_in_deferred_context(cx)
-            || crate::ui::surface_coordinator::popup_menu_open(window, cx)
             || lyrel_ui_base::native_surface::is_covered(window, cx)
+    }
+
+    fn native_surface_covered(&self, window: &Window, cx: &gpui_kit::App) -> bool {
+        self.native_surface_cover_registered(window.window_handle().window_id(), cx)
+            || crate::ui::surface_coordinator::popup_menu_open(window, cx)
     }
 
     /// The paint hook's target: records bounds, starts the surface on first
@@ -1006,7 +1010,7 @@ impl LyrelApp {
         }
         let scale = window.scale_factor();
         let window_id = window.window_handle().window_id();
-        let covered = self.native_surface_covered(window_id, cx);
+        let covered = self.native_surface_covered(window, cx);
         let tab_id_owned = tab_id.to_string();
         let page = self
             .right_panel
@@ -1091,9 +1095,10 @@ impl LyrelApp {
             std::collections::HashMap::new();
         for page in self.right_panel.web_pages.values() {
             if let Some(window) = page.window_id {
-                covered_by_window
-                    .entry(window)
-                    .or_insert_with(|| self.native_surface_covered(window, cx));
+                covered_by_window.entry(window).or_insert_with(|| {
+                    self.native_surface_cover_registered(window, cx)
+                        || crate::ui::surface_coordinator::popup_menu_open_for_window(window, cx)
+                });
             }
         }
         let mut notify = false;
@@ -1286,7 +1291,7 @@ pub(crate) fn render_browser_page(
     } else {
         display_url
     };
-    let covered = app.native_surface_covered(window.window_handle().window_id(), cx);
+    let covered = app.native_surface_covered(window, cx);
 
     if app.browser_chrome.is_none() {
         app.browser_chrome = Some(BrowserChrome::new(window, cx));
