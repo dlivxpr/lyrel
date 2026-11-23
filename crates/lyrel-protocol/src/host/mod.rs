@@ -544,6 +544,23 @@ pub trait Host: Send + Sync + 'static {
 
     fn git(&self, cwd: &Path, args: &[&str]) -> io::Result<Output>;
 
+    /// One file version addressed by a git revision expression, bounded by
+    /// `max_bytes` on the host that owns the repository.
+    ///
+    /// `spec` is what `git cat-file` takes: `:path` for the index and
+    /// `rev:path` for a named revision. `Ok(None)` means the side does not
+    /// exist — an added, deleted, or initial-commit side, which Git itself
+    /// defines as empty. A transport that cannot answer says `Unsupported`;
+    /// callers must show that capability gap rather than fall back to an
+    /// unbounded `git show` that the budget never reaches.
+    fn git_blob(&self, _cwd: &Path, _spec: &str, _max_bytes: u64) -> io::Result<Option<Vec<u8>>> {
+        guard_off_ui();
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "this host cannot read one revision-addressed file version",
+        ))
+    }
+
     /// The repository `cwd` is in, answered without running `git` — or
     /// `None` when this host cannot, and [`crate::core::git::probe_repo`]
     /// asks `git` instead.

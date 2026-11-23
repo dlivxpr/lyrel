@@ -87,6 +87,12 @@ pub(crate) struct DiffOverlayState {
     /// Bumped with every snapshot. A content read carries the epoch it was
     /// dispatched under and may not install over a newer one.
     pub(crate) content_epoch: u64,
+    /// The host instance the content states were read from. A reconnect keeps
+    /// `host_id` but installs a new instance, and bytes read over the retired
+    /// connection must not draw for the new one even when no snapshot has
+    /// landed to bump [`Self::content_epoch`] yet. Weak, so an overlay left
+    /// open on a disconnect does not keep the retired link alive.
+    pub(crate) content_host: Option<std::sync::Weak<dyn lyrel_ui_base::host_ops::Host>>,
     /// The virtualised list the rows scroll in. Held across frames: it owns
     /// the scroll position, and the row heights gpui has measured.
     pub(crate) list: gpui_kit::ListState,
@@ -218,6 +224,7 @@ impl LyrelApp {
             selecting: false,
             content: std::collections::HashMap::new(),
             content_epoch: 0,
+            content_host: None,
             list: gpui_kit::ListState::new(0, gpui_kit::ListAlignment::Top, px(256.))
                 .with_uniform_item_height(DIFF_LINE_H),
             rows: Rc::new(Vec::new()),
@@ -1275,6 +1282,58 @@ impl LyrelApp {
             .into_any_element()
     }
 
+    /// The live host for this overlay, after invalidating content read from a
+    /// previous connection to the same `HostId`.
+    ///
+    /// A reconnect replaces the registry instance without changing the id or
+    /// necessarily landing a new snapshot. Bytes installed from the retired
+    /// connection are the wrong generation even when the path and revision
+    /// spell the same thing, so they are dropped and the epoch advances, which
+    /// makes the next fetch ask the live host instead of reusing them.
+    fn sync_content_host(
+        &mut self,
+        host_id: lyrel_ui_base::host_ops::HostId,
+        cwd: &Path,
+        source: &DiffSource,
+        cx: &mut Context<Self>,
+    ) -> Option<lyrel_ui_base::host_ops::SharedHost> {
+        let live = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id);
+        let mut invalidated = false;
+        for tab in self.tabs.iter_mut() {
+            let Some(overlay) = tab
+                .diff_overlay
+                .as_mut()
+                .filter(|o| o.host_id == host_id && o.cwd == cwd && o.source == *source)
+            else {
+                continue;
+            };
+            let retired = match (&live, overlay.content_host.as_ref()) {
+                // A dead weak handle is the connection that went away, not a
+                // licence to reuse its bytes on whatever replaced it.
+                (Some(live), Some(read)) => match read.upgrade() {
+                    Some(read) => !Arc::ptr_eq(&read, live),
+                    None => true,
+                },
+                // Content that exists without a recorded connection was
+                // explained while no host was live; a host coming back must
+                // re-read rather than inherit those failures.
+                (Some(_), None) => !overlay.content.is_empty(),
+                (None, Some(_)) => true,
+                (None, None) => false,
+            };
+            if retired {
+                overlay.content.clear();
+                overlay.content_epoch = overlay.content_epoch.wrapping_add(1);
+                invalidated = true;
+            }
+            overlay.content_host = live.as_ref().map(Arc::downgrade);
+        }
+        if invalidated {
+            cx.notify();
+        }
+        live
+    }
+
     /// Dispatch the structural reads the Content view needs this frame: one
     /// per expanded textual file (or the focused untracked file), each through
     /// the owning Host, each only once per snapshot.
@@ -1289,6 +1348,19 @@ impl LyrelApp {
             return;
         }
         let active = self.tabs.active_index();
+        let Some((host_id, cwd, source)) = self
+            .tabs
+            .get(active)
+            .and_then(|t| t.diff_overlay.as_ref())
+            .map(|o| (o.host_id, o.cwd.clone(), o.source.clone()))
+        else {
+            return;
+        };
+        // A reconnect keeps the HostId and installs a new host instance.
+        // Drop the bytes read over the old connection before deciding what
+        // still needs a read, so this frame asks the live host and draws
+        // nothing from the generation that left.
+        let host = self.sync_content_host(host_id, &cwd, &source, cx);
         let Some(overlay) = self.tabs.get(active).and_then(|t| t.diff_overlay.as_ref()) else {
             return;
         };
@@ -1400,7 +1472,7 @@ impl LyrelApp {
             }
         }
 
-        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
+        let Some(host) = host else {
             self.fail_content_reads(&source, &fetches, cx);
             return;
         };
@@ -4485,6 +4557,7 @@ mod selection_gpui_tests {
                 selecting: false,
                 content: HashMap::new(),
                 content_epoch: 0,
+                content_host: None,
                 list: gpui_kit::ListState::new(0, gpui_kit::ListAlignment::Top, px(256.))
                     .with_uniform_item_height(DIFF_LINE_H),
                 rows: Rc::new(Vec::new()),
@@ -4704,7 +4777,14 @@ mod content_view_tests {
     use crate::ui::content_diff::{ContentFailure, ContentState};
     use crate::ui::scm::diff::{DiffLine, Hunk};
     use gpui_kit::{Entity, TestAppContext, VisualTestContext};
+    use lyrel_core::host::local::LocalHost;
+    use lyrel_core::host::{
+        ContentLimits, ContentQuery, ContentResults, Entry, Host, Meta, Output, SearchHit,
+        SharedHost,
+    };
     use lyrel_ui_base::host_ops::HostId;
+    use lyrel_ui_base::host_registry::HostRegistry;
+    use std::io;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
@@ -4769,6 +4849,19 @@ mod content_view_tests {
         focus: Option<&str>,
         expanded: &[&str],
     ) {
+        open_source_on(app, vcx, HostId::LOCAL, root, source, focus, expanded);
+    }
+
+    /// As [`open_source`], for an overlay whose files live on another Host.
+    fn open_source_on(
+        app: &Entity<LyrelApp>,
+        vcx: &mut VisualTestContext,
+        host: HostId,
+        root: &Path,
+        source: DiffSource,
+        focus: Option<&str>,
+        expanded: &[&str],
+    ) {
         let root = root.to_path_buf();
         let focus = focus.map(str::to_string);
         let expanded: Vec<String> = expanded.iter().map(|p| p.to_string()).collect();
@@ -4776,7 +4869,7 @@ mod content_view_tests {
             let mut cfg = cx.global::<Config>().clone();
             cfg.diff_view = DiffViewMode::Content;
             cx.set_global(cfg);
-            app.open_diff_overlay(HostId::LOCAL, root.clone(), source, focus, window, cx);
+            app.open_diff_overlay(host, root.clone(), source, focus, window, cx);
             let active = app.tabs.active_index();
             let overlay = app.tabs[active]
                 .diff_overlay
@@ -4988,6 +5081,383 @@ mod content_view_tests {
         })
         .join()
         .expect("the read thread finishes")
+    }
+
+    /// A host with another machine's identity whose bytes really come from a
+    /// local fixture directory. It is how a remote overlay is exercised
+    /// without a real SSH link: the Host seam is the same one the transport
+    /// implements, and the id is what separates "this host's bytes" from the
+    /// desktop's.
+    ///
+    /// A mounted fixture presents a path that does not exist on this desk — a
+    /// remote checkout — and backs it with a local directory. Everything the
+    /// overlay sees is the mounted path, so only a read through this Host can
+    /// reach the bytes; local path resolution has nothing to find.
+    struct ForeignDiffHost {
+        inner: SharedHost,
+        id: HostId,
+        can_read_versions: bool,
+        mount: Option<(PathBuf, PathBuf)>,
+    }
+
+    impl ForeignDiffHost {
+        fn mounted(id: HostId, shown: &Path, backing: &Path, can_read_versions: bool) -> SharedHost {
+            Arc::new(Self {
+                inner: Arc::new(LocalHost::new()),
+                id,
+                can_read_versions,
+                mount: Some((shown.to_path_buf(), backing.to_path_buf())),
+            })
+        }
+
+        /// The real directory behind a mounted path, or the path unchanged.
+        fn backing(&self, p: &Path) -> PathBuf {
+            let Some((shown, backing)) = &self.mount else {
+                return p.to_path_buf();
+            };
+            let shown = shown.to_string_lossy();
+            let path = p.to_string_lossy();
+            if path == shown {
+                return backing.clone();
+            }
+            match path
+                .strip_prefix(shown.as_ref())
+                .and_then(|rest| rest.strip_prefix(['/', '\\']))
+            {
+                Some(rest) => backing.join(rest),
+                None => p.to_path_buf(),
+            }
+        }
+
+        fn backing_roots(&self, roots: &[PathBuf]) -> Vec<PathBuf> {
+            roots.iter().map(|root| self.backing(root)).collect()
+        }
+    }
+
+    impl Host for ForeignDiffHost {
+        fn id(&self) -> HostId {
+            self.id
+        }
+        fn separator(&self) -> char {
+            self.inner.separator()
+        }
+        fn is_absolute(&self, p: &Path) -> bool {
+            self.inner.is_absolute(p) || self.mount.as_ref().is_some_and(|(m, _)| p == m)
+        }
+        fn read_dir(&self, p: &Path, root: Option<&Path>) -> io::Result<Vec<Entry>> {
+            let root = root.map(|root| self.backing(root));
+            self.inner.read_dir(&self.backing(p), root.as_deref())
+        }
+        fn stat(&self, p: &Path) -> io::Result<Meta> {
+            self.inner.stat(&self.backing(p))
+        }
+        fn read_file(&self, p: &Path, max: u64) -> io::Result<Vec<u8>> {
+            self.inner.read_file(&self.backing(p), max)
+        }
+        fn canonicalize(&self, p: &Path) -> io::Result<PathBuf> {
+            self.inner.canonicalize(&self.backing(p))
+        }
+        fn search(
+            &self,
+            roots: &[PathBuf],
+            query: &str,
+            limit: usize,
+            max_dirs: usize,
+            hidden: bool,
+        ) -> io::Result<Vec<SearchHit>> {
+            self.inner
+                .search(&self.backing_roots(roots), query, limit, max_dirs, hidden)
+        }
+        fn search_content(
+            &self,
+            roots: &[PathBuf],
+            query: &ContentQuery,
+            limits: &ContentLimits,
+        ) -> io::Result<ContentResults> {
+            self.inner
+                .search_content(&self.backing_roots(roots), query, limits)
+        }
+        fn write_file(&self, p: &Path, bytes: &[u8]) -> io::Result<Meta> {
+            self.inner.write_file(&self.backing(p), bytes)
+        }
+        fn create_file_new(&self, p: &Path) -> io::Result<()> {
+            self.inner.create_file_new(&self.backing(p))
+        }
+        fn create_dir(&self, p: &Path, recursive: bool) -> io::Result<()> {
+            self.inner.create_dir(&self.backing(p), recursive)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            self.inner.rename(&self.backing(from), &self.backing(to))
+        }
+        fn remove(&self, p: &Path, recursive: bool) -> io::Result<()> {
+            self.inner.remove(&self.backing(p), recursive)
+        }
+        fn repo_root(&self, p: &Path) -> io::Result<Option<PathBuf>> {
+            self.inner.repo_root(&self.backing(p))
+        }
+        fn git(&self, cwd: &Path, args: &[&str]) -> io::Result<Output> {
+            let mut out = self.inner.git(&self.backing(cwd), args)?;
+            // The host claims the mounted root as its own checkout, exactly
+            // as a far side would report its own path.
+            if out.success()
+                && args.len() == 2
+                && args[0] == "rev-parse"
+                && args[1] == "--show-toplevel"
+                && let Some((shown, _)) = &self.mount
+            {
+                out.stdout = format!("{}\n", shown.to_string_lossy()).into_bytes();
+            }
+            Ok(out)
+        }
+        fn git_blob(&self, cwd: &Path, spec: &str, max_bytes: u64) -> io::Result<Option<Vec<u8>>> {
+            match self.can_read_versions {
+                true => self.inner.git_blob(&self.backing(cwd), spec, max_bytes),
+                false => Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "this fixture peer has no version reads",
+                )),
+            }
+        }
+        fn shells(&self) -> io::Result<lyrel_core::core::shells::ShellInventory> {
+            self.inner.shells()
+        }
+        fn watch(&self, paths: &[PathBuf]) -> io::Result<lyrel_ui_base::host_ops::WatchSub> {
+            self.inner.watch(&self.backing_roots(paths))
+        }
+    }
+
+    /// The path a mounted fixture presents to the overlay. It names nothing on
+    /// this desk: only the Host can resolve it.
+    fn foreign_root() -> PathBuf {
+        PathBuf::from("/lyrel-fixture/content")
+    }
+
+    fn foreign_id() -> HostId {
+        HostId::from_connection_key("ssh-direct:lyrel@content-fixture:22")
+    }
+
+    /// A repository on the foreign Host, staged to v2 and then edited to v3
+    /// in the worktree — the shape of a real remote review.
+    fn foreign_repo() -> (tempfile::TempDir, PathBuf) {
+        let (temp, root) = empty_repo();
+        write_file(&root, "a.rs", V1);
+        commit_all(&root, "base");
+        write_file(&root, "a.rs", V2);
+        git_ok(&root, &["add", "a.rs"]);
+        write_file(&root, "a.rs", V3);
+        (temp, root)
+    }
+
+    #[gpui_kit::test]
+    fn a_remote_staged_view_reads_its_own_hosts_index_not_the_local_copy(
+        cx: &mut TestAppContext,
+    ) {
+        let (_remote_temp, remote_backing) = foreign_repo();
+        // A competing desktop checkout with the same relative path: if any
+        // read fell back to local resolution, its marker would appear instead.
+        let (_local_temp, local_root) = empty_repo();
+        write_file(&local_root, "a.rs", "fn local_only() {}\n");
+
+        let id = foreign_id();
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        let host = ForeignDiffHost::mounted(id, &foreign_root(), &remote_backing, true);
+        vcx.update(|_, cx| HostRegistry::insert(cx, host));
+
+        open_source_on(
+            &app,
+            &mut vcx,
+            id,
+            &foreign_root(),
+            DiffSource::Staged,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        frame(&app, &mut vcx);
+
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(has(&old, "\"v1\""), "the staged old side is HEAD");
+        assert!(has(&new, "\"v2\""), "the staged new side is the index");
+        assert!(
+            !has(&new, "\"v3\""),
+            "the worktree edit is not part of the staged comparison"
+        );
+        assert!(
+            !has(&old, "local_only") && !has(&new, "local_only"),
+            "a competing local path never substitutes for the Host's bytes"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_remote_peer_without_version_reads_explains_and_keeps_the_line_view(
+        cx: &mut TestAppContext,
+    ) {
+        let (_temp, backing) = foreign_repo();
+        let id = foreign_id();
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        vcx.update(|_, cx| {
+            HostRegistry::insert(cx, ForeignDiffHost::mounted(id, &foreign_root(), &backing, false));
+        });
+
+        open_source_on(
+            &app,
+            &mut vcx,
+            id,
+            &foreign_root(),
+            DiffSource::Worktree,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| {
+            app.tabs[app.tabs.active_index()]
+                .diff_overlay
+                .as_ref()
+                .is_some_and(|o| {
+                    matches!(
+                        o.content.get("a.rs"),
+                        Some(ContentState::Failed(ContentFailure::RemoteUnsupported))
+                    )
+                })
+        });
+        frame(&app, &mut vcx);
+
+        let rows = rows(&app, &mut vcx);
+        assert!(
+            rows.iter().any(|row| matches!(
+                row,
+                DiffRow::ContentStatus(L10nKey::DiffContentRemoteUnsupported)
+            )),
+            "the missing capability is named"
+        );
+        assert!(
+            rows.iter().any(|row| matches!(row, DiffRow::Split { .. })),
+            "the ordinary line diff still draws"
+        );
+        assert_eq!(
+            vcx.update(|_, cx| cx.global::<Config>().diff_view),
+            DiffViewMode::Content,
+            "a fallback never rewrites the configured mode"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_reconnect_drops_content_from_the_previous_connection(cx: &mut TestAppContext) {
+        let (_temp, backing) = foreign_repo();
+        let id = foreign_id();
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        let retired = ForeignDiffHost::mounted(id, &foreign_root(), &backing, true);
+        vcx.update(|_, cx| HostRegistry::insert(cx, retired));
+
+        open_source_on(
+            &app,
+            &mut vcx,
+            id,
+            &foreign_root(),
+            DiffSource::Worktree,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        assert!(
+            app.update_in(&mut vcx, |app, _, _| content_has(app, "a.rs", "\"v3\"")),
+            "the first connection reads the worktree it saw"
+        );
+
+        // Reconnect under the same HostId: a new instance, the same path,
+        // and a tree that moved on. No snapshot lands, so only the host
+        // identity can fence the old bytes.
+        write_file(&backing, "a.rs", "fn alpha() {}\n\nfn beta() {\n    println!(\"v4\");\n}\n");
+        vcx.update(|_, cx| {
+            HostRegistry::insert(
+                cx,
+                ForeignDiffHost::mounted(id, &foreign_root(), &backing, true),
+            );
+        });
+        pump_until(&app, &mut vcx, |app| {
+            content_has(app, "a.rs", "\"v4\"")
+        });
+        frame(&app, &mut vcx);
+
+        let rows = rows(&app, &mut vcx);
+        let (_, new) = content_texts(&rows);
+        assert!(has(&new, "\"v4\""), "the live connection's bytes draw");
+        assert!(
+            !has(&new, "\"v3\""),
+            "bytes from the retired connection are gone"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn a_late_landing_from_another_host_is_not_rendered(cx: &mut TestAppContext) {
+        let (_remote_temp, remote_backing) = foreign_repo();
+        let (_local_temp, local_root) = empty_repo();
+        write_file(&local_root, "a.rs", "fn local_index() {}\n");
+        git_ok(&local_root, &["add", "a.rs"]);
+        write_file(&local_root, "a.rs", "fn local_worktree() {}\n");
+
+        let id = foreign_id();
+        let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        let retired = ForeignDiffHost::mounted(id, &foreign_root(), &remote_backing, true);
+        vcx.update(|_, cx| HostRegistry::insert(cx, retired.clone()));
+
+        open_source_on(
+            &app,
+            &mut vcx,
+            id,
+            &foreign_root(),
+            DiffSource::Worktree,
+            Some("a.rs"),
+            &["a.rs"],
+        );
+        pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+
+        // The desktop's own copy of the same relative path is read, with the
+        // remote key still in flight. A fresh connection then replaces the
+        // host, and the retired read lands late.
+        let local_host = app
+            .update_in(&mut vcx, |_, _, cx| HostRegistry::lookup(cx, HostId::LOCAL))
+            .expect("the local host is registered");
+        let plan = plan_for(&DiffSource::Worktree, "a.rs", "a.rs").unwrap();
+        let local_file = read_content(local_host, local_root.clone(), plan);
+        let epoch = app.update_in(&mut vcx, |app, _, _| content_epoch(app));
+        let key = ContentFetchKey {
+            host: id,
+            cwd: foreign_root(),
+            source: DiffSource::Worktree,
+            path: "a.rs".into(),
+            epoch,
+        };
+        app.update_in(&mut vcx, |app, _, _| {
+            assert_eq!(
+                app.content_fetches.request(&retired, &key),
+                ContentRequest::Spawn
+            );
+        });
+        vcx.update(|_, cx| {
+            HostRegistry::insert(
+                cx,
+                ForeignDiffHost::mounted(id, &foreign_root(), &remote_backing, true),
+            );
+        });
+        app.update_in(&mut vcx, |app, _, cx| {
+            app.land_content_fetch(key.clone(), retired.clone(), Ok(local_file), cx);
+        });
+        assert!(
+            !app.update_in(&mut vcx, |app, _, _| content_has(app, "a.rs", "local_")),
+            "the other Host's bytes never land in this overlay"
+        );
+
+        // A frame asks the live connection again, and only its bytes draw.
+        pump_until(&app, &mut vcx, |app| content_has(app, "a.rs", "\"v3\""));
+        frame(&app, &mut vcx);
+        let rows = rows(&app, &mut vcx);
+        let (old, new) = content_texts(&rows);
+        assert!(
+            !has(&old, "local_") && !has(&new, "local_"),
+            "the rejected read left nothing behind"
+        );
+        assert!(has(&new, "\"v3\""), "the remote worktree still draws");
     }
 
     #[gpui_kit::test]
@@ -5875,6 +6345,128 @@ mod content_view_tests {
         assert_eq!(
             vcx.update(|_, cx| cx.global::<Config>().diff_view),
             DiffViewMode::Content
+        );
+    }
+
+    fn content_line_text(file: &ContentFile) -> String {
+        file.file
+            .hunks
+            .iter()
+            .flat_map(|hunk| hunk.lines.iter())
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The real SSH acceptance for #389: an isolated remote Git checkout,
+    /// read through the production control link and the same bounded
+    /// selected-file retrieval the desktop uses. Staged-then-edited shows the
+    /// index version; the worktree comparison shows the edit; a desktop
+    /// checkout at the same relative path contributes nothing.
+    ///
+    /// Deferred fixture: needs an isolated pinned native SSH/SFTP endpoint,
+    /// a same-commit `lyrel-server`, and `LYREL_TEST_SSH_LOCAL_SERVER` (see
+    /// `.agent/skills/lyrel-development/SKILL.md`), plus `git` on the remote.
+    /// Run alone with `--ignored --exact`.
+    #[gpui_kit::test]
+    #[ignore = "requires isolated pinned native SSH/SFTP, same-commit server, and LYREL_TEST_SSH_LOCAL_SERVER; run alone"]
+    fn native_ssh_content_review_reads_the_remote_versions(_: &mut TestAppContext) {
+        let binary = PathBuf::from(
+            std::env::var_os("LYREL_TEST_SSH_LOCAL_SERVER").expect("same-commit server"),
+        );
+        let fixture = crate::native_ssh_graphics_fixture::NativeSshFixture::start(&binary);
+        lyrel_core::core::config::set_config_dir(fixture.local_config_dir());
+        let host = fixture.connect_control();
+        assert!(host.is_connected(), "the isolated SSH link is up");
+        let remote_home = PathBuf::from(fixture.remote_home());
+        let repo = host.join(&remote_home, "lyrel-389-content");
+        host.create_dir(&repo, true).expect("remote fixture repo");
+
+        let git = |args: &[&str]| {
+            let out = host.git(&repo, args).expect("remote git runs");
+            assert!(
+                out.success(),
+                "remote git {args:?} failed: {}",
+                out.stderr_trimmed()
+            );
+        };
+        git(&["init", "--quiet", "-b", "main"]);
+        git(&["config", "user.name", "Content Fixture"]);
+        git(&["config", "user.email", "content@fixture.test"]);
+        git(&["config", "core.autocrlf", "false"]);
+        host.write_file(&host.join(&repo, "a.rs"), V1.as_bytes())
+            .expect("remote base file");
+        git(&["add", "a.rs"]);
+        git(&["commit", "--quiet", "-m", "base"]);
+        // Staged v2, then edited to v3. Only the index side may feed the
+        // staged comparison.
+        host.write_file(&host.join(&repo, "a.rs"), V2.as_bytes())
+            .expect("remote staged file");
+        git(&["add", "a.rs"]);
+        host.write_file(&host.join(&repo, "a.rs"), V3.as_bytes())
+            .expect("remote worktree file");
+
+        // A competing desktop checkout at the same relative path.
+        let (_local_temp, local_root) = empty_repo();
+        write_file(&local_root, "a.rs", "fn local_only() {}\n");
+        git_ok(&local_root, &["add", "a.rs"]);
+
+        let staged = plan_for(&DiffSource::Staged, "a.rs", "a.rs").unwrap();
+        let worktree = plan_for(&DiffSource::Worktree, "a.rs", "a.rs").unwrap();
+        let worker = {
+            let host = Arc::clone(&host);
+            let repo = repo.clone();
+            std::thread::spawn(move || {
+                let staged = fetch_content(&*host, &repo, &staged, FileStatus::Modified)
+                    .expect("the remote staged pair reads");
+                let worktree = fetch_content(&*host, &repo, &worktree, FileStatus::Modified)
+                    .expect("the remote worktree pair reads");
+                (staged, worktree)
+            })
+        };
+        let (staged, worktree) = worker.join().expect("the read thread finishes");
+
+        let staged_text = content_line_text(&staged);
+        assert!(staged_text.contains("\"v1\""), "the staged old side is HEAD");
+        assert!(
+            staged_text.contains("\"v2\""),
+            "the staged new side is the index"
+        );
+        assert!(
+            !staged_text.contains("\"v3\""),
+            "the worktree edit is not part of the staged comparison"
+        );
+        assert!(
+            !staged_text.contains("local_only"),
+            "the desktop's copy never substitutes for the remote checkout"
+        );
+
+        let worktree_text = content_line_text(&worktree);
+        assert!(worktree_text.contains("\"v2\""), "the unstaged old side is the index");
+        assert!(
+            worktree_text.contains("\"v3\""),
+            "the unstaged new side is the worktree"
+        );
+        assert!(!worktree_text.contains("local_only"));
+        assert_ne!(host.id(), HostId::LOCAL);
+
+        // A dropped link is a read failure, never bytes reused from the
+        // previous connection.
+        let mut fixture = fixture;
+        fixture.restart_router();
+        let error = host
+            .git_blob(&repo, ":a.rs", 1024)
+            .expect_err("the retired link cannot answer");
+        assert!(
+            matches!(
+                error.kind(),
+                io::ErrorKind::NotConnected
+                    | io::ErrorKind::ConnectionReset
+                    | io::ErrorKind::BrokenPipe
+                    | io::ErrorKind::UnexpectedEof
+                    | io::ErrorKind::TimedOut
+            ),
+            "a dead link must not present a stale version: {error}"
         );
     }
 }

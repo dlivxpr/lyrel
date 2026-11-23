@@ -3011,6 +3011,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::DiffContentReadFailed => {
             "Couldn't read this file's two versions; showing the line diff."
         }
+        L10nKey::DiffContentRemoteUnsupported => {
+            "This remote Host can't send file versions for the content-aware view; update lyrel-server there, or keep using the line diff."
+        }
         L10nKey::DiffContentJumpSource => "Jump to original position",
         L10nKey::DiffContentJumpBlock => "Jump to the moved block",
         L10nKey::DiffContentMoved => "Moved",

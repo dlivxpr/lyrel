@@ -87,7 +87,12 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// v21 adds `DirectoryScan` and the `disk-usage-v1` feature. The owning
 /// host scans the directory under a work bound and reports its volume size.
 /// v22 adds the bounded native session `SessionBatch` request/reply pair.
-pub const CONTROL_VERSION: u32 = 22;
+/// v23 adds `GitBlob` and the `git-blob-v1` feature: one revision-addressed
+/// file version read under a byte bound on the owning host, so the
+/// content-aware Diff never transfers an unbounded `git show`. A peer
+/// without the feature is never asked; the view keeps its line fallback and
+/// names the missing capability instead.
+pub const CONTROL_VERSION: u32 = 23;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -179,6 +184,12 @@ pub mod feature {
     /// [`crate::host::sqlite::SqliteRequest`]. A peer without it is asked for
     /// nothing, and the caller sees `Unsupported` rather than an empty schema.
     pub const SQLITE_BROWSE: &str = "sqlite-browse-v1";
+    /// The peer answers [`ControlRequest::GitBlob`] on the owning host: one
+    /// revision-addressed file version, bounded before it crosses the wire.
+    /// A peer without it is never asked — a `Git` request would carry the
+    /// whole `git show` output — and the content-aware Diff shows its line
+    /// fallback with the missing-capability reason (#389).
+    pub const GIT_BLOB: &str = "git-blob-v1";
     pub const HOST_METRICS: &str = "host-metrics-v1";
     /// The peer's `HostMetrics` answer may carry `lyrel_usage`: its own
     /// daemon process stamped with the control instance. Appended as an
@@ -341,6 +352,15 @@ pub enum ControlRequest {
         id: u64,
         cwd: String,
         args: Vec<String>,
+    },
+    /// One file version from a git revision expression (`rev:path`, or
+    /// `:path` for the index), bounded by `max_bytes` on the owning host.
+    /// Gated on [`feature::GIT_BLOB`]; the bytes ride as the reply blob and
+    /// `present` distinguishes an empty file from an absent side.
+    GitBlob {
+        cwd: String,
+        spec: String,
+        max_bytes: u64,
     },
 
     Shells,
@@ -707,7 +727,9 @@ impl ControlRequest {
             CreateFileNew { .. } | CreateDir { .. } | Rename { .. } | Remove { .. } => {
                 Duration::from_secs(10)
             }
-            Git { .. } | GitStream { .. } | Search { .. } => Duration::from_secs(20),
+            Git { .. } | GitStream { .. } | GitBlob { .. } | Search { .. } => {
+                Duration::from_secs(20)
+            }
             // Past the host's own time budget (`ContentLimits::max_millis`),
             // so a search that ran long still gets to say what it found.
             SearchContent { .. } => Duration::from_secs(30),
@@ -754,7 +776,9 @@ impl ControlRequest {
     pub fn returns_blob(&self) -> bool {
         matches!(
             self,
-            ControlRequest::ReadFile { .. } | ControlRequest::ReadChunk { .. }
+            ControlRequest::ReadFile { .. }
+                | ControlRequest::ReadChunk { .. }
+                | ControlRequest::GitBlob { .. }
         )
     }
 }
@@ -795,6 +819,13 @@ pub enum ReplyOk {
     ReadOpened {
         session: u64,
         meta: Meta,
+    },
+    /// One revision-addressed file version; `present` separates an absent
+    /// side from an empty file, and `len` is the byte count of the blob that
+    /// travels with this reply.
+    GitBlob {
+        present: bool,
+        len: u64,
     },
     Hits(Vec<SearchHit>),
     ContentHits(ContentResults),
@@ -2182,6 +2213,11 @@ mod tests {
                 cwd: "/home/me/proj".into(),
                 args: vec!["status".into(), "--porcelain".into()],
             },
+            ControlRequest::GitBlob {
+                cwd: "/home/me/proj".into(),
+                spec: ":src/main.rs".into(),
+                max_bytes: 1 << 20,
+            },
             ControlRequest::WatchOpen {
                 dirs: vec!["/home/me/proj".into()],
             },
@@ -2284,6 +2320,14 @@ mod tests {
             ControlReply::Ok(ReplyOk::OptPath(Some("/home/me/proj".into()))),
             ControlReply::Ok(ReplyOk::OptPath(None)),
             ControlReply::Ok(ReplyOk::FileMeta { meta: meta() }),
+            ControlReply::Ok(ReplyOk::GitBlob {
+                present: false,
+                len: 0,
+            }),
+            ControlReply::Ok(ReplyOk::GitBlob {
+                present: true,
+                len: 11,
+            }),
             ControlReply::Ok(ReplyOk::Hits(vec![SearchHit {
                 name: "widget.rs".into(),
                 path: PathBuf::from("/home/me/proj/src/widget.rs"),
@@ -3063,6 +3107,14 @@ mod tests {
                 s(20),
             ),
             (
+                R::GitBlob {
+                    cwd: "/".into(),
+                    spec: ":a.rs".into(),
+                    max_bytes: 1024,
+                },
+                s(20),
+            ),
+            (
                 R::Search {
                     roots: vec![],
                     query: String::new(),
@@ -3116,7 +3168,12 @@ mod tests {
     fn blob_shape_is_known_per_request() {
         for req in every_request() {
             let takes = matches!(req, ControlRequest::WriteFile { .. });
-            let returns = matches!(req, ControlRequest::ReadFile { .. });
+            let returns = matches!(
+                req,
+                ControlRequest::ReadFile { .. }
+                    | ControlRequest::ReadChunk { .. }
+                    | ControlRequest::GitBlob { .. }
+            );
             assert_eq!(req.takes_blob(), takes, "takes_blob for {req:?}");
             assert_eq!(req.returns_blob(), returns, "returns_blob for {req:?}");
         }

@@ -2682,6 +2682,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::DiffContentOverBudget => "文件过大，内容感知视图无法比较，已显示行级差异。",
         L10nKey::DiffContentParseFailed => "无法解析此文件的内容感知结构，已显示行级差异。",
         L10nKey::DiffContentReadFailed => "无法读取此文件的两个版本，已显示行级差异。",
+        L10nKey::DiffContentRemoteUnsupported => "此远程 Host 无法发送文件版本，内容感知视图不可用；请更新该 Host 上的 lyrel-server，或继续使用行级差异。",
         L10nKey::DiffContentJumpSource => "跳转到原始位置",
         L10nKey::DiffContentJumpBlock => "跳转到移动后的块",
         L10nKey::DiffContentMoved => "已移动",

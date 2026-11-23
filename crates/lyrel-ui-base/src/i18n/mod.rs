@@ -2324,6 +2324,7 @@ l10n_keys! {
     DiffContentOverBudget,
     DiffContentParseFailed,
     DiffContentReadFailed,
+    DiffContentRemoteUnsupported,
     DiffContentJumpSource,
     DiffContentJumpBlock,
     DiffContentMoved,
