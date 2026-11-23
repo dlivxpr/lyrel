@@ -8,6 +8,7 @@ pub(crate) mod caffeine;
 mod caffeine_consumer_tests;
 #[cfg(any(test, feature = "native-markdown-tests"))]
 pub mod code_editor;
+pub mod content_diff;
 pub mod desktop_lookups;
 pub mod dialog;
 pub mod diff_list;

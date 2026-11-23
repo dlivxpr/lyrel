@@ -165,6 +165,13 @@ impl DiffProbeTracker {
     fn is_restale(&self, key: &DiffProbeKey) -> bool {
         self.restale.contains(key)
     }
+
+    /// How many probes are out. A workbench test that waits for an overlay's
+    /// own read to settle needs to see this without reaching into the map.
+    #[cfg(test)]
+    pub(crate) fn inflight(&self) -> usize {
+        self.inflight.len()
+    }
 }
 
 #[cfg(test)]

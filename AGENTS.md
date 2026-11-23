@@ -30,7 +30,7 @@ GUI/CLI 经 `lyrel-protocol` 连接独立 Session Daemon；`lyrel-core` 重导�
 | `Cargo.toml`、`Cargo.lock`、`.cargo/config.toml` | workspace、统一版本、features、锁定依赖与开发别名 |
 | `scripts/`、`.github/`、`docs/docs.json` | 开发与平台脚本、CI/发布工作流、文档导航 |
 
-13 个包的生产依赖分层见 `docs/reference/architecture.mdx`。根包与 updater、UI base、Markdown editor、terminal、workbench editor 仅在 Windows／macOS 构建；Linux headless 的选包命令见开发 Skill。终端与编辑工作台独立编译，不相互依赖。
+14 个包的生产依赖分层见 `docs/reference/architecture.mdx`。根包与 updater、UI base、Markdown editor、terminal、workbench editor、content-diff 仅在 Windows／macOS 构建；Linux headless 的选包命令见开发 Skill。终端与编辑工作台独立编译，不相互依赖。
 
 ## 工程底线
 

@@ -2911,7 +2911,52 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::DiffUntrackedSummary => "{count} untracked",
         L10nKey::DiffViewSplit => "Side by Side",
         L10nKey::DiffViewUnified => "Unified",
+        L10nKey::DiffViewContent => "Content-Aware",
         L10nKey::DiffCopySelection => "Copy Selected Lines",
+        L10nKey::DiffContentReading => "Reading file…",
+        L10nKey::DiffContentPatchOnly => {
+            "The content-aware view doesn't apply to a patch-only comparison; showing the line diff."
+        }
+        L10nKey::DiffContentUnsupported => {
+            "The content-aware view doesn't support this file type; showing the line diff."
+        }
+        L10nKey::DiffContentOverBudget => {
+            "This file is too large for the content-aware view; showing the line diff."
+        }
+        L10nKey::DiffContentParseFailed => {
+            "This file couldn't be parsed for the content-aware view; showing the line diff."
+        }
+        L10nKey::DiffContentReadFailed => {
+            "Couldn't read this file's two versions; showing the line diff."
+        }
+        L10nKey::DiffContentJumpSource => "Jump to original position",
+        L10nKey::DiffContentJumpBlock => "Jump to the moved block",
+        L10nKey::DiffContentMoved => "Moved",
+        L10nKey::DiffContentModified => "Modified",
+        L10nKey::DiffContentAdded => "Added",
+        L10nKey::DiffContentDeleted => "Deleted",
+        L10nKey::DiffContentFromLine => "from line {line}",
+        L10nKey::DiffContentToLine => "moved to line {line}",
+        L10nKey::DiffContentFormatting => "Formatting only",
+        L10nKey::DiffContentElided => "{count} unchanged lines",
+        L10nKey::DiffContentItemFunction => "function",
+        L10nKey::DiffContentItemMethod => "method",
+        L10nKey::DiffContentItemClass => "class",
+        L10nKey::DiffContentItemModule => "module",
+        L10nKey::DiffContentItemStruct => "struct",
+        L10nKey::DiffContentItemEnum => "enum",
+        L10nKey::DiffContentItemTrait => "trait",
+        L10nKey::DiffContentItemImpl => "impl",
+        L10nKey::DiffContentItemType => "type",
+        L10nKey::DiffContentItemConstant => "constant",
+        L10nKey::DiffContentItemMacro => "macro",
+        L10nKey::DiffContentItemKey => "key",
+        L10nKey::DiffContentItemSection => "section",
+        L10nKey::DiffContentItemImport => "import",
+        L10nKey::DiffContentItemVariable => "variable",
+        L10nKey::DiffContentItemArray => "array",
+        L10nKey::DiffContentItemSequence => "sequence",
+        L10nKey::DiffContentItemItem => "item",
         L10nKey::PendingConnecting => "Connecting to {machine}…",
         L10nKey::PendingUnreachable => "Could not reach {machine}",
         L10nKey::WorktreePromptNeedsName => "The worktree needs a name",
@@ -3290,7 +3335,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdChangeTheme => "Change Theme",
         L10nKey::CmdResetFontSize => "Reset Font Size",
         L10nKey::CmdEnterFullScreen => "Enter Full Screen",
-        L10nKey::CmdToggleDiffViewMode => "Toggle Unified / Side-by-Side Diff",
+        L10nKey::CmdToggleDiffViewMode => "Cycle Diff View (Content, Unified, Side by Side)",
         L10nKey::CmdDocumentDock => "Document: Dock Beside Terminal",
         L10nKey::CmdDocumentFill => "Document: Fill Window",
         L10nKey::CmdToggleDocumentFill => "Toggle Document Fill / Dock",

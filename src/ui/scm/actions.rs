@@ -83,14 +83,16 @@ impl LyrelApp {
         cx.notify();
     }
 
-    /// Flip the diff overlay between side-by-side and unified.
+    /// Cycle the diff overlay between side-by-side, unified, and
+    /// content-aware.
     ///
     /// Global rather than per-overlay, matching `diffEditor.renderSideBySide`:
     /// someone who prefers unified prefers it for every file.
     pub(crate) fn toggle_diff_view_mode(&mut self, cx: &mut Context<Self>) {
         let next = match cx.global::<lyrel_ui_base::config::Config>().diff_view {
             DiffViewMode::Split => DiffViewMode::Unified,
-            DiffViewMode::Unified => DiffViewMode::Split,
+            DiffViewMode::Unified => DiffViewMode::Content,
+            DiffViewMode::Content => DiffViewMode::Split,
         };
         self.update_config(cx, |cfg| cfg.diff_view = next);
         cx.notify();
