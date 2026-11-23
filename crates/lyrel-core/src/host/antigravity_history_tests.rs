@@ -143,6 +143,7 @@ fn request(
         launch_argv: vec!["agy".into()],
         scope: SessionScope {
             environment: home_environment(home),
+            shell_program: Some(if cfg!(windows) { "pwsh" } else { "sh" }.into()),
             ..Default::default()
         },
     }
