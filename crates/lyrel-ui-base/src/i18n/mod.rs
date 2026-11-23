@@ -2109,6 +2109,21 @@ l10n_keys! {
     ToolHostAdd,
     // A tool tab's close button; `{tool}` is the tool's visible name.
     ToolHostClose,
+    // A web page tab's close button; `{page}` is the page's title.
+    ToolHostCloseWeb,
+    // The Side Panel browser tool, in the `+` menu and its own chrome.
+    PanelBrowserTitle,
+    BrowserBack,
+    BrowserForward,
+    BrowserReload,
+    BrowserOpenExternal,
+    // The Host chip under the address: a page on this machine / a bound Host.
+    BrowserHostLocal,
+    BrowserHostRemote,
+    // The page frame while its native surface is not up.
+    BrowserStarting,
+    BrowserSurfaceAutomated,
+    BrowserSurfaceNoDataDir,
     PanelNoSession,
     PanelNoSessionHint,
     PanelNoWorkingDirectory,

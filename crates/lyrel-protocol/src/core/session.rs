@@ -412,24 +412,145 @@ pub struct WindowView {
     pub tool_layout: Option<ToolLayoutState>,
 }
 
+/// One browser page's durable identity, persisted in a workspace's tool
+/// layout (#391). Live page state — the rendered title, scroll position, an
+/// unsubmitted form — belongs to the surface and is deliberately not here;
+/// the title kept is the last one the page reported, a display hint for the
+/// tab label between restore and the first live update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WebTabState {
+    /// The tab's stable instance id: durable across restarts, unique inside
+    /// its workspace's strip. Sibling requests and restoration address the
+    /// tab by this, never by position.
+    pub id: String,
+    /// The original address the tab opened with — its persistent identity.
+    /// Editing the address navigates the live page; it rewrites nothing here.
+    pub address: String,
+    /// The Host the page belongs to. `None` is this machine; a remote binding
+    /// keeps the tab on its owning Host (#382, forwarding is #392's seam).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<RemoteRef>,
+    /// The last title the page reported, if any. A hint for the restored tab
+    /// label only — the live page replaces it on the first update.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+}
+
+/// One entry of the Side Panel tab strip as persisted: either a built-in
+/// single-instance tool (spelled by its config name, e.g. `"info"`) or one
+/// web page (an object with its own durable id). The order of the variants
+/// is the deserialization order: a web page is an object, a tool a bare
+/// string, so untagged reading keeps both apart — and a v1 record whose
+/// order was all tool strings reads through unchanged, which is the #391
+/// migration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TabEntryState {
+    /// A browser page. Tried first: it is an object, and untagged reading
+    /// stops at the first variant that fits.
+    Web(WebTabState),
+    /// A built-in single-instance tool.
+    Tool(crate::core::config::RightPanelTab),
+}
+
+/// Which strip entry was selected. Serialized as `{"web": "<tab id>"}` or
+/// `{"tool": "<tool name>"}` — the two shapes cannot be confused, unlike an
+/// untagged pair of bare strings. Deserialization also accepts a bare tool
+/// string (`"files"`), which is what every v1 record has; that is the #391
+/// migration path for the selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TabSelectionState {
+    Web(String),
+    Tool(crate::core::config::RightPanelTab),
+}
+
+impl Default for TabSelectionState {
+    /// A record without a selection reads as the fresh-workspace default.
+    fn default() -> Self {
+        Self::Tool(crate::core::config::RightPanelTab::default())
+    }
+}
+
+impl Serialize for TabSelectionState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        // One entry either way: the tag is the key, so a v1 build that does
+        // not know web selections fails this field to its lenient default
+        // instead of half-reading an object.
+        let mut map = serializer.serialize_map(Some(1))?;
+        match self {
+            Self::Web(id) => map.serialize_entry("web", id)?,
+            Self::Tool(tab) => map.serialize_entry("tool", tab)?,
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for TabSelectionState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        if let Some(object) = value.as_object() {
+            if let Some(id) = object.get("web").and_then(|raw| raw.as_str()) {
+                return Ok(Self::Web(id.to_string()));
+            }
+            if let Some(raw) = object.get("tool") {
+                return match crate::core::config::RightPanelTab::deserialize(raw) {
+                    Ok(tab) => Ok(Self::Tool(tab)),
+                    Err(_) => {
+                        log::warn!("ignoring unknown tool in a workspace's selection: {raw}");
+                        return Ok(Self::default());
+                    }
+                };
+            }
+            log::warn!("ignoring unlabeled workspace selection {value}: expected web or tool");
+            return Ok(Self::default());
+        }
+        // A bare string is the v1 spelling of a tool selection.
+        match crate::core::config::RightPanelTab::deserialize(&value) {
+            Ok(tab) => Ok(Self::Tool(tab)),
+            Err(e) => {
+                log::warn!("ignoring unknown workspace selection {value}: {e}");
+                Ok(Self::default())
+            }
+        }
+    }
+}
+
 /// One workspace's right-panel tool layout, persisted in the Workspace Store
 /// under the owning [`WindowView`] (#348). Versioned so a future layout shape
 /// can migrate or be dropped instead of misread; tool search text, filters,
 /// expansion and drafts are panel state and deliberately have no place here.
+///
+/// Version 2 (#391) mixes web pages into the strip order and can select one.
+/// A version 1 record — open tools only — still reads: each untagged entry
+/// parses as the tool it names, which is the migration; the first write
+/// upgrades the record to version 2. A version 1 build reading a version 2
+/// record keeps the tool entries it understands, drops web ones with a
+/// logged warning, and falls back to Info for a web selection — the same
+/// per-entry tolerance the strip reader has always had.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolLayoutState {
     /// The format version this build writes. A record newer than
     /// [`ToolLayoutState::CURRENT_VERSION`] reads as "no layout", which is
     /// the fresh-workspace default — never a crash and never a guess.
     pub version: u32,
-    /// Open tools, left to right. Empty means every tool was closed; the
-    /// record is kept (and restored) as written.
-    #[serde(default, deserialize_with = "de_tool_tabs")]
-    pub order: Vec<crate::core::config::RightPanelTab>,
-    /// The tool whose page was showing.
-    #[serde(default, deserialize_with = "crate::core::config::de_lenient")]
-    pub active: crate::core::config::RightPanelTab,
-    /// The tool an emptied panel resumes when reopened.
+    /// Open strip entries, left to right — built-in tools and web pages in
+    /// the one scrollable order the panel renders. Empty means every entry
+    /// was closed; the record is kept (and restored) as written.
+    #[serde(default, deserialize_with = "de_tab_entries")]
+    pub order: Vec<TabEntryState>,
+    /// The entry whose page was showing.
+    #[serde(default)]
+    pub active: TabSelectionState,
+    /// The tool an emptied panel resumes when reopened. Web pages are not a
+    /// resume target: closing the last page falls back to the last tool —
+    /// Info for a workspace that never opened one.
     #[serde(default, deserialize_with = "crate::core::config::de_lenient")]
     pub last_used: crate::core::config::RightPanelTab,
     /// Whether the panel column was expanded.
@@ -438,7 +559,7 @@ pub struct ToolLayoutState {
 }
 
 impl ToolLayoutState {
-    pub const CURRENT_VERSION: u32 = 1;
+    pub const CURRENT_VERSION: u32 = 2;
 
     /// Whether this build can read the record: written by it or by an older
     /// one. Anything newer is left to its own build.
@@ -447,34 +568,32 @@ impl ToolLayoutState {
     }
 }
 
-/// The tool order, read one entry at a time. [`de_lenient`] is
-/// all-or-nothing per field, which here would mean one tool name this build
-/// does not know — written by a newer one — throwing away every good entry
-/// and taking the whole views file into quarantine with them. Each entry
-/// stands alone: the ones that name a tool are kept, the rest are logged and
-/// dropped. An `order` that is not a list at all falls back to empty.
-fn de_tool_tabs<'de, D>(
-    deserializer: D,
-) -> Result<Vec<crate::core::config::RightPanelTab>, D::Error>
+/// The strip order, read one entry at a time. [`de_lenient`] is
+/// all-or-nothing per field, which here would mean one entry this build does
+/// not know — written by a newer one — throwing away every good entry and
+/// taking the whole views file into quarantine with them. Each entry stands
+/// alone: an object names a web page, a string a built-in tool (which is how
+/// a version 1 record migrates — every entry it has is a tool string); the
+/// rest are logged and dropped. An `order` that is not a list at all falls
+/// back to empty.
+fn de_tab_entries<'de, D>(deserializer: D) -> Result<Vec<TabEntryState>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
     let value = serde_json::Value::deserialize(deserializer)?;
     let Some(entries) = value.as_array() else {
-        log::warn!("ignoring tool layout order {value}: expected a list of tools");
+        log::warn!("ignoring tool layout order {value}: expected a list of strip entries");
         return Ok(Vec::new());
     };
     Ok(entries
         .iter()
-        .filter_map(
-            |raw| match crate::core::config::RightPanelTab::deserialize(raw) {
-                Ok(tab) => Some(tab),
-                Err(e) => {
-                    log::warn!("ignoring unknown tool in a workspace's layout order: {raw} ({e})");
-                    None
-                }
-            },
-        )
+        .filter_map(|raw| match TabEntryState::deserialize(raw) {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                log::warn!("ignoring unknown entry in a workspace's layout order: {raw} ({e})");
+                None
+            }
+        })
         .collect())
 }
 
@@ -889,8 +1008,17 @@ mod tests {
         use crate::core::config::RightPanelTab::{Files, Info, Scm};
         let state = ToolLayoutState {
             version: ToolLayoutState::CURRENT_VERSION,
-            order: vec![Info, Files, Scm],
-            active: Files,
+            order: vec![
+                TabEntryState::Tool(Info),
+                TabEntryState::Web(WebTabState {
+                    id: "web-a".into(),
+                    address: "http://127.0.0.1:3000".into(),
+                    host: None,
+                    title: String::new(),
+                }),
+                TabEntryState::Tool(Scm),
+            ],
+            active: TabSelectionState::Web("web-a".into()),
             last_used: Scm,
             open: true,
         };
@@ -902,7 +1030,7 @@ mod tests {
         assert_eq!(
             back.tool_layout,
             Some(state),
-            "the layout a workspace was left in survives a restart"
+            "the layout a workspace was left in survives a restart, web pages included"
         );
 
         // A build that predates the field skips it and keeps every record it
@@ -920,7 +1048,7 @@ mod tests {
         let state = ToolLayoutState {
             version: ToolLayoutState::CURRENT_VERSION,
             order: Vec::new(),
-            active: GitHub,
+            active: TabSelectionState::Tool(GitHub),
             last_used: GitHub,
             open: false,
         };
@@ -930,31 +1058,127 @@ mod tests {
             back.order.is_empty(),
             "an emptied order is retained, not replaced by a default tab set"
         );
-        assert_eq!(back.active, GitHub);
+        assert_eq!(back.active, TabSelectionState::Tool(GitHub));
         assert_eq!(back.last_used, GitHub, "the emptied panel's resume target");
         assert!(!back.open);
     }
 
     #[test]
-    fn tool_layout_drops_unknown_tools_instead_of_the_whole_record() {
+    fn tool_layout_drops_unknown_entries_instead_of_the_whole_record() {
         use crate::core::config::RightPanelTab::{Files, GitHub, Info};
-        // "pomodoro" is a tool a newer build wrote; this one keeps the tools
+        // "pomodoro" is a tool a newer build wrote; this one keeps the entries
         // it knows and every field around them.
         let json = r#"{
-            "version": 1,
+            "version": 2,
             "order": ["files", "pomodoro", "github"],
             "active": "files",
             "last_used": "pomodoro",
             "open": true
         }"#;
         let state: ToolLayoutState = serde_json::from_str(json).unwrap();
-        assert_eq!(state.order, [Files, GitHub]);
-        assert_eq!(state.active, Files);
+        assert_eq!(
+            state.order,
+            [TabEntryState::Tool(Files), TabEntryState::Tool(GitHub)]
+        );
+        assert_eq!(state.active, TabSelectionState::Tool(Files));
         assert_eq!(
             state.last_used, Info,
             "an unknown tool falls back to Info, the way an invalid config value does"
         );
         assert!(state.open);
+    }
+
+    #[test]
+    fn a_v1_tool_only_layout_migrates_to_v2_on_read() {
+        use crate::core::config::RightPanelTab::{Files, Scm};
+        // Every build since #348 writes this shape: an order of tool names, a
+        // tool selection. #391 keeps it readable without a rewrite pass —
+        // each untagged entry parses as the tool it names.
+        let json = r#"{
+            "version": 1,
+            "order": ["files", "scm"],
+            "active": "scm",
+            "last_used": "files",
+            "open": true
+        }"#;
+        let state: ToolLayoutState = serde_json::from_str(json).unwrap();
+        assert!(state.readable(), "a v1 record is this build's to read");
+        assert_eq!(
+            state.order,
+            [TabEntryState::Tool(Files), TabEntryState::Tool(Scm)]
+        );
+        assert_eq!(state.active, TabSelectionState::Tool(Scm));
+        assert_eq!(state.last_used, Files);
+        assert!(state.open);
+    }
+
+    #[test]
+    fn web_tabs_round_trip_with_host_binding_and_selection() {
+        use crate::core::config::RightPanelTab::Info;
+        let remote = RemoteRef::new(
+            RemoteTarget::Profile {
+                id: uuid::Uuid::from_u128(0x391),
+            },
+            WorkspaceId::new(),
+        );
+        let state = ToolLayoutState {
+            version: ToolLayoutState::CURRENT_VERSION,
+            order: vec![
+                TabEntryState::Tool(Info),
+                TabEntryState::Web(WebTabState {
+                    id: "web-local".into(),
+                    address: "http://localhost:5173".into(),
+                    host: None,
+                    title: "Vite".into(),
+                }),
+                TabEntryState::Web(WebTabState {
+                    id: "web-remote".into(),
+                    address: "http://127.0.0.1:8080".into(),
+                    host: Some(remote),
+                    title: String::new(),
+                }),
+            ],
+            active: TabSelectionState::Web("web-remote".into()),
+            last_used: Info,
+            open: true,
+        };
+        let back: ToolLayoutState = serde_json::from_str(&serde_json::to_string(&state).unwrap())
+            .expect("web tabs keep their ids, order, addresses and Host bindings");
+        assert_eq!(back, state);
+        // A local tab stays uncluttered: no host field at all.
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(
+            json.contains("\"web-local\""),
+            "the stable instance id is the durable handle"
+        );
+    }
+
+    #[test]
+    fn a_web_selection_keeps_its_id_for_the_consumer_to_resolve() {
+        // A v2 record whose selected web tab is not in the order (its tab was
+        // destroyed by a newer build's rule, say) still yields the id: the UI
+        // layer, not this schema, resolves a dangling selection to the
+        // last-used tool — dropping the id here would be a guess about the
+        // UI's resume rule.
+        let json = r#"{
+            "version": 2,
+            "order": ["info"],
+            "active": {"web": "web-gone"},
+            "last_used": "info",
+            "open": true
+        }"#;
+        let state: ToolLayoutState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.active, TabSelectionState::Web("web-gone".into()));
+    }
+
+    #[test]
+    fn a_tool_selection_round_trips_through_its_labeled_form() {
+        use crate::core::config::RightPanelTab::Files;
+        let state = TabSelectionState::Tool(Files);
+        let json = serde_json::to_string(&state).unwrap();
+        assert_eq!(json, r#"{"tool":"files"}"#);
+        let back: TabSelectionState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, state);
     }
 
     #[test]
@@ -974,8 +1198,8 @@ mod tests {
     fn tool_layout_fixture() -> ToolLayoutState {
         ToolLayoutState {
             version: ToolLayoutState::CURRENT_VERSION,
-            order: vec![crate::core::config::RightPanelTab::Info],
-            active: crate::core::config::RightPanelTab::Info,
+            order: vec![TabEntryState::Tool(crate::core::config::RightPanelTab::Info)],
+            active: TabSelectionState::Tool(crate::core::config::RightPanelTab::Info),
             last_used: crate::core::config::RightPanelTab::Info,
             open: false,
         }

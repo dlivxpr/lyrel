@@ -1,0 +1,339 @@
+//! The Side Panel browser's native surface: one WebView2 child window on
+//! Windows (through `webview2-com`) or one WKWebView on macOS (through
+//! `wry`), exposed to the panel as [`BrowserSurfaceHost`]. This is a
+//! browsing surface, not the draw.io document engine: there is no privileged
+//! bridge, no fixed origin, no custom protocol, no page → workbench message
+//! channel at all. The only ways out are the events below, and the only ways
+//! in are the commands below — plus geometry and visibility, which the panel
+//! drives from its paint, the same lifecycle the diagram surface uses.
+//!
+//! Policy (#382): top-level navigation is limited to HTTP, HTTPS and the
+//! built-in blank page by every host before any request is made; device
+//! permissions are denied by default; downloads and unsolicited popups never
+//! leave the surface; a new-window request becomes an event only when the
+//! platform can show it was user-initiated (WebView2's
+//! `IsUserInitiated`); the wry-based macOS host cannot attest that and
+//! denies every popup instead.
+
+use gpui_kit::{Bounds, Pixels};
+use smol::channel::Sender;
+use std::path::PathBuf;
+
+/// One native event the browsing surface reports to the panel.
+#[derive(Clone, Debug, PartialEq)]
+// The platform arms are built only by the native hosts; automated builds
+// keep the wording but never construct them.
+#[cfg_attr(test, allow(dead_code))]
+pub enum BrowserEvent {
+    /// The surface exists and its first page committed. The panel may start
+    /// sending commands; anything queued before this is dropped by the host.
+    Ready,
+    /// The top-level page changed — a load, a redirect, back or forward.
+    /// Carries the history state the chrome needs for its buttons.
+    Navigated {
+        url: String,
+        can_back: bool,
+        can_forward: bool,
+    },
+    /// The page's document title changed.
+    TitleChanged {
+        title: String,
+    },
+    /// The user asked for a new window (a `target=_blank`-style open with a
+    /// user gesture behind it). The panel answers by opening a sibling tab
+    /// bound to the same Host; the surface itself never creates a window.
+    NewWindow {
+        url: String,
+    },
+    /// A navigation failed after it was allowed.
+    LoadFailed {
+        url: String,
+        message: String,
+    },
+    /// Something the policy refused: a denied scheme, an unsolicited popup,
+    /// a download, a permission. Diagnostic — the page stays where it was.
+    Blocked {
+        reason: String,
+    },
+    /// The surface itself is unusable (creation failure, crash). The panel
+    /// shows the message and offers the explicit external-open action.
+    Failed {
+        message: String,
+    },
+    Closed,
+}
+
+/// One command the panel sends the surface.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BrowserCommand {
+    Back,
+    Forward,
+    Reload,
+    /// Navigate the top level. `url` is `about:blank` or an http(s) URL the
+    /// policy has already cleared.
+    Navigate {
+        url: String,
+    },
+}
+
+/// Why a surface operation could not run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BrowserSurfaceError {
+    /// Produced by a host's own geometry contract.
+    #[cfg(any(windows, target_os = "macos"))]
+    InvalidBounds,
+    /// Produced while capturing a parent handle on a desktop platform.
+    #[cfg(any(windows, target_os = "macos"))]
+    Window,
+    Platform(String),
+    /// The no-host answer on platforms without a desktop surface.
+    #[cfg(not(any(windows, target_os = "macos")))]
+    Unsupported(&'static str),
+}
+
+impl std::fmt::Display for BrowserSurfaceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            #[cfg(any(windows, target_os = "macos"))]
+            Self::InvalidBounds => f.write_str("the browser page has no drawable size"),
+            #[cfg(any(windows, target_os = "macos"))]
+            Self::Window => f.write_str("the window has no native handle for the browser page"),
+            Self::Platform(message) => write!(f, "the browser surface failed: {message}"),
+            #[cfg(not(any(windows, target_os = "macos")))]
+            Self::Unsupported(message) => f.write_str(message),
+        }
+    }
+}
+
+/// The GPUI window's native parent handle, captured while the window is
+/// borrowed so surface creation can happen after paint without keeping a
+/// `&mut Window` alive. Mirrors the diagram surface's capture: the handle
+/// stays valid while the GPUI window that produced it is alive.
+#[derive(Clone, Copy)]
+pub struct BrowserParentWindow {
+    #[cfg(windows)]
+    hwnd: windows::Win32::Foundation::HWND,
+    #[cfg(target_os = "macos")]
+    view: raw_window_handle::AppKitWindowHandle,
+}
+
+#[cfg(target_os = "macos")]
+impl raw_window_handle::HasWindowHandle for BrowserParentWindow {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        let raw = raw_window_handle::RawWindowHandle::AppKit(self.view);
+        // SAFETY: the handle stays valid while the GPUI window that produced
+        // it is alive; the surface is dropped with its presentation.
+        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(raw) })
+    }
+}
+
+impl BrowserParentWindow {
+    pub fn from_window(window: &gpui_kit::Window) -> Result<Self, BrowserSurfaceError> {
+        #[cfg(windows)]
+        {
+            let handle = raw_window_handle::HasWindowHandle::window_handle(window)
+                .map_err(|_| BrowserSurfaceError::Window)?;
+            match handle.as_raw() {
+                raw_window_handle::RawWindowHandle::Win32(handle) => Ok(Self {
+                    hwnd: windows::Win32::Foundation::HWND(handle.hwnd.get() as *mut _),
+                }),
+                _ => Err(BrowserSurfaceError::Window),
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let handle = raw_window_handle::HasWindowHandle::window_handle(window)
+                .map_err(|_| BrowserSurfaceError::Window)?;
+            return match handle.as_raw() {
+                raw_window_handle::RawWindowHandle::AppKit(handle) => Ok(Self { view: handle }),
+                _ => Err(BrowserSurfaceError::Window),
+            };
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let _ = window;
+            Err(BrowserSurfaceError::Unsupported(
+                "the Side Panel browser has no host on this platform",
+            ))
+        }
+    }
+}
+
+/// The test-only stand-in for a live browsing surface: it records the
+/// commands production code sends and answers events the way a native host
+/// would, so the panel's whole command path runs through
+/// [`BrowserSurfaceHost::command`] instead of a no-op.
+#[cfg(any(test, feature = "test-support"))]
+pub struct BrowserTestSurface {
+    pub commands: std::cell::RefCell<Vec<BrowserCommand>>,
+    pub events: Sender<BrowserEvent>,
+}
+
+/// Creates and owns one child browsing surface. Windows uses WebView2
+/// directly; macOS uses a WKWebView through wry's child host. The platform
+/// hosts compile in every feature combination; `Test` is added for automated
+/// builds, and which variant one presentation holds is a runtime decision
+/// made by the panel view.
+pub struct BrowserSurfaceHost {
+    inner: Inner,
+}
+
+enum Inner {
+    #[cfg(windows)]
+    Windows(windows_host::Host),
+    #[cfg(target_os = "macos")]
+    Macos(macos_host::Host),
+    #[cfg(any(test, feature = "test-support"))]
+    Test(std::rc::Rc<BrowserTestSurface>),
+    #[cfg(not(any(windows, target_os = "macos", test, feature = "test-support")))]
+    Unsupported,
+}
+
+impl BrowserSurfaceHost {
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn test(events: Sender<BrowserEvent>) -> Self {
+        Self {
+            inner: Inner::Test(std::rc::Rc::new(BrowserTestSurface {
+                commands: std::cell::RefCell::new(Vec::new()),
+                events,
+            })),
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn test_commands(&self) -> Vec<BrowserCommand> {
+        match &self.inner {
+            Inner::Test(surface) => surface.commands.borrow().clone(),
+            #[allow(unreachable_patterns)]
+            _ => Vec::new(),
+        }
+    }
+
+    /// Starts one surface at `bounds` (window coordinates, physical scaling
+    /// applied by the Windows host) showing `url`. `data_dir` is the
+    /// per-Host site-data partition the panel prepared; it already exists.
+    /// `events` receives every [`BrowserEvent`] until the host is dropped.
+    pub fn start(
+        parent: BrowserParentWindow,
+        bounds: Bounds<Pixels>,
+        scale: f32,
+        url: &str,
+        data_dir: PathBuf,
+        events: Sender<BrowserEvent>,
+    ) -> Result<Self, BrowserSurfaceError> {
+        #[cfg(windows)]
+        {
+            windows_host::Host::start(parent, bounds, scale, url, data_dir, events).map(|host| {
+                Self {
+                    inner: Inner::Windows(host),
+                }
+            })
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = scale;
+            return macos_host::Host::start(parent, bounds, url, data_dir, events).map(|host| {
+                Self {
+                    inner: Inner::Macos(host),
+                }
+            });
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            let _ = (parent, bounds, scale, url, data_dir, events);
+            Err(BrowserSurfaceError::Unsupported(
+                "the Side Panel browser has no host on this platform",
+            ))
+        }
+    }
+
+    pub fn set_bounds(&mut self, bounds: Bounds<Pixels>, scale: f32) {
+        match &mut self.inner {
+            #[cfg(windows)]
+            Inner::Windows(host) => host.set_bounds(bounds, scale),
+            #[cfg(target_os = "macos")]
+            Inner::Macos(host) => {
+                let _ = scale;
+                host.set_bounds(bounds);
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            Inner::Test(_) => {
+                let _ = (bounds, scale);
+            }
+            #[cfg(not(any(windows, target_os = "macos", test, feature = "test-support")))]
+            Inner::Unsupported => {
+                let _ = (bounds, scale);
+            }
+        }
+    }
+
+    /// Shows or hides the native child. The panel calls this from its paint
+    /// lifecycle and from the surface coordinator: hidden while concealed by
+    /// a covering overlay or out of the painted tree, visible otherwise.
+    /// Hiding never destroys the page.
+    pub fn set_visible(&mut self, visible: bool) {
+        match &mut self.inner {
+            #[cfg(windows)]
+            Inner::Windows(host) => host.set_visible(visible),
+            #[cfg(target_os = "macos")]
+            Inner::Macos(host) => host.set_visible(visible),
+            #[cfg(any(test, feature = "test-support"))]
+            Inner::Test(_) => {
+                let _ = visible;
+            }
+            #[cfg(not(any(windows, target_os = "macos", test, feature = "test-support")))]
+            Inner::Unsupported => {
+                let _ = visible;
+            }
+        }
+    }
+
+    /// Hands keyboard focus to the native page. Page editing shortcuts stay
+    /// with the page while the surface holds focus; workbench chords keep
+    /// application priority through the window's keystroke interceptors.
+    pub fn focus(&mut self) {
+        match &mut self.inner {
+            #[cfg(windows)]
+            Inner::Windows(host) => host.focus(),
+            #[cfg(target_os = "macos")]
+            Inner::Macos(host) => host.focus(),
+            #[cfg(any(test, feature = "test-support"))]
+            Inner::Test(_) => {}
+            #[cfg(not(any(windows, target_os = "macos", test, feature = "test-support")))]
+            Inner::Unsupported => {}
+        }
+    }
+
+    pub fn command(&mut self, command: BrowserCommand) -> Result<(), BrowserSurfaceError> {
+        match &mut self.inner {
+            #[cfg(any(test, feature = "test-support"))]
+            Inner::Test(surface) => {
+                surface.commands.borrow_mut().push(command);
+                Ok(())
+            }
+            #[cfg(windows)]
+            Inner::Windows(host) => host.command(command),
+            #[cfg(target_os = "macos")]
+            Inner::Macos(host) => host.command(command),
+            #[cfg(not(any(windows, target_os = "macos", test, feature = "test-support")))]
+            Inner::Unsupported => {
+                let _ = command;
+                Err(BrowserSurfaceError::Unsupported(
+                    "the Side Panel browser has no host on this platform",
+                ))
+            }
+        }
+    }
+}
+
+// Dropping the host destroys the native child with it (each platform Host's
+// own Drop tears the WebView down) and closes the page: a closed tab's live
+// page is destroyed, never revived on restore.
+
+#[cfg(windows)]
+mod windows_host;
+
+#[cfg(target_os = "macos")]
+mod macos_host;

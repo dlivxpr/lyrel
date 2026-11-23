@@ -202,7 +202,15 @@ impl LyrelApp {
         // config selection is deliberately not projected onto it (#345).
         let tool_layout = Self::persisted_tool_layout(workspace, cx);
         let right_panel_visible = tool_layout.open;
-        let right_panel_tab = tool_layout.active;
+        // A restored web selection seeds both halves of the mirror: the
+        // selected tab id and the last-used tool the tool mirror carries
+        // (#391).
+        let (right_panel_tab, right_panel_web_tab) = match &tool_layout.active {
+            crate::ui::right_panel::PanelTab::Tool(tab) => (*tab, None),
+            crate::ui::right_panel::PanelTab::Web(tab) => {
+                (tool_layout.last_used, Some(tab.id.clone()))
+            }
+        };
         let scm_graph_expanded = cx.global::<Config>().scm_graph_expanded;
         let sidebar_collapsed = cx.global::<Config>().sidebar_collapsed;
         let config_watch = cx.observe_global_in::<Config>(window, |this, window, cx| {
@@ -422,6 +430,9 @@ impl LyrelApp {
             document_dragging: Rc::new(Cell::new(false)),
             right_panel_visible,
             right_panel_tab,
+            right_panel_web_tab,
+            browser_chrome: None,
+            surface_coordinator: crate::ui::surface_coordinator::SurfaceCoordinator::new(),
             right_panel_nav_focus: cx.focus_handle(),
             right_panel_nav_return: None,
             right_panel_nav_wait: Cell::new(0),

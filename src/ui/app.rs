@@ -301,6 +301,14 @@ pub struct LyrelApp {
     pub(crate) document_dragging: Rc<Cell<bool>>,
     pub(crate) right_panel_visible: bool,
     pub(crate) right_panel_tab: RightPanelTab,
+    /// The selected web tab, when the panel is showing a page rather than a
+    /// tool — the second half of the mirror the layout folds from (#391).
+    pub(crate) right_panel_web_tab: Option<String>,
+    /// The browser's one address field and the row it lives in (#391).
+    pub(crate) browser_chrome: Option<crate::ui::browser::BrowserChrome>,
+    /// Window-level coordination between covering overlays and native child
+    /// surfaces (#391; #403 extends the cover sources).
+    pub(crate) surface_coordinator: crate::ui::surface_coordinator::SurfaceCoordinator,
     pub(crate) right_panel_nav_focus: gpui_kit::FocusHandle,
     pub(crate) right_panel_nav_return: Option<gpui_kit::FocusHandle>,
     pub(crate) right_panel_nav_wait: Cell<u8>,
@@ -4477,6 +4485,13 @@ impl LyrelApp {
             view.update(cx, |view, cx| view.set_editor_tabs(tabs, cx));
         }
         self.refresh_file_index(window, cx);
+        // Search Everywhere paints over the whole work area: native child
+        // surfaces give way for as long as it is up (#391's first seam).
+        self.set_surface_cover(
+            crate::ui::surface_coordinator::CoverSource::SearchEverywhere,
+            true,
+            cx,
+        );
         cx.notify();
     }
 
@@ -4544,6 +4559,11 @@ impl LyrelApp {
     }
 
     pub(crate) fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_surface_cover(
+            crate::ui::surface_coordinator::CoverSource::SearchEverywhere,
+            false,
+            cx,
+        );
         let return_focus = self.search.close(cx);
         // A previewed theme was never persisted: closing the search any way
         // other than confirming the pick puts the old one back.
@@ -5606,6 +5626,7 @@ pub(crate) mod test_window {
             gpui_kit::component::init(cx);
             #[cfg(test)]
             lyrel_workbench_editor::code_editor::drawio_document::test_support::mark_automated(cx);
+            crate::ui::browser::test_support::mark_automated(cx);
             cx.set_global(Config::default());
             lyrel_ui_base::host_registry::HostRegistry::insert(
                 cx,
