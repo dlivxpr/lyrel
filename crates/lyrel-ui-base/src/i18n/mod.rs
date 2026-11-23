@@ -1145,6 +1145,8 @@ l10n_keys! {
     ActivityChannelTab,
     ActivityChannelDesktop,
     ActivityChannelSound,
+    ActivityChannelBadge,
+    SystemBadgeTabsNeedAttention,
     SettingsSearchActivityRunningKeywords,
     SettingsSearchActivityWaitingKeywords,
     SettingsSearchActivityEndedKeywords,

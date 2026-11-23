@@ -486,6 +486,9 @@ impl LyrelApp {
         if !cfg!(test) && crate::ui::windows::WindowRegistry::count(cx) == 0 {
             crate::ui::tray::init(cx);
         }
+        if !cfg!(test) {
+            crate::ui::system_badge::SystemBadgeState::init(cx);
+        }
         app.refresh_shells(cx);
         // Backstop for every other way a window goes away (a workspace
         // closed from elsewhere): its language-server documents go with it.
@@ -504,6 +507,8 @@ impl LyrelApp {
             // with none Working, automatic mode releases the request even
             // when the app itself stays alive behind the tray icon.
             crate::ui::caffeine::CaffeineState::agents_changed(cx);
+            // The system badge is the same kind of process-wide aggregate.
+            crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
         })
         .detach();
         cx.on_app_quit(|app, cx| {

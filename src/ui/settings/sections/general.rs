@@ -283,7 +283,7 @@ impl SettingsWindow {
 
     /// The column heads over the activity matrix. They mirror the row's
     /// right-aligned control area, so each label sits over its switch
-    /// column; the badge column lands with #397.
+    /// column. Running keeps a blank badge cell so the grid lines up.
     fn activity_matrix_header(&self, cx: &mut Context<Self>) -> AnyElement {
         let head = |key: L10nKey| {
             div()
@@ -302,7 +302,8 @@ impl SettingsWindow {
                     .gap(px(4.))
                     .child(head(L10nKey::ActivityChannelTab))
                     .child(head(L10nKey::ActivityChannelDesktop))
-                    .child(head(L10nKey::ActivityChannelSound)),
+                    .child(head(L10nKey::ActivityChannelSound))
+                    .child(head(L10nKey::ActivityChannelBadge)),
             )
             .into_any_element()
     }
@@ -318,34 +319,65 @@ impl SettingsWindow {
         channels: lyrel_core::core::config::ActivityChannels,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let mut cell = |channel: ActivityChannel, on: bool| {
+        let mut cell = |channel: ActivityChannel, id: &'static str, on: bool| {
             div()
                 .w(px(56.))
                 .flex()
                 .justify_center()
-                .child(self.settings_switch(
-                    match channel {
-                        ActivityChannel::Tab => "settings-activity-tab",
-                        ActivityChannel::Desktop => "settings-activity-desktop",
-                        ActivityChannel::Sound => "settings-activity-sound",
-                    },
-                    on,
-                    cx,
-                    move |this, on, _, cx| this.set_activity_channel(activity, channel, on, cx),
-                ))
+                .child(
+                    self.settings_switch(id, on, cx, move |this, on, _, cx| {
+                        this.set_activity_channel(activity, channel, on, cx)
+                    }),
+                )
+        };
+        let badge = match activity {
+            lyrel_core::core::config::ActivityState::Running => div().w(px(56.)),
+            lyrel_core::core::config::ActivityState::Waiting => cell(
+                ActivityChannel::Badge,
+                "settings-activity-badge-waiting",
+                channels.badge,
+            ),
+            lyrel_core::core::config::ActivityState::Ended => cell(
+                ActivityChannel::Badge,
+                "settings-activity-badge-ended",
+                channels.badge,
+            ),
+            lyrel_core::core::config::ActivityState::Failed => cell(
+                ActivityChannel::Badge,
+                "settings-activity-badge-failed",
+                channels.badge,
+            ),
         };
         let controls = if activity == lyrel_core::core::config::ActivityState::Running {
             h_flex()
                 .gap(px(4.))
-                .child(cell(ActivityChannel::Tab, channels.tab))
+                .child(cell(
+                    ActivityChannel::Tab,
+                    "settings-activity-tab",
+                    channels.tab,
+                ))
                 .child(div().w(px(56.)))
                 .child(div().w(px(56.)))
+                .child(badge)
         } else {
             h_flex()
                 .gap(px(4.))
-                .child(cell(ActivityChannel::Tab, channels.tab))
-                .child(cell(ActivityChannel::Desktop, channels.desktop))
-                .child(cell(ActivityChannel::Sound, channels.sound))
+                .child(cell(
+                    ActivityChannel::Tab,
+                    "settings-activity-tab",
+                    channels.tab,
+                ))
+                .child(cell(
+                    ActivityChannel::Desktop,
+                    "settings-activity-desktop",
+                    channels.desktop,
+                ))
+                .child(cell(
+                    ActivityChannel::Sound,
+                    "settings-activity-sound",
+                    channels.sound,
+                ))
+                .child(badge)
         };
         self.settings_row(label, desc, controls.into_any_element(), cx)
             .into_any_element()

@@ -199,6 +199,11 @@ windows = { version = "0.62.2", features = [
     "Data_Xml_Dom",
     "Foundation",
     "UI_Notifications",
+    # ITaskbarList3's numeric taskbar overlay (#397): the shell interface and
+    # the GDI calls that draw the 1–9/9+ icon, over the COM apartment GPUI's
+    # Windows backend already initializes.
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
     "Win32_Foundation",
     "Win32_Globalization",
     "Win32_Storage_EnhancedStorage",
@@ -239,7 +244,7 @@ raw-window-handle = "0.6"
 # and it makes the Windows jieba fallback unnecessary here.
 core-foundation = "0.10.1"
 objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem", "NSSpellChecker"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem", "NSSpellChecker", "NSDockTile"] }
 # NSData feeds the runtime Dock icon for bare (non-bundled) binaries — see
 # `set_dock_icon_for_bare_binary` in main.rs.
 # NSUserNotification is the click-to-reveal notification path — see
