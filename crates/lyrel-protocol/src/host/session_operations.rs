@@ -317,6 +317,18 @@ pub(crate) fn prepare<H: Host + ?Sized>(
         CLIAgent::Kimi => kimi::prepare(host, request),
         CLIAgent::OpenCode => opencode::prepare(request),
         CLIAgent::Hermes => hermes::prepare(request),
+        // Resume and fork are #385/#386: until a verified Antigravity route
+        // exists, the operation answers `Unsupported` instead of advertising
+        // a session action that cannot be performed. `Host::session_operation`
+        // on a remote peer gates the same request before the wire — a peer
+        // too old to decode the identity would drop the control link on it.
+        CLIAgent::Antigravity => Err(failure(
+            SessionErrorKind::Unsupported,
+            format!(
+                "{} sessions cannot be resumed or forked through lyrel yet",
+                request.agent.display_name()
+            ),
+        )),
     }
 }
 

@@ -48,7 +48,7 @@
       if (-not [IO.Path]::IsPathRooted($name)) { return }
     }
     $agent = [IO.Path]::GetFileNameWithoutExtension($name).ToLowerInvariant()
-    if ([IO.Path]::GetFileName($name) -notmatch '^(omp|kimi|pi|opencode|opencode2|hermes)(\.exe|\.cmd|\.bat|\.ps1)?$') { return }
+    if ([IO.Path]::GetFileName($name) -notmatch '^(omp|kimi|pi|opencode|opencode2|hermes|agy)(\.exe|\.cmd|\.bat|\.ps1)?$') { return }
     $version = if (Test-Path Env:LYREL) { $env:LYREL } else { $global:__LyrelScopeVersion }
     $defaults = @{ TERM_PROGRAM='kitty'; TERM_PROGRAM_VERSION=''; LC_TERMINAL='lyrel'; LC_TERMINAL_VERSION=$version }
     if ($agent -eq 'omp') { $defaults.PI_NO_DECCARA = '1' }

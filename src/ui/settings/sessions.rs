@@ -66,6 +66,9 @@ pub(crate) enum SessionBlocker {
     PiNoWriteLease,
     /// Oh My Pi v19.1：原生 drop 没有写入租约，递归产物范围随配置变化。
     OmpNoWriteLease,
+    /// 该来源没有已验证的原生删除路径（例如 Antigravity 的历史删除不在
+    /// 支持范围内），保持显式不可资格，而不是假装可删。
+    SourceUnsupported,
 }
 
 impl SessionBlocker {
@@ -77,6 +80,7 @@ impl SessionBlocker {
             SessionBlocker::KimiDeleteUnfenced => L10nKey::SessionsBlockerKimiUnfenced,
             SessionBlocker::PiNoWriteLease => L10nKey::SessionsBlockerPiNoLease,
             SessionBlocker::OmpNoWriteLease => L10nKey::SessionsBlockerOmpNoLease,
+            SessionBlocker::SourceUnsupported => L10nKey::SessionsBlockerSourceUnsupported,
         };
         t(key).into()
     }
@@ -472,6 +476,9 @@ fn session_blockers(identity: &SessionIdentity, live: &[SessionIdentity]) -> Vec
         CLIAgent::Kimi => out.push(SessionBlocker::KimiDeleteUnfenced),
         CLIAgent::Pi => out.push(SessionBlocker::PiNoWriteLease),
         CLIAgent::OhMyPi => out.push(SessionBlocker::OmpNoWriteLease),
+        // Antigravity 的原生历史删除不在支持范围内（#382 Out of Scope）：
+        // 没有可验证的删除路径，行保持显式不可资格。
+        CLIAgent::Antigravity => out.push(SessionBlocker::SourceUnsupported),
     }
     out
 }

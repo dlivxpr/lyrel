@@ -364,6 +364,61 @@ pub fn agent_line(
             |_| "OMP initial-task arguments cannot be represented safely in the target shell",
         );
     }
+    if agent == CLIAgent::Antigravity && !task.is_empty() {
+        // agy's `--prompt` is the non-interactive print mode (an alias of
+        // `--print`), and its conversation selectors resume an existing
+        // thread; only `--prompt-interactive` carries a first task into the
+        // native TUI. A launch override already speaking one of the other
+        // modes would swallow or sidestep the task instead of starting it.
+        let argv = crate::core::cli_agent::command_argv(&line);
+        let is = |arg: &str, names: &[&str], prefixes: &[&str]| {
+            names.contains(&arg) || prefixes.iter().any(|prefix| arg.starts_with(prefix))
+        };
+        if argv.iter().any(|arg| {
+            is(
+                arg,
+                &["--print", "-p", "--prompt", "--prompt-interactive", "-i"],
+                &["--print=", "--prompt=", "--prompt-interactive="],
+            )
+        }) {
+            return Err(
+                "Antigravity initial tasks require the interactive TUI; --print/--prompt run once and exit and cannot carry a first task.",
+            );
+        }
+        if argv.iter().any(|arg| {
+            is(
+                arg,
+                &["--continue", "-c", "--conversation"],
+                &["--conversation="],
+            )
+        }) {
+            return Err(
+                "Antigravity initial-task launch cannot combine with conversation selectors (--continue/--conversation); resume the conversation instead.",
+            );
+        }
+        if argv.iter().any(|arg| {
+            is(
+                arg,
+                &[
+                    "--input-format",
+                    "--output-format",
+                    "--json-schema",
+                    "--print-timeout",
+                    "--disable-slash-commands",
+                ],
+                &[
+                    "--input-format=",
+                    "--output-format=",
+                    "--json-schema=",
+                    "--print-timeout=",
+                ],
+            )
+        }) {
+            return Err(
+                "Antigravity initial tasks require the interactive TUI; print-mode plumbing (--input-format/--output-format/--json-schema/--print-timeout) cannot be used.",
+            );
+        }
+    }
     if let Some(args) = (!task.is_empty())
         .then(|| agent.prompt_args(task))
         .flatten()
@@ -395,6 +450,7 @@ mod tests {
             CLIAgent::Hermes,
             CLIAgent::Pi,
             CLIAgent::OpenCode,
+            CLIAgent::Antigravity,
         ] {
             let executable = directory.path().join(agent.slug());
             std::fs::write(&executable, "#!/bin/sh\nprintf '<%s>\\n' \"$@\"\n").unwrap();
@@ -411,6 +467,82 @@ mod tests {
             let output = String::from_utf8(output.stdout).unwrap();
             assert_eq!(output.matches(task).count(), 1, "{output}");
         }
+    }
+
+    #[test]
+    fn antigravity_initial_task_seeds_the_interactive_tui_and_rejects_other_modes() {
+        // The bare launch carries the task through `--prompt-interactive`.
+        let line = agent_line(CLIAgent::Antigravity, "fix the parser", &HashMap::new(), "sh").unwrap();
+        assert_eq!(
+            crate::core::cli_agent::command_argv(&line),
+            ["agy", "--prompt-interactive", "fix the parser"]
+        );
+        // A task shaped like a flag stays one literal argument value.
+        let line = agent_line(CLIAgent::Antigravity, "--help", &HashMap::new(), "sh").unwrap();
+        assert_eq!(
+            crate::core::cli_agent::command_argv(&line),
+            ["agy", "--prompt-interactive", "--help"]
+        );
+        // A multi-line task likewise.
+        let line =
+            agent_line(CLIAgent::Antigravity, " 第一行\n第二行 ", &HashMap::new(), "sh").unwrap();
+        assert_eq!(
+            crate::core::cli_agent::command_argv(&line),
+            ["agy", "--prompt-interactive", "第一行\n第二行"]
+        );
+        // Scope-style flags on the launch survive next to the task.
+        let overrides = HashMap::from([(
+            "antigravity".into(),
+            "agy --model gemini-3 --effort high".into(),
+        )]);
+        let line = agent_line(CLIAgent::Antigravity, "review", &overrides, "sh").unwrap();
+        assert_eq!(
+            crate::core::cli_agent::command_argv(&line),
+            [
+                "agy",
+                "--model",
+                "gemini-3",
+                "--effort",
+                "high",
+                "--prompt-interactive",
+                "review"
+            ]
+        );
+        // One-shot print modes and conversation selectors cannot carry a task.
+        for command in [
+            "agy --print",
+            "agy -p",
+            "agy --prompt",
+            "agy --prompt=old",
+            "agy --prompt-interactive=old",
+            "agy --continue",
+            "agy -c",
+            "agy --conversation old",
+            "agy --conversation=old",
+            "agy --output-format json",
+            "agy --print-timeout 10s",
+        ] {
+            assert!(
+                agent_line(
+                    CLIAgent::Antigravity,
+                    "任务",
+                    &HashMap::from([("antigravity".into(), command.into())]),
+                    "sh"
+                )
+                .is_err(),
+                "{command} must not smuggle a first task into another mode"
+            );
+        }
+        // Without a task the override passes through untouched.
+        assert_eq!(
+            agent_line(
+                CLIAgent::Antigravity,
+                "",
+                &HashMap::from([("antigravity".into(), "agy --model gemini-3".into())]),
+                "sh"
+            ),
+            Ok("agy --model gemini-3".into())
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 ---
 title: "编程智能体"
-description: "lyrel 仅内置 omp、Kimi Code、pi、OpenCode 2.x、Hermes，保留各自原生交互界面。"
+description: "lyrel 仅内置 omp、Kimi Code、pi、OpenCode 2.x、Hermes、Antigravity，保留各自原生交互界面。"
 ---
 
 lyrel 能识别窗格中运行的编程智能体，并围绕它们提供功能。它不会封装、代理这些智能体，
@@ -11,7 +11,7 @@ lyrel 能识别窗格中运行的编程智能体，并围绕它们提供功能�
 <a id="which-agents"></a>
 ## 支持哪些智能体
 
-内置身份只保留以下五种。识别命令名称不等于状态、历史、恢复、分叉或首条任务已经通过正式版本实跑；这些能力分别依赖上游接口、集成授权和对应验收。
+内置身份只保留以下六种。识别命令名称不等于状态、历史、恢复、分叉或首条任务已经通过正式版本实跑；这些能力分别依赖上游接口、集成授权和对应验收。
 
 | 智能体 | 正式命令 | 版本与原生图片能力 | 证据边界 |
 |---|---|---|---|
@@ -20,6 +20,7 @@ lyrel 能识别窗格中运行的编程智能体，并围绕它们提供功能�
 | pi | `pi` | 会话桥 1.3.0；1.4.0 静态 toolResult 图片，无 fenced SVG | #255 已运行 scoped discovery、静态保存会话与真实窗口重挂载；macOS／Linux 未运行 |
 | OpenCode 2.x | `opencode`、`opencode2` | 会话桥 2.0.32；2.2.0 用户附件／eligible tool-result 卡，由 `session.image_preview` 控制 | #255 已运行 scoped／inline false、完整配置字节审计与真实窗口回放；macOS／Linux 未运行 |
 | Hermes | `hermes` | 会话桥 0.22.2；图片精确以正式 0.23.1 的 `image.render`／`InlineImage` 为基线 | #255 已运行隔离 pinned 原生组件与真实窗口；旧版 pet 仍不证明聊天图片，macOS／Linux 未运行 |
+| Antigravity | `agy` | #383 提供快速启动、窗格识别与链接工作树首任务（`--prompt-interactive`，实测 1.5.15）；hooks/状态 #384、历史/恢复 #385、Fork #386 另行交付 | 原生 PTY 行为未经实窗验收；远端 SSH/WSL、多平台证据按工单记录 |
 
 omp 与 pi 是独立产品，不共用命令身份、配置或会话来源。Kimi 指现行官方 Kimi Code，不迁移归档产品的数据。OpenCode 只维护 2.x；不会在每次启动前强制探测版本，同名 1.x 仍可能被名称识别，但不加载旧集成、不把不适用接口当作成功。
 
@@ -64,7 +65,7 @@ omp**、**智能体：pi** 等，按使用频率从高到低排列——在其�
 因此智能体的检测、跟踪和恢复方式与你手动输入命令完全相同——退出智能体后，你会回到命令提示符。
 每个 `Agent: …` 命令也都可以通过 `LaunchAgent:<slug>` 绑定快捷键。
 
-默认情况下，智能体以不带参数的正式可执行文件启动（`omp`、`kimi`、`pi`、`opencode`、`hermes`）。使用 `agent_launch` 指定自定义命令行：
+默认情况下，智能体以不带参数的正式可执行文件启动（`omp`、`kimi`、`pi`、`opencode`、`hermes`、`agy`）。使用 `agent_launch` 指定自定义命令行：
 
 ```json
 {
@@ -84,6 +85,11 @@ lyrel 会将这些参数写入 `agent_launch`，但会去掉用于恢复会话�
 omp 的快速启动（包括 `agent_launch.omp` 的字面量包装命令和连接中的窗格）现在只给该次命令提供 Kitty 兼容身份：`TERM_PROGRAM=kitty`，清空 `TERM_PROGRAM_VERSION`，以 `LC_TERMINAL=lyrel`、`LC_TERMINAL_VERSION` 和既有 `LYREL` 保留真实身份／版本，并设置 `PI_NO_DECCARA=1` 禁用尚不支持的矩形 SGR。普通 shell 仍为 `TERM_PROGRAM=lyrel`；命令结束后不留下 Kitty 身份。显式命令级 `TERM_PROGRAM` 优先，不强制设置图片协议或改写 omp 的图片显示偏好。恢复／分叉和手动 shell 拦截的全路径覆盖另由 #250 完成，不把本次快速启动改动外推为已验收。
 
 新增的正式 `omp/18.18.6` loopback SSE 消费者与既有静态保存会话重放分开：它经公开 provider 接口逐段发送一个 SVG 围栏，在生产 `RemoteTerminal`／`TerminalView` 中断言两种完整中间栅格及最终像素、裁剪、图层、图文顺序和旧放置消失。测试代码及命令见[终端图片兼容说明](/getting-started/concepts#omp-loopback-streaming)。#255 已在隔离 Windows 生产窗口和 headless consumer 矩阵运行该消费者；这不代表 macOS／Linux 原生窗口或真实远端 SSH 已通过。
+
+Antigravity 同规则接入：`agy` 出现在 PATH 即提供快速启动，未安装时不出现在列表中；命令被拒绝时沿用统一的可操作错误通知。
+工作树新建对话框为其提供“任务”输入框，首条任务经原生 `--prompt-interactive` 在目标 checkout 交互启动
+（`--prompt` 是一次性非交互模式，不会用作替代）。手动启动的 `agy` 以相同方式被识别；
+旧版本 peer 在缺少 Antigravity 身份时保留窗格流及其余智能体功能。
 
 在远程工作区中，lyrel 无法读取远程计算机的 `PATH`，因此只会提供它已在该远程计算机上见过运行的智能体：
 手动启动一次，智能体就会加入列表。本地 `agent_launch` 中指定的包装脚本，只有在远程

@@ -258,6 +258,10 @@ impl HookAgent {
     /// Process detection knows far more agents than hooks do — the ones with no
     /// arm here report status some other way, or not at all. The match is
     /// exhaustive on purpose: a newly detected agent has to say which it is.
+    ///
+    /// Antigravity answers `None`: its hook contract is #384's work, and until
+    /// the documented observer hooks are verified, launch and recognition
+    /// must not claim a hooks integration that does not exist yet.
     pub fn of_detected(agent: CLIAgent) -> Option<HookAgent> {
         match agent {
             CLIAgent::OhMyPi => Some(HookAgent::OhMyPi),
@@ -265,6 +269,7 @@ impl HookAgent {
             CLIAgent::Pi => Some(HookAgent::Pi),
             CLIAgent::OpenCode => Some(HookAgent::OpenCode),
             CLIAgent::Hermes => Some(HookAgent::Hermes),
+            CLIAgent::Antigravity => None,
         }
     }
 

@@ -290,6 +290,9 @@ fn store_root(
             "HOME",
             "USERPROFILE",
         ]),
+        // Antigravity 的原生会话存储位置由 #385 的版本核验适配器确定；
+        // 在那之前不猜一个通用 home，store 只能保持未确认。
+        CLIAgent::Antigravity => None,
         CLIAgent::Pi => pick(&["PI_CODING_AGENT_DIR", "PI_CODING_AGENT_SESSION_DIR", "HOME"]),
         CLIAgent::Kimi => pick(&["KIMI_CODE_HOME", "HOME", "USERPROFILE"]),
         CLIAgent::OpenCode => pick(&["OPENCODE_DB", "XDG_DATA_HOME", "HOME", "USERPROFILE"]),

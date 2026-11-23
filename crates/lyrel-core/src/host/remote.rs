@@ -767,6 +767,19 @@ impl Host for RemoteHost {
                 "update lyrel-server: this peer does not support session operations".into(),
             ));
         }
+        // An agent whose session operations are unsupported must never reach
+        // the wire: the request embeds a `CLIAgent` the peer may be too old to
+        // decode, and the decode failure would take the whole control link
+        // down. Answer Unsupported here; local `prepare` guards the same way.
+        if request.agent == crate::core::cli_agent::CLIAgent::Antigravity {
+            return Err(error(
+                SessionErrorKind::Unsupported,
+                format!(
+                    "{} sessions cannot be resumed or forked through lyrel yet",
+                    request.agent.display_name()
+                ),
+            ));
+        }
         let mut wire = request.clone();
         wire.expected_host = 0;
         let reply = self.call(ControlRequest::SessionOperation { request: Box::new(wire) })
