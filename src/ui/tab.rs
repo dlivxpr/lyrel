@@ -25,6 +25,7 @@ pub(crate) struct Tab {
     /// The GitHub issue or pull request open as a read-only document, if the
     /// list has handed one to this tab's document area.
     pub(crate) github_detail: Option<crate::ui::github::GithubDetailDoc>,
+    browser_detail: Option<String>,
     pub(crate) code: Option<Box<lyrel_workbench_editor::code_editor::TabCode>>,
     /// The pinned sidebar group this tab was put in, by id, or `None` to
     /// leave it to auto grouping. A `Cell` because the sidebar files a tab
@@ -107,6 +108,7 @@ pub(crate) enum OverlayTop {
     /// A GitHub issue or pull request read as a document over the code
     /// surface, under a patch opened from it.
     Github,
+    Browser,
 }
 
 impl Tab {
@@ -124,6 +126,7 @@ impl Tab {
             zoomed: None,
             diff_overlay: None,
             github_detail: None,
+            browser_detail: None,
             code: None,
             overlay_top: OverlayTop::default(),
             document_layout: None,
@@ -149,6 +152,7 @@ impl Tab {
             zoomed: None,
             diff_overlay: None,
             github_detail: None,
+            browser_detail: None,
             code: None,
             overlay_top: OverlayTop::default(),
             document_layout: None,
@@ -374,10 +378,14 @@ impl Tab {
     /// opens over the detail it came from — so dismissing the leader
     /// promotes what is under it instead of whichever surface comes first.
     pub(crate) fn document_front(&self) -> Option<OverlayTop> {
+        if self.browser_detail.is_some() {
+            return Some(OverlayTop::Browser);
+        }
         let open = |surface: OverlayTop| match surface {
             OverlayTop::Code => self.code.as_ref().is_some_and(|code| code.visible),
             OverlayTop::Github => self.github_detail.is_some(),
             OverlayTop::Diff => self.diff_overlay.is_some(),
+            OverlayTop::Browser => false,
         };
         open(self.overlay_top)
             .then_some(self.overlay_top)
@@ -390,24 +398,41 @@ impl Tab {
 
     /// Raise the code surface and report whether it was visible but buried.
     pub(crate) fn reveal_code(&mut self) -> bool {
-        let buried = self.overlay_top == OverlayTop::Diff
-            && self.diff_overlay.is_some()
+        let buried = (self.browser_detail.is_some()
+            || self.overlay_top == OverlayTop::Diff && self.diff_overlay.is_some())
             && self.code.as_ref().is_some_and(|code| code.visible);
+        self.browser_detail = None;
         self.overlay_top = OverlayTop::Code;
         buried
     }
 
     /// Raise the diff surface and report whether it already led the pair.
     pub(crate) fn reveal_diff(&mut self) -> bool {
-        let was_front = self.overlay_top == OverlayTop::Diff
-            || !self.code.as_ref().is_some_and(|code| code.visible);
+        let was_front = self.browser_detail.is_none()
+            && (self.overlay_top == OverlayTop::Diff
+                || !self.code.as_ref().is_some_and(|code| code.visible));
+        self.browser_detail = None;
         self.overlay_top = OverlayTop::Diff;
         was_front
     }
 
     /// Raise the GitHub detail surface.
     pub(crate) fn reveal_github(&mut self) {
+        self.browser_detail = None;
         self.overlay_top = OverlayTop::Github;
+    }
+
+    pub(crate) fn browser_detail(&self) -> Option<&str> {
+        self.browser_detail.as_deref()
+    }
+
+    pub(crate) fn reveal_browser_detail(&mut self, id: String) {
+        // Browser covers the existing document without changing its stacking order.
+        self.browser_detail = Some(id);
+    }
+
+    pub(crate) fn dismiss_browser_detail(&mut self) -> bool {
+        self.browser_detail.take().is_some()
     }
 
     pub(crate) fn presentation_slot(&self, pane: u64, cx: &App) -> Option<PaneSlot> {

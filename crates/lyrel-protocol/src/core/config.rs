@@ -1903,6 +1903,14 @@ pub enum RightPanelTab {
     /// `Search`: a build without it folds the stored choice back to `Info`.
     #[serde(rename = "monitor")]
     Monitor,
+    /// The Browser tool — the workspace's web pages under one strip tab: the
+    /// strip shows the single Browser tab, the pages live in the tool's own
+    /// list (#382). Same rollback cost as `Search`: a build without it does
+    /// not know `"browser"`, falls through `de_lenient` to `Info`, and opens
+    /// there. Nothing else is lost — a newer build keeps the pages in the
+    /// workspace's layout record regardless.
+    #[serde(rename = "browser")]
+    Browser,
 }
 
 /// What opens when a file link in the grid is clicked.

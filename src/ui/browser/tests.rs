@@ -1,8 +1,37 @@
 use gpui_kit::TestAppContext;
 use gpui_kit::test::TestWindowExt as _;
 
-use super::{BrowserCommand, BrowserEvent, PageStatus, RouteState, layout_active_web};
+use super::{BrowserCommand, BrowserEvent, PageStatus, RouteState};
+use crate::ui::app::LyrelApp;
 use crate::ui::app::test_window::harness_with_tabs;
+
+/// The page the current tab's Browser detail fronts, if one is raised.
+fn active_web(app: &LyrelApp) -> Option<String> {
+    app.active_browser_detail().map(str::to_string)
+}
+
+#[gpui_kit::test]
+fn a_new_blank_page_keeps_its_first_submitted_address(cx: &mut TestAppContext) {
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_web_page("about:blank", None, cx);
+        app.focus_browser_address(window, cx);
+    });
+    settle(&mut vcx);
+    app.update_in(&mut vcx, |app, window, cx| {
+        let address = &app.browser_chrome.as_ref().unwrap().input;
+        address.update(cx, |input, cx| {
+            input.set_value("http://localhost:5173/preview", window, cx);
+        });
+    });
+    vcx.update(|window, cx| window.press("enter", cx));
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(
+            app.tool_layout().web_tabs[0].address,
+            "http://localhost:5173/preview"
+        );
+    });
+}
 
 #[gpui_kit::test]
 fn browser_tabs_select_independent_surfaces_and_drop_closed_popups(cx: &mut TestAppContext) {
@@ -11,7 +40,7 @@ fn browser_tabs_select_independent_surfaces_and_drop_closed_popups(cx: &mut Test
     let (first, second) = app.update_in(&mut vcx, |app, _, cx| {
         app.right_panel_width.set(460.);
         app.open_web_page("https://example.test/first", None, cx);
-        let first = layout_active_web(&app.tool_layout()).unwrap();
+        let first = active_web(app).expect("the new page is the front detail");
         app.attach_test_browser_surface(&first, cx);
         app.browser_reload(&first, cx);
 
@@ -22,7 +51,7 @@ fn browser_tabs_select_independent_surfaces_and_drop_closed_popups(cx: &mut Test
             },
             cx,
         );
-        let second = layout_active_web(&app.tool_layout()).unwrap();
+        let second = active_web(app).expect("the sibling page is the front detail");
         assert_ne!(first, second);
         app.attach_test_browser_surface(&second, cx);
         app.browser_forward(&second, cx);
@@ -38,11 +67,17 @@ fn browser_tabs_select_independent_surfaces_and_drop_closed_popups(cx: &mut Test
     });
     settle(&mut vcx);
     vcx.update(|window, _| {
-        let strip = window.find("side-panel-tool-scroll").bounds();
-        let second_tab = window.find(format!("web-tab-{second}"));
-        assert!(strip.contains(&second_tab.bounds().center()));
-        assert_eq!(second_tab.selected(), Some(true));
+        let list = window.find("browser-list").bounds();
+        let second_row = window.find(format!("browser-list-row-{second}"));
+        assert!(list.contains(&second_row.bounds().center()));
     });
+    assert_eq!(
+        app.read_with(&vcx, |app, _| app
+            .active_browser_detail()
+            .map(str::to_string)),
+        Some(second.clone()),
+        "the sibling page is the raised row in the list and the front detail"
+    );
 
     app.update_in(&mut vcx, |app, window, cx| {
         app.close_right_panel_web_tab(second.clone(), window, cx);
@@ -53,20 +88,27 @@ fn browser_tabs_select_independent_surfaces_and_drop_closed_popups(cx: &mut Test
             },
             cx,
         );
-        assert_eq!(
-            layout_active_web(&app.tool_layout()).as_deref(),
-            Some(first.as_str())
-        );
+        assert_eq!(active_web(app).as_deref(), Some(first.as_str()));
         assert!(app.browser_surface_commands(&second).is_empty());
     });
     settle(&mut vcx);
     vcx.update(|window, _| {
-        let strip = window.find("side-panel-tool-scroll").bounds();
-        let first_tab = window.find(format!("web-tab-{first}"));
-        assert!(strip.contains(&first_tab.bounds().center()));
-        assert_eq!(first_tab.selected(), Some(true));
-        assert!(window.try_find(format!("web-tab-{second}")).is_none());
+        let list = window.find("browser-list").bounds();
+        let first_row = window.find(format!("browser-list-row-{first}"));
+        assert!(list.contains(&first_row.bounds().center()));
+        assert!(
+            window
+                .try_find(format!("browser-list-row-{second}"))
+                .is_none()
+        );
     });
+    assert_eq!(
+        app.read_with(&vcx, |app, _| app
+            .active_browser_detail()
+            .map(str::to_string)),
+        Some(first.clone()),
+        "closing the front page raises its right-then-left neighbour"
+    );
 }
 
 use std::sync::{Arc, Mutex};
@@ -153,7 +195,7 @@ fn a_host_bound_page_verifies_before_load_and_keeps_the_host_address(cx: &mut Te
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     let tab_id = app.update_in(&mut vcx, |app, _, cx| {
         app.open_web_page("http://localhost:3000/app", Some(host.clone()), cx);
-        layout_active_web(&app.tool_layout()).expect("the page is selected")
+        active_web(app).expect("the page is the front detail")
     });
     settle(&mut vcx);
     let viewport = vcx.update(|window, _| window.find("browser-surface-anchor").bounds());
@@ -203,7 +245,7 @@ fn a_lost_forward_blocks_the_stale_port_and_reconnects_explicitly(cx: &mut TestA
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     let tab_id = app.update_in(&mut vcx, |app, _, cx| {
         app.open_web_page("http://localhost:3000/app", Some(host.clone()), cx);
-        layout_active_web(&app.tool_layout()).expect("the page is selected")
+        active_web(app).expect("the page is the front detail")
     });
     settle(&mut vcx);
 
@@ -320,7 +362,7 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(cx: &mut T
         let focused = window.focused(cx).expect("terminal content owns focus");
         app.reveal_agent_preview(app.workspace, 1, "http://localhost:5173/app", &scratch, cx)
             .expect("a local preview is eligible");
-        let first = layout_active_web(&app.tool_layout()).expect("the preview is selected");
+        let first = active_web(app).expect("the preview is the front detail");
         assert!(app.right_panel_visible, "the panel reveals for the preview");
         (focused, first)
     });
@@ -345,18 +387,11 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(cx: &mut T
     // Move the Side Panel to a tool, then have the same agent pane request
     // again: the existing preview is selected, not merely rewritten in place.
     app.update_in(&mut vcx, |app, window, cx| {
-        app.select_panel_tab(
-            &crate::ui::right_panel::PanelTab::Tool(lyrel_core::core::config::RightPanelTab::Info),
-            window,
-            cx,
-        );
+        app.set_right_panel_tab(lyrel_core::core::config::RightPanelTab::Info, window, cx);
     });
     app.read_with(&vcx, |app, _| {
         assert!(
-            matches!(
-                app.tool_layout().active,
-                crate::ui::right_panel::PanelTab::Tool(_)
-            ),
+            app.tool_layout().active == lyrel_core::core::config::RightPanelTab::Info,
             "the test really left the preview"
         );
     });
@@ -369,18 +404,17 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(cx: &mut T
     });
     app.read_with(&vcx, |app, _| {
         let layout = app.tool_layout();
-        let web: Vec<_> = layout
-            .order
-            .iter()
-            .filter_map(|entry| match entry {
-                crate::ui::right_panel::PanelTab::Web(tab) => Some(tab.id.clone()),
-                _ => None,
-            })
-            .collect();
+        let web: Vec<_> = layout.web_tabs.iter().map(|tab| tab.id.clone()).collect();
         assert_eq!(web, [first.clone()], "one preview tab per agent pane");
-        assert!(
-            matches!(&layout.active, crate::ui::right_panel::PanelTab::Web(tab) if tab.id == first),
-            "a repeated request selects the existing preview"
+        assert_eq!(
+            layout.active,
+            lyrel_core::core::config::RightPanelTab::Browser,
+            "a repeated request selects the Browser tool"
+        );
+        assert_eq!(
+            app.active_browser_detail().map(str::to_string),
+            Some(first.clone()),
+            "a repeated request raises the existing preview's detail"
         );
         assert!(layout.open, "the panel stays revealed");
         assert_eq!(
@@ -404,7 +438,7 @@ fn an_explicit_share_writes_the_screenshot_and_prompts_the_original_pane(cx: &mu
             cx,
         )
         .expect("the preview opens");
-        let tab = layout_active_web(&app.tool_layout()).expect("selected");
+        let tab = active_web(app).expect("selected");
         app.attach_test_browser_surface(&tab, cx);
         tab
     });
@@ -479,7 +513,7 @@ fn a_stale_capture_answer_never_consumes_a_newer_share(cx: &mut TestAppContext) 
             cx,
         )
         .expect("the preview opens");
-        let tab = layout_active_web(&app.tool_layout()).expect("selected");
+        let tab = active_web(app).expect("selected");
         app.attach_test_browser_surface(&tab, cx);
         app.browser_preview_feedback_open(&tab, window, cx);
         let input = app.right_panel.web_pages[&tab]
@@ -560,7 +594,7 @@ fn a_cancelled_share_never_reaches_the_pane_after_its_write(cx: &mut TestAppCont
             cx,
         )
         .expect("the preview opens");
-        let tab = layout_active_web(&app.tool_layout()).expect("selected");
+        let tab = active_web(app).expect("selected");
         app.attach_test_browser_surface(&tab, cx);
         app.browser_preview_feedback_open(&tab, window, cx);
         let input = app.right_panel.web_pages[&tab]
@@ -650,9 +684,8 @@ fn a_cancelled_share_never_reaches_the_pane_after_its_write(cx: &mut TestAppCont
 
 #[gpui_kit::test]
 fn a_restored_preview_has_no_sendable_source(cx: &mut TestAppContext) {
-    use crate::ui::right_panel::PanelTab;
     use lyrel_core::core::config::RightPanelTab;
-    use lyrel_core::core::config::RightPanelTab::Info;
+    use lyrel_core::core::config::RightPanelTab::{Browser, Info};
     use lyrel_core::core::session::{
         TabEntryState, TabSelectionState, ToolLayoutState, WebTabState, WindowView, WindowViews,
     };
@@ -662,6 +695,7 @@ fn a_restored_preview_has_no_sendable_source(cx: &mut TestAppContext) {
         version: ToolLayoutState::CURRENT_VERSION,
         order: vec![
             TabEntryState::Tool(Info),
+            TabEntryState::Tool(Browser),
             TabEntryState::Web(WebTabState {
                 id: "web-preview".into(),
                 address: "http://localhost:5173/app".into(),
@@ -669,7 +703,7 @@ fn a_restored_preview_has_no_sendable_source(cx: &mut TestAppContext) {
                 title: String::new(),
             }),
         ],
-        active: TabSelectionState::Web("web-preview".into()),
+        active: TabSelectionState::Tool(Browser),
         last_used: RightPanelTab::Info,
         open: true,
     };
@@ -690,9 +724,10 @@ fn a_restored_preview_has_no_sendable_source(cx: &mut TestAppContext) {
     settle(&mut vcx);
     app.update_in(&mut vcx, |app, window, cx| {
         let layout = app.tool_layout();
-        assert!(
-            matches!(&layout.active, PanelTab::Web(tab) if tab.id == "web-preview"),
-            "the tab and its address restore"
+        assert_eq!(
+            layout.active,
+            RightPanelTab::Browser,
+            "the Browser tool restores to the front"
         );
         let tab = app.web_tab("web-preview").expect("the restored preview");
         assert_eq!(tab.address, "http://localhost:5173/app");
@@ -735,7 +770,7 @@ fn a_missing_source_pane_refuses_the_share_visibly(cx: &mut TestAppContext) {
             cx,
         )
         .expect("the preview itself may open");
-        let tab = layout_active_web(&app.tool_layout()).expect("selected");
+        let tab = active_web(app).expect("selected");
         app.attach_test_browser_surface(&tab, cx);
         tab
     });
@@ -790,7 +825,7 @@ fn a_remote_preview_inherits_the_windows_verified_host_binding(cx: &mut TestAppC
             cx,
         )
         .expect("a remote preview resolves through the window's own route");
-        layout_active_web(&app.tool_layout()).expect("selected")
+        app.tool_layout().web_tabs[0].id.clone()
     });
     app.read_with(&vcx, |app, _| {
         let tab = app.web_tab(&tab).expect("the preview tab");
@@ -822,14 +857,9 @@ fn a_preview_url_that_breaks_the_surface_policy_never_opens(cx: &mut TestAppCont
         .expect_err("a local file is not a preview");
     assert!(err.contains("http(s)"), "{err}");
     app.read_with(&vcx, |app, _| {
-        assert_eq!(
-            app.tool_layout()
-                .order
-                .iter()
-                .filter(|entry| matches!(entry, crate::ui::right_panel::PanelTab::Web(_)))
-                .count(),
-            0,
-            "the denied route never grew a tab"
+        assert!(
+            app.tool_layout().web_tabs.is_empty(),
+            "the denied route never grew a page"
         );
     });
 }

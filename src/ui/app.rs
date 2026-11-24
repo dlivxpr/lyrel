@@ -305,9 +305,6 @@ pub struct LyrelApp {
     pub(crate) document_dragging: Rc<Cell<bool>>,
     pub(crate) right_panel_visible: bool,
     pub(crate) right_panel_tab: RightPanelTab,
-    /// The selected web tab, when the panel is showing a page rather than a
-    /// tool — the second half of the mirror the layout folds from (#391).
-    pub(crate) right_panel_web_tab: Option<String>,
     /// The browser's one address field and the row it lives in (#391).
     pub(crate) browser_chrome: Option<crate::ui::browser::BrowserChrome>,
     /// Window-level coordination between covering overlays and native child

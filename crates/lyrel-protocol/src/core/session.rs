@@ -424,8 +424,8 @@ pub struct WebTabState {
     /// its workspace's strip. Sibling requests and restoration address the
     /// tab by this, never by position.
     pub id: String,
-    /// The original address the tab opened with — its persistent identity.
-    /// Editing the address navigates the live page; it rewrites nothing here.
+    /// Starting address used on restore. A blank page records its first
+    /// submitted web address before subsequent navigations stay live-only.
     pub address: String,
     /// The Host the page belongs to. `None` is this machine; a remote binding
     /// keeps the tab on its owning Host (#382, forwarding is #392's seam).
@@ -553,29 +553,38 @@ impl<'de> Deserialize<'de> for TabSelectionState {
 /// expansion and drafts are panel state and deliberately have no place here.
 ///
 /// Version 2 (#391) mixes web pages into the strip order and can select one.
-/// A version 1 record — open tools only — still reads: each untagged entry
-/// parses as the tool it names, which is the migration; the first write
-/// upgrades the record to version 2. A version 1 build reading a version 2
-/// record keeps the tool entries it understands, drops web ones with a
-/// logged warning, and falls back to Info for a web selection — the same
-/// per-entry tolerance the strip reader has always had.
+/// Version 3 (#382) makes the Browser a tool of its own: the tool entries
+/// stay in strip position order and the page records are appended after
+/// them, kept regardless of whether the Browser tool's tab is open; the
+/// selection is a tool identity. A version 2 record still reads: its pages
+/// become the Browser tool's list and the tool itself is synthesized at the
+/// first old page position — which is the migration; a version 2 web
+/// selection restores as the Browser tool. A version 1 record — open tools
+/// only — still reads the same way it always has: each untagged entry
+/// parses as the tool it names; the first write upgrades the record to the
+/// newest version. An older build reading a newer record keeps the per-entry
+/// tolerance the strip reader has always had, or — past the version it
+/// knows — drops the layout rather than guessing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolLayoutState {
     /// The format version this build writes. A record newer than
     /// [`ToolLayoutState::CURRENT_VERSION`] reads as "no layout", which is
     /// the fresh-workspace default — never a crash and never a guess.
     pub version: u32,
-    /// Open strip entries, left to right — built-in tools and web pages in
-    /// the one scrollable order the panel renders. Empty means every entry
-    /// was closed; the record is kept (and restored) as written.
+    /// Strip entries, left to right. In a version 3 record the built-in
+    /// tool entries — the Browser included — come in strip position order
+    /// and the web page records follow them, appended; in a version 2
+    /// record pages sit at their old strip positions among the tools; in a
+    /// version 1 record every entry is a tool. Empty means every tool was
+    /// closed; the record is kept (and restored) as written.
     #[serde(default, deserialize_with = "de_tab_entries")]
     pub order: Vec<TabEntryState>,
-    /// The entry whose page was showing.
+    /// The tool whose page was showing. Version 3 writes a tool identity;
+    /// a version 2 record may name one page instead (`{"web": "<id>"}`),
+    /// which restores as the Browser tool's list.
     #[serde(default)]
     pub active: TabSelectionState,
-    /// The tool an emptied panel resumes when reopened. Web pages are not a
-    /// resume target: closing the last page falls back to the last tool —
-    /// Info for a workspace that never opened one.
+    /// The tool an emptied panel resumes when reopened.
     #[serde(default, deserialize_with = "crate::core::config::de_lenient")]
     pub last_used: crate::core::config::RightPanelTab,
     /// Whether the panel column was expanded.
@@ -584,7 +593,7 @@ pub struct ToolLayoutState {
 }
 
 impl ToolLayoutState {
-    pub const CURRENT_VERSION: u32 = 2;
+    pub const CURRENT_VERSION: u32 = 3;
 
     /// Whether this build can read the record: written by it or by an older
     /// one. Anything newer is left to its own build.

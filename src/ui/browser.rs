@@ -1,14 +1,22 @@
-//! The Side Panel browser (#391): local web pages as first-class tabs in the
-//! right panel's strip, beside the single-instance tools. This module owns
-//! the tab model, the live page runtime (native surface lifecycle, exactly
-//! the diagram surface's paint-driven visibility pattern), the page chrome
-//! (back, forward, reload, address, Host, Open in System Browser), and the
-//! entry points that open a page: the `+` menu, Search Everywhere, and a
-//! local terminal link's URL.
+//! The Browser tool's pages (#391): local web pages opened from the `+` menu,
+//! Search Everywhere, or a terminal link, and agent-requested previews (#393).
+//! The right panel's Browser tool lists the open pages; the selected page
+//! paints as a document in the document column, beside the terminal docked or
+//! over the workspace filling, under the same header contract the GitHub
+//! detail keeps. This module owns the tab model, the live page runtime
+//! (native surface lifecycle, exactly the diagram surface's paint-driven
+//! visibility pattern), the page chrome (back, forward, reload, address,
+//! Open in System Browser), the document shell that hosts the chrome, and
+//! the entry points that open a page.
 //!
 //! Remote loopback forwarding and its reconnect flow live in [`route`] (#392);
 //! agent-requested previews and the explicit screenshot-and-feedback share
 //! live here as tab state and an opt-in composer (#393).
+//!
+//! The current detail — `LyrelApp::active_browser_detail` — is the single
+//! authority for the native paint anchor, the visibility watchdog and the
+//! address submission: switching tools or collapsing the panel never hides
+//! a raised page, and only the front page's surface exists on screen.
 //!
 //! The native surface contract lives in [`surface`]; the navigation policy
 //! in [`policy`]. There is no page → workbench bridge — the only things a
@@ -36,15 +44,22 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme as _, Icon, IconName, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
     AnyElement, Bounds, Context, Entity, Focusable as _, Pixels, Subscription, Window, div,
-    prelude::*, px,
+    prelude::*, px, rems,
 };
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 use crate::ui::app::LyrelApp;
-use crate::ui::right_panel::{PanelTab, ToolLayout, WebTab};
+use crate::ui::diff_overlay::{HAIRLINE_W, hairline};
+use crate::ui::document_column::DocumentChrome;
+use crate::ui::right_panel::{TEXT, WebTab};
+use crate::ui::window_chrome::{CONTENT_INSET, TitleStripRow as _};
 use lyrel_core::core::session::{PreviewSourceState, WorkspaceId};
 use lyrel_terminal::view::{AgentPromptError, TerminalView};
 use lyrel_ui_base::host_ops::{HostId, SharedHost};
+
+/// The document header's close tile, the same notch the diff and GitHub
+/// headers' close buttons use.
+const CLOSE_TILE: f32 = crate::ui::tab_strip::RAIL_TILE;
 
 /// One page's live runtime, keyed by its durable tab id in
 /// [`crate::ui::right_panel::RightPanelState::web_pages`]. Everything here is
@@ -394,11 +409,19 @@ impl BrowserChrome {
 }
 
 impl LyrelApp {
-    /// Opens `address` as a new web tab on this workspace and selects it.
-    /// The entry points — the `+` menu, Search Everywhere, a terminal link —
-    /// all land here; the layout API is what keeps the strip, the mirror and
-    /// the persisted record in one write. The surface itself starts lazily
-    /// on the tab's first paint.
+    pub(crate) fn focus_browser_address(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let chrome = self
+            .browser_chrome
+            .get_or_insert_with(|| BrowserChrome::new(window, cx));
+        window.focus(&chrome.input.read(cx).focus_handle(cx), cx);
+    }
+
+    /// Opens `address` as a new web tab on this workspace and reveals its
+    /// document. The entry points — the `+` menu, Search Everywhere, a
+    /// terminal link — all land here; the layout API is what keeps the
+    /// Browser tool's list, the mirror and the persisted record in one
+    /// write. The surface itself starts lazily on the document's first
+    /// paint.
     pub(crate) fn open_web_page(
         &mut self,
         address: &str,
@@ -416,6 +439,11 @@ impl LyrelApp {
         let tab_id = tab.id.clone();
         let mut layout = self.tool_layout();
         layout.show_web(tab);
+        // Raise the page's document before the layout is stored, so the very
+        // first paint already finds the detail front and can start the
+        // surface. No focus moves here: the keyboard stays wherever the
+        // entry point left it.
+        self.reveal_browser_detail(tab_id.clone(), cx);
         let page = self
             .right_panel
             .web_pages
@@ -469,18 +497,13 @@ impl LyrelApp {
             scratch: scratch.to_string(),
         };
         let mut layout = self.tool_layout();
-        let existing_ix = layout.order.iter().position(|entry| match entry {
-            PanelTab::Web(tab) => tab
-                .source
+        let existing_ix = layout.web_tabs.iter().position(|tab| {
+            tab.source
                 .as_ref()
-                .is_some_and(|source| source.pane == pane && source.workspace == source_workspace),
-            PanelTab::Tool(_) => false,
+                .is_some_and(|source| source.pane == pane && source.workspace == source_workspace)
         });
         if let Some(at) = existing_ix {
-            let existing = match &layout.order[at] {
-                PanelTab::Web(tab) => tab.clone(),
-                PanelTab::Tool(_) => unreachable!("the index names a web tab"),
-            };
+            let existing = layout.web_tabs[at].clone();
             let address_changed = existing.address != address;
             let host_changed = existing.host != expected;
             let tab = WebTab {
@@ -491,11 +514,12 @@ impl LyrelApp {
                 source: Some(source),
             };
             let binding = self.preview_binding_for(&tab, cx);
-            layout.order[at] = PanelTab::Web(tab.clone());
-            // A fresh request always selects its page, even when the user had
-            // moved to Info or another tab in the meantime (#393).
-            layout.active = PanelTab::Web(tab.clone());
-            layout.open = true;
+            layout.web_tabs[at] = tab.clone();
+            // A fresh request always reveals its page's document, even when
+            // the user had moved to Info or another tool in the meantime
+            // (#393). The row is replaced in place; `show` opens or reuses
+            // the Browser tool's single list entry.
+            layout.show(lyrel_core::core::config::RightPanelTab::Browser);
             let bound = tab.host.is_some();
             if host_changed {
                 // The page runtime was created for the old Host (its site-data
@@ -520,6 +544,9 @@ impl LyrelApp {
                     RouteState::Local
                 };
             }
+            // Raise before the store, like a fresh open: the first paint
+            // after the reveal finds the document front.
+            self.reveal_browser_detail(tab.id.clone(), cx);
             self.store_tool_layout(&layout, cx);
             if address_changed || host_changed {
                 self.navigate_web_tab(&tab.id, address, cx);
@@ -538,6 +565,10 @@ impl LyrelApp {
         let binding = self.preview_binding_for(&tab, cx);
         let tab_id = tab.id.clone();
         layout.show_web(tab);
+        // Raise before the store, like `open_web_page`: the first paint
+        // after the reveal finds the document front. The page's own reveal
+        // never moves the keyboard — the terminal keeps it.
+        self.reveal_browser_detail(tab_id.clone(), cx);
         let page = self
             .right_panel
             .web_pages
@@ -1147,11 +1178,11 @@ impl LyrelApp {
     }
 
     /// Enter submits the address field: complete what was typed, and either
-    /// navigate the selected page or refuse the route before the surface
-    /// ever sees it.
+    /// navigate the front page or refuse the route before the surface ever
+    /// sees it. The front detail is the authority — the field only ever
+    /// serves the document it is painted over.
     pub(crate) fn browser_address_submitted(&mut self, cx: &mut Context<Self>) {
-        let layout = self.tool_layout();
-        let Some(tab_id) = layout_active_web(&layout) else {
+        let Some(tab_id) = self.active_browser_detail().map(str::to_string) else {
             return;
         };
         let typed = self
@@ -1168,11 +1199,21 @@ impl LyrelApp {
             cx.notify();
             return;
         };
+        if policy::classify(&url) == policy::Route::Load
+            && self
+                .web_tab(&tab_id)
+                .is_some_and(|tab| policy::is_blank(&tab.address))
+        {
+            let mut layout = self.tool_layout();
+            if let Some(tab) = layout.web_tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                tab.address.clone_from(&url);
+                self.store_tool_layout(&layout, cx);
+            }
+        }
         self.navigate_web_tab(&tab_id, &url, cx);
     }
 
-    /// Navigates the page's surface and records what the page is on. The
-    /// layout's original address does not move — it is the tab's identity.
+    /// Navigates the live surface without changing its saved starting address.
     /// A loopback address on a Host-bound page is verified through the Host
     /// first and loaded at the forwarded endpoint (#392).
     pub(crate) fn navigate_web_tab(&mut self, tab_id: &str, url: &str, cx: &mut Context<Self>) {
@@ -1294,15 +1335,15 @@ impl LyrelApp {
         self.browser_reload(tab_id, cx);
     }
 
-    /// The tab entry a web page id names.
+    /// The tab entry a web page id names in the Browser tool's list.
     fn web_tab(&self, tab_id: &str) -> Option<WebTab> {
-        self.tool_layout()
-            .order
+        self.right_panel
+            .tool_layouts
+            .get(&self.workspace)?
+            .web_tabs
             .iter()
-            .find_map(|entry| match entry {
-                PanelTab::Web(tab) if tab.id == tab_id => Some(tab.clone()),
-                _ => None,
-            })
+            .find(|tab| tab.id == tab_id)
+            .cloned()
     }
 
     /// Verifies the Host route for `load` when it needs one, then delivers
@@ -1741,11 +1782,8 @@ impl LyrelApp {
                             .and_then(|forward| forward.original_url(&url))
                     })
                     .unwrap_or(url);
-                let layout = self.tool_layout();
-                if let Some(tab) = layout.order.iter().find_map(|entry| match entry {
-                    PanelTab::Web(tab) if tab.id == tab_id => Some(tab),
-                    _ => None,
-                }) && policy::classify(&url) == policy::Route::Load
+                if let Some(tab) = self.web_tab(tab_id)
+                    && policy::classify(&url) == policy::Route::Load
                 {
                     self.open_web_page(&url, tab.host.clone(), cx);
                 }
@@ -1838,6 +1876,8 @@ impl LyrelApp {
 
     /// The paint hook's target: records bounds, starts the surface on first
     /// paint, and syncs visibility (covering overlays included) while painted.
+    /// Only the front detail paints its anchor — the document column renders
+    /// no other browser shell, so a buried page never reaches this hook.
     pub(crate) fn browser_page_prepared(
         &mut self,
         tab_id: &str,
@@ -1845,16 +1885,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.right_panel_open(cx) {
-            return;
-        }
-        let Some(layout) = self.right_panel.tool_layouts.get(&self.workspace) else {
-            return;
-        };
-        let PanelTab::Web(tab) = &layout.active else {
-            return;
-        };
-        if !layout.open || tab.id != tab_id {
+        if self.active_browser_detail() != Some(tab_id) {
             return;
         }
         let scale = window.scale_factor();
@@ -1891,7 +1922,9 @@ impl LyrelApp {
         if page.surface_pending || page.surface_attempted || page.route_pending {
             return;
         }
-        let tab = tab.clone();
+        let Some(tab) = self.web_tab(tab_id) else {
+            return;
+        };
         let Some(site) = route::browser_site_data(&tab) else {
             if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
                 page.surface_attempted = true;
@@ -1932,41 +1965,41 @@ impl LyrelApp {
         );
     }
 
-    /// Syncs retained native pages after panel, selection, or cover changes.
-    /// A recently painted page can come back after a cover lifts, retaining
-    /// its scroll position, form draft, and focus. An unmounted panel never
-    /// shows a native child, even when its saved layout is still open.
+    /// Syncs retained native pages after selection, document or cover
+    /// changes. A recently painted page can come back after a cover lifts,
+    /// retaining its scroll position, form draft, and focus. The front
+    /// detail is the only page that may stay visible — a page whose document
+    /// is dismissed, and every surface when no detail is front, hides here
+    /// no matter what the panel does; switching tools or collapsing the
+    /// panel never reaches this path as a reason to hide.
     pub(crate) fn sync_browser_surfaces(&mut self, cx: &mut Context<Self>) {
         const VISIBLE_GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
         if self.right_panel.web_pages.is_empty() {
             return;
         }
-        let panel_open = self.right_panel_open(cx);
-        let active_web = if panel_open {
-            layout_active_web(&self.tool_layout())
-        } else {
-            None
-        };
+        // The front detail is the only page that may stay visible. Borrowed
+        // straight from the tab: this runs on selection, document and cover
+        // changes, and the answer is a compare, not a copy.
+        let active_web = self
+            .tabs
+            .get(self.tabs.active_index())
+            .and_then(|tab| tab.browser_detail());
         let now = std::time::Instant::now();
         // Covers are window-scoped (a dialog in another window must not hide
         // this page); resolve each painted window once per pass.
         let mut covered_by_window: std::collections::HashMap<gpui_kit::WindowId, bool> =
             std::collections::HashMap::new();
-        if panel_open {
-            for page in self.right_panel.web_pages.values() {
-                if let Some(window) = page.window_id {
-                    covered_by_window.entry(window).or_insert_with(|| {
-                        self.native_surface_cover_registered(window, cx)
-                            || crate::ui::surface_coordinator::popup_menu_open_for_window(
-                                window, cx,
-                            )
-                    });
-                }
+        for page in self.right_panel.web_pages.values() {
+            if let Some(window) = page.window_id {
+                covered_by_window.entry(window).or_insert_with(|| {
+                    self.native_surface_cover_registered(window, cx)
+                        || crate::ui::surface_coordinator::popup_menu_open_for_window(window, cx)
+                });
             }
         }
         let mut notify = false;
         for (tab_id, page) in self.right_panel.web_pages.iter_mut() {
-            let selected = active_web.as_deref() == Some(tab_id.as_str());
+            let selected = active_web == Some(tab_id.as_str());
             let painted = selected
                 && now.duration_since(page.last_paint) < VISIBLE_GRACE
                 && page.bounds.is_some_and(|bounds| {
@@ -1989,19 +2022,52 @@ impl LyrelApp {
         }
     }
 
-    /// The global toast stack's right inset while a web page is visible: the
-    /// content area's lower-right edge, so ordinary toasts clear the WebView
-    /// instead of covering it. No cover is raised here — a toast never hides
-    /// the page.
+    /// Hides every native page the front detail does not name — including
+    /// when no page is front at all, so a dismissed document or a tab
+    /// teardown leaves no orphan HWND behind. The window composition runs
+    /// this at its top each frame; the steady state costs one id comparison
+    /// per page and never notifies.
+    pub(crate) fn hide_inactive_browser_surfaces(&mut self, cx: &mut Context<Self>) {
+        if self.right_panel.web_pages.is_empty() {
+            return;
+        }
+        // Borrowed from the tab, not copied: this runs at the top of every
+        // window composition, and the steady state must stay one compare
+        // per page.
+        let active = self
+            .tabs
+            .get(self.tabs.active_index())
+            .and_then(|tab| tab.browser_detail());
+        let mut changed = false;
+        for (tab_id, page) in self.right_panel.web_pages.iter_mut() {
+            if active == Some(tab_id.as_str()) || !page.surface_visible {
+                continue;
+            }
+            let covered = page.cover_synced.unwrap_or(false);
+            changed |= page.sync_visibility(false, covered);
+        }
+        if changed {
+            cx.notify();
+        }
+    }
+
+    /// The global toast stack's right inset while a browser page is front.
+    /// Docked, the page occupies the document column at the former
+    /// terminal-side location, and the stack anchors at the window's
+    /// lower-right: clearing the page takes the column's width plus the
+    /// right panel sitting beside it, so the stack lands left of both. A
+    /// filled document spans the terminal column up to the right panel, and
+    /// a toast with no panel to land on can overlap the native page — the
+    /// page's own cover surfaces handle real covers, a toast is not one, so
+    /// the inset stays ordinary rather than pretending the fill shell's
+    /// GPUI layers cover a native HWND. No cover is raised here either way.
     pub(crate) fn browser_toast_clearance(&self, window: &Window, cx: &gpui_kit::App) -> Pixels {
-        if !self.right_panel_open(cx) {
+        if self.active_browser_detail().is_none() {
             return px(8.);
         }
-        let layout = self.tool_layout();
-        if layout.open && layout_active_web(&layout).is_some() {
-            px(self.right_panel_px(window, cx) + 8.)
-        } else {
-            px(8.)
+        match self.document_dock_px(window, cx) {
+            Some(width) => px(width + self.right_panel_final_px(window, cx) + 8.),
+            None => px(8.),
         }
     }
 
@@ -2079,14 +2145,6 @@ fn browser_event_pump(
     })
 }
 
-/// The page the layout has selected, if it is a web tab.
-pub(crate) fn layout_active_web(layout: &ToolLayout) -> Option<String> {
-    match &layout.active {
-        PanelTab::Web(tab) => Some(tab.id.clone()),
-        PanelTab::Tool(_) => None,
-    }
-}
-
 /// The URL a tab's surface starts on: the original address for loadable
 /// routes, the blank page for everything else (a denied scheme must not
 /// reach the surface at all — the host would refuse it anyway).
@@ -2113,373 +2171,488 @@ pub(crate) fn browser_host_label(tab: &WebTab) -> gpui_kit::SharedString {
     }
 }
 
-/// Renders the browser controls above the native surface's paint anchor.
-pub(crate) fn render_browser_page(
-    app: &mut LyrelApp,
-    tab: &WebTab,
-    window: &mut Window,
-    cx: &mut Context<LyrelApp>,
-) -> AnyElement {
-    use gpui_kit::component::button::ButtonCustomVariant;
-    let theme = cx.theme();
-    let (muted, border, foreground) = (theme.muted_foreground, theme.border, theme.foreground);
-    let (can_back, can_forward, status, display_url, load_error, title) = app
-        .right_panel
-        .web_pages
-        .get(&tab.id)
-        .map(|page| {
-            (
-                page.can_back,
-                page.can_forward,
-                page.status.clone(),
-                page.display_url.clone(),
-                page.load_error.clone(),
-                page.display_title(tab),
-            )
-        })
-        .unwrap_or_else(|| {
-            (
-                false,
-                false,
-                PageStatus::Idle,
-                String::new(),
-                None,
-                tab.address.clone(),
-            )
-        });
-    // A Host-bound page keeps the Host's spelling in the address bar: the
-    // forwarded endpoint is an implementation detail (#392).
-    let address = if display_url.is_empty() {
-        tab.address.clone()
-    } else {
-        display_url
-    };
-    // A successful share asks the next render to clear the field; this is
-    // the first moment a `Window` is available to do it.
-    if let Some(feedback) = app
-        .right_panel
-        .web_pages
-        .get_mut(&tab.id)
-        .and_then(|page| page.feedback.as_mut())
-        && feedback.clear_draft
-    {
-        feedback.clear_draft = false;
-        let input = feedback.input.clone();
-        input.update(cx, |state, cx| state.set_value("", window, cx));
-    }
-    let source_label = app.agent_preview_source_label(tab, cx);
-    let source_tip = tab.source.as_ref().map(|source| {
-        t_fmt(
-            L10nKey::BrowserPreviewSourceTip,
-            &[("pane", &format!("%{}", source.pane))],
-        )
-    });
-    let feedback_view = app
-        .right_panel
-        .web_pages
-        .get(&tab.id)
-        .and_then(|page| page.feedback.as_ref())
-        .filter(|feedback| feedback.open)
-        .map(|feedback| {
-            (
-                feedback.input.clone(),
-                feedback.pending,
-                feedback.error.clone(),
-                feedback.notice.clone(),
-            )
-        });
-    let covered = app.native_surface_covered(window, cx);
-
-    if app.browser_chrome.is_none() {
-        app.browser_chrome = Some(BrowserChrome::new(window, cx));
-    }
-    app.sync_browser_address_input(&tab.id, &address, window, cx);
-    let chrome = app.browser_chrome.as_ref().expect("chrome just ensured");
-    let input = chrome.input.clone();
-
-    let icon_button =
-        |id: &'static str,
-         icon: IconName,
-         tip: L10nKey,
-         enabled: bool,
-         action: fn(&mut LyrelApp, &str, &mut Context<LyrelApp>)| {
-            let tab_id = tab.id.clone();
-            Button::new(id)
-                .icon(Icon::new(icon))
-                .custom(
-                    ButtonCustomVariant::new(cx)
-                        .color(cx.theme().transparent)
-                        .foreground(if enabled { foreground } else { muted })
-                        .hover(cx.theme().foreground.opacity(0.06)),
+impl LyrelApp {
+    /// The front browser page as a document: the shared document header —
+    /// the Host name, a dot and the page title on the left, the Dock / Fill
+    /// switch and the standard close tile on the right — over the page
+    /// chrome (toolbar, the agent source row, the explicit-share composer)
+    /// and the native paint anchor. Renders only while the Browser detail
+    /// is the front document, in both chromes: the native surface shows
+    /// exactly one page, and a buried browser shell would paint a stale
+    /// frame over the document that actually leads.
+    pub(crate) fn render_browser_document(
+        &mut self,
+        chrome: DocumentChrome,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        use gpui_kit::component::button::ButtonCustomVariant;
+        let tab_id = self.active_browser_detail()?.to_string();
+        let tab = self.web_tab(&tab_id)?;
+        let theme = cx.theme();
+        let (muted, border, foreground) = (theme.muted_foreground, theme.border, theme.foreground);
+        let (can_back, can_forward, status, display_url, load_error, title) = self
+            .right_panel
+            .web_pages
+            .get(&tab.id)
+            .map(|page| {
+                (
+                    page.can_back,
+                    page.can_forward,
+                    page.status.clone(),
+                    page.display_url.clone(),
+                    page.load_error.clone(),
+                    page.display_title(&tab),
                 )
-                .with_size(px(13. / crate::ui::window_chrome::BUTTON_ICON_SCALE))
-                .w(px(24.))
-                .h(px(24.))
-                .disabled(!enabled)
-                .tooltip(t(tip))
-                .on_click(cx.listener(move |this, _, _window, cx| {
-                    action(this, &tab_id, cx);
-                }))
-        };
-
-    let share_button = tab.source.as_ref().map(|_| {
-        let tab_id = tab.id.clone();
-        Button::new("browser-preview-share")
-            .label(t(L10nKey::BrowserPreviewShare))
-            .small()
-            .flex_shrink_0()
-            .tooltip(t(L10nKey::BrowserPreviewShareTip))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.browser_preview_feedback_open(&tab_id, window, cx);
-            }))
-    });
-
-    let toolbar = h_flex()
-        .id("browser-chrome")
-        .test_support()
-        .flex_none()
-        .w_full()
-        .items_center()
-        .gap_1()
-        .px_1()
-        .py_1()
-        .child(icon_button(
-            "browser-back",
-            IconName::ArrowLeft,
-            L10nKey::BrowserBack,
-            can_back,
-            LyrelApp::browser_back,
-        ))
-        .child(icon_button(
-            "browser-forward",
-            IconName::ArrowRight,
-            L10nKey::BrowserForward,
-            can_forward,
-            LyrelApp::browser_forward,
-        ))
-        .child(icon_button(
-            "browser-reload",
-            IconName::RotateCw,
-            L10nKey::BrowserReload,
-            true,
-            LyrelApp::browser_reload,
-        ))
-        .child(
-            h_flex()
-                .flex_1()
-                .min_w_0()
-                .h(px(24.))
-                .px_2()
-                .rounded(px(6.))
-                .bg(cx.theme().muted)
-                .items_center()
-                .child(
-                    div().flex_1().min_w_0().child(
-                        Input::new(&input)
-                            .appearance(false)
-                            .xsmall()
-                            .cleanable(true),
-                    ),
-                ),
-        )
-        .child(icon_button(
-            "browser-external",
-            IconName::ExternalLink,
-            L10nKey::BrowserOpenExternal,
-            true,
-            |this, tab_id, cx| this.browser_open_external(tab_id, cx),
-        ));
-
-    let host_label = browser_host_label(tab);
-    let identity_row = h_flex()
-        .flex_none()
-        .min_w_0()
-        .w_full()
-        .gap_1()
-        .px_1()
-        .pb_1()
-        .border_b_1()
-        .border_color(border)
-        .child(
-            div()
-                .id("browser-host")
-                .test_support()
-                .min_w_0()
-                .px_2()
-                .h(px(20.))
-                .flex()
-                .items_center()
-                .rounded(px(5.))
-                .bg(cx.theme().muted)
-                .text_xs()
-                .text_color(muted)
-                .tooltip({
-                    let label = host_label.clone();
-                    move |window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx)
-                    }
-                })
-                .child(div().min_w_0().truncate().child(host_label)),
-        )
-        .children(source_label.map(|label| {
-            div()
-                .id("browser-preview-source")
-                .test_support()
-                .flex_shrink_0()
-                .px_2()
-                .h(px(20.))
-                .flex()
-                .items_center()
-                .rounded(px(5.))
-                .bg(cx.theme().muted)
-                .text_xs()
-                .text_color(muted)
-                .when_some(source_tip, |chip, tip| {
-                    chip.tooltip(move |window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
-                    })
-                })
-                .child(label)
-        }))
-        .children(share_button);
-
-    let tab_id_bounds = tab.id.clone();
-    let viewport = div()
-        .flex_1()
-        .min_w_0()
-        .min_h_0()
-        .relative()
-        .on_children_prepainted({
-            let app = cx.entity().downgrade();
-            move |bounds, window, cx| {
-                if let Some(bounds) = bounds.first().copied() {
-                    let app = app.clone();
-                    let tab_id = tab_id_bounds.clone();
-                    window.defer(cx, move |window, cx| {
-                        let _ = app.update(cx, |app, cx| {
-                            app.browser_page_prepared(&tab_id, bounds, window, cx);
-                        });
-                    });
-                }
-            }
-        })
-        // Inset the measured child against the resolved viewport. Percentage
-        // height can resolve to zero inside the surrounding flex column.
-        .child(div().absolute().inset_0())
-        .id("browser-surface-anchor")
-        .test_support();
-
-    let feedback_row = feedback_view.map(|(feedback_input, pending, error, notice)| {
-        let tab_id = tab.id.clone();
-        let cancel_id = tab.id.clone();
-        let pane = tab
-            .source
-            .as_ref()
-            .map(|source| format!("%{}", source.pane))
-            .unwrap_or_default();
-        let send_label: gpui_kit::SharedString = if pending {
-            t(L10nKey::BrowserPreviewSending).to_string().into()
+            })
+            .unwrap_or_else(|| {
+                (
+                    false,
+                    false,
+                    PageStatus::Idle,
+                    String::new(),
+                    None,
+                    tab.address.clone(),
+                )
+            });
+        // A Host-bound page keeps the Host's spelling in the address bar: the
+        // forwarded endpoint is an implementation detail (#392).
+        let address = if display_url.is_empty() {
+            tab.address.clone()
         } else {
-            t_fmt(L10nKey::BrowserPreviewSend, &[("pane", &pane)]).into()
+            display_url
         };
-        v_flex()
-            .id("browser-preview-feedback")
+        // A successful share asks the next render to clear the field; this is
+        // the first moment a `Window` is available to do it.
+        if let Some(feedback) = self
+            .right_panel
+            .web_pages
+            .get_mut(&tab.id)
+            .and_then(|page| page.feedback.as_mut())
+            && feedback.clear_draft
+        {
+            feedback.clear_draft = false;
+            let input = feedback.input.clone();
+            input.update(cx, |state, cx| state.set_value("", window, cx));
+        }
+        let source_label = self.agent_preview_source_label(&tab, cx);
+        let source_tip = tab.source.as_ref().map(|source| {
+            t_fmt(
+                L10nKey::BrowserPreviewSourceTip,
+                &[("pane", &format!("%{}", source.pane))],
+            )
+        });
+        let feedback_view = self
+            .right_panel
+            .web_pages
+            .get(&tab.id)
+            .and_then(|page| page.feedback.as_ref())
+            .filter(|feedback| feedback.open)
+            .map(|feedback| {
+                (
+                    feedback.input.clone(),
+                    feedback.pending,
+                    feedback.error.clone(),
+                    feedback.notice.clone(),
+                )
+            });
+        let covered = self.native_surface_covered(window, cx);
+
+        if self.browser_chrome.is_none() {
+            self.browser_chrome = Some(BrowserChrome::new(window, cx));
+        }
+        self.sync_browser_address_input(&tab.id, &address, window, cx);
+        let address_input = self
+            .browser_chrome
+            .as_ref()
+            .expect("chrome just ensured")
+            .input
+            .clone();
+
+        let icon_button =
+            |id: &'static str,
+             icon: IconName,
+             tip: L10nKey,
+             enabled: bool,
+             action: fn(&mut LyrelApp, &str, &mut Context<LyrelApp>)| {
+                let tab_id = tab.id.clone();
+                Button::new(id)
+                    .icon(Icon::new(icon))
+                    .custom(
+                        ButtonCustomVariant::new(cx)
+                            .color(cx.theme().transparent)
+                            .foreground(if enabled { foreground } else { muted })
+                            .hover(cx.theme().foreground.opacity(0.06)),
+                    )
+                    .with_size(px(13. / crate::ui::window_chrome::BUTTON_ICON_SCALE))
+                    .w(px(24.))
+                    .h(px(24.))
+                    .disabled(!enabled)
+                    .tooltip(t(tip))
+                    .accessibility_label(t(tip))
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        action(this, &tab_id, cx);
+                    }))
+            };
+
+        let share_button = tab.source.as_ref().map(|_| {
+            let tab_id = tab.id.clone();
+            Button::new("browser-preview-share")
+                .label(t(L10nKey::BrowserPreviewShare))
+                .small()
+                .flex_shrink_0()
+                .tooltip(t(L10nKey::BrowserPreviewShareTip))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.browser_preview_feedback_open(&tab_id, window, cx);
+                }))
+        });
+
+        let toolbar = h_flex()
+            .id("browser-chrome")
             .test_support()
             .flex_none()
             .w_full()
+            .items_center()
             .gap_1()
-            .px_2()
+            .px_1()
             .py_1()
-            .border_b_1()
-            .border_color(border)
+            .child(icon_button(
+                "browser-back",
+                IconName::ArrowLeft,
+                L10nKey::BrowserBack,
+                can_back,
+                LyrelApp::browser_back,
+            ))
+            .child(icon_button(
+                "browser-forward",
+                IconName::ArrowRight,
+                L10nKey::BrowserForward,
+                can_forward,
+                LyrelApp::browser_forward,
+            ))
+            .child(icon_button(
+                "browser-reload",
+                IconName::RotateCw,
+                L10nKey::BrowserReload,
+                true,
+                LyrelApp::browser_reload,
+            ))
             .child(
                 h_flex()
-                    .w_full()
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(24.))
+                    .px_2()
+                    .rounded(px(6.))
+                    .bg(cx.theme().muted)
                     .items_center()
-                    .gap_1()
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            Input::new(&address_input)
+                                .appearance(false)
+                                .xsmall()
+                                .cleanable(true),
+                        ),
+                    ),
+            )
+            .child(icon_button(
+                "browser-external",
+                IconName::ExternalLink,
+                L10nKey::BrowserOpenExternal,
+                true,
+                |this, tab_id, cx| this.browser_open_external(tab_id, cx),
+            ));
+
+        // The agent source row keeps the pane chip and the share affordance,
+        // and only an agent preview has one: an ordinary page shows no row at
+        // all. The Host chip itself moved into the document header.
+        let source_row = tab.source.as_ref().map(|_| {
+            h_flex()
+                .id("browser-preview-source-row")
+                .test_support()
+                .flex_none()
+                .min_w_0()
+                .w_full()
+                .gap_1()
+                .px_1()
+                .pb_1()
+                .border_b_1()
+                .border_color(border)
+                .children(source_label.map(|label| {
+                    div()
+                        .id("browser-preview-source")
+                        .test_support()
+                        .flex_shrink_0()
+                        .px_2()
+                        .h(px(20.))
+                        .flex()
+                        .items_center()
+                        .rounded(px(5.))
+                        .bg(cx.theme().muted)
+                        .text_xs()
+                        .text_color(muted)
+                        .when_some(source_tip, |chip, tip| {
+                            chip.tooltip(move |window, cx| {
+                                gpui_kit::component::tooltip::Tooltip::new(tip.clone())
+                                    .build(window, cx)
+                            })
+                        })
+                        .child(label)
+                }))
+                .children(share_button)
+        });
+
+        let tab_id_bounds = tab.id.clone();
+        let viewport = div()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .relative()
+            .on_children_prepainted({
+                let app = cx.entity().downgrade();
+                move |bounds, window, cx| {
+                    if let Some(bounds) = bounds.first().copied() {
+                        let app = app.clone();
+                        let tab_id = tab_id_bounds.clone();
+                        window.defer(cx, move |window, cx| {
+                            let _ = app.update(cx, |app, cx| {
+                                app.browser_page_prepared(&tab_id, bounds, window, cx);
+                            });
+                        });
+                    }
+                }
+            })
+            // Inset the measured child against the resolved viewport. Percentage
+            // height can resolve to zero inside the surrounding flex column.
+            .child(div().absolute().inset_0())
+            .id("browser-surface-anchor")
+            .test_support();
+
+        let feedback_row = feedback_view.map(|(feedback_input, pending, error, notice)| {
+            let tab_id = tab.id.clone();
+            let cancel_id = tab.id.clone();
+            let pane = tab
+                .source
+                .as_ref()
+                .map(|source| format!("%{}", source.pane))
+                .unwrap_or_default();
+            let send_label: gpui_kit::SharedString = if pending {
+                t(L10nKey::BrowserPreviewSending).to_string().into()
+            } else {
+                t_fmt(L10nKey::BrowserPreviewSend, &[("pane", &pane)]).into()
+            };
+            v_flex()
+                .id("browser-preview-feedback")
+                .test_support()
+                .flex_none()
+                .w_full()
+                .gap_1()
+                .px_2()
+                .py_1()
+                .border_b_1()
+                .border_color(border)
+                .child(
+                    h_flex()
+                        .w_full()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .h(px(26.))
+                                .px_2()
+                                .rounded(px(6.))
+                                .bg(cx.theme().muted)
+                                .flex()
+                                .items_center()
+                                .child(
+                                    div().flex_1().min_w_0().child(
+                                        Input::new(&feedback_input)
+                                            .appearance(false)
+                                            .xsmall()
+                                            .cleanable(false),
+                                    ),
+                                ),
+                        )
+                        .child(
+                            Button::new("browser-preview-send")
+                                .label(send_label)
+                                .small()
+                                .disabled(pending)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.browser_preview_feedback_send(&tab_id, window, cx);
+                                })),
+                        )
+                        .child(
+                            Button::new("browser-preview-cancel")
+                                .label(t(L10nKey::BrowserPreviewCancel))
+                                .small()
+                                .on_click(cx.listener(move |this, _, _window, cx| {
+                                    this.browser_preview_feedback_cancel(&cancel_id, cx);
+                                })),
+                        ),
+                )
+                .when_some(error, |col, error| {
+                    col.child(
+                        div()
+                            .id("browser-preview-feedback-error")
+                            .test_support()
+                            .max_w_full()
+                            .text_xs()
+                            .text_color(cx.theme().danger)
+                            .child(error),
+                    )
+                })
+                .when_some(notice, |col, notice| {
+                    col.child(
+                        div()
+                            .id("browser-preview-feedback-notice")
+                            .test_support()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(notice),
+                    )
+                })
+        });
+
+        let overlay = if covered
+            && load_error.is_none()
+            && !matches!(status, PageStatus::Failed(_) | PageStatus::Unsupported(_))
+        {
+            let frame = self
+                .right_panel
+                .web_pages
+                .get(&tab.id)
+                .and_then(|page| page.still_frame.clone());
+            Some(browser_still_frame(&tab.id, &title, &address, frame, cx))
+        } else {
+            browser_overlay(&tab.id, &status, &address, load_error.as_deref(), cx)
+        };
+
+        let host_label = browser_host_label(&tab);
+        let header = h_flex()
+            .id("browser-document-header")
+            .test_support()
+            .flex_shrink_0()
+            .min_w_0()
+            // The same strip geometry the other document headers keep, so
+            // the layout switch lands on the same line in all three.
+            .title_strip_row(HAIRLINE_W, hairline(cx))
+            .pl(px(CONTENT_INSET))
+            .pr(px(crate::ui::window_chrome::tile_trailing_inset()
+                + (crate::ui::window_chrome::TILE_SIZE - CLOSE_TILE) / 2.))
+            .gap_2()
+            .items_center()
+            .children(self.render_document_terminal_button(chrome, window, cx))
+            // The title names the document the way a GitHub detail's does:
+            // the Host the page lives on, a dot, then the page title. The
+            // Host name is capped so a long remote alias cannot push the
+            // title, the Dock / Fill switch or Close out at a narrow window.
+            .child(
+                h_flex()
+                    .id("browser-document-title")
+                    .test_support()
+                    .flex_1()
+                    .min_w_0()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .id("browser-host")
+                            .test_support()
+                            .flex_none()
+                            .min_w_0()
+                            .max_w(px(160.))
+                            .truncate()
+                            .text_size(rems(TEXT))
+                            .text_color(muted)
+                            .tooltip({
+                                let label = host_label.clone();
+                                move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(label.clone())
+                                        .build(window, cx)
+                                }
+                            })
+                            .child(host_label),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(rems(TEXT))
+                            .text_color(muted)
+                            .child("·"),
+                    )
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .h(px(26.))
-                            .px_2()
-                            .rounded(px(6.))
-                            .bg(cx.theme().muted)
-                            .flex()
-                            .items_center()
-                            .child(
-                                div().flex_1().min_w_0().child(
-                                    Input::new(&feedback_input)
-                                        .appearance(false)
-                                        .xsmall()
-                                        .cleanable(false),
-                                ),
-                            ),
-                    )
-                    .child(
-                        Button::new("browser-preview-send")
-                            .label(send_label)
-                            .small()
-                            .disabled(pending)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.browser_preview_feedback_send(&tab_id, window, cx);
-                            })),
-                    )
-                    .child(
-                        Button::new("browser-preview-cancel")
-                            .label(t(L10nKey::BrowserPreviewCancel))
-                            .small()
-                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                this.browser_preview_feedback_cancel(&cancel_id, cx);
-                            })),
+                            .truncate()
+                            .text_size(rems(TEXT))
+                            .font_weight(gpui_kit::FontWeight::MEDIUM)
+                            .text_color(foreground)
+                            .child(title),
                     ),
             )
-            .when_some(error, |col, error| {
-                col.child(
-                    div()
-                        .id("browser-preview-feedback-error")
-                        .test_support()
-                        .max_w_full()
-                        .text_xs()
-                        .text_color(cx.theme().danger)
-                        .child(error),
-                )
-            })
-            .when_some(notice, |col, notice| {
-                col.child(
-                    div()
-                        .id("browser-preview-feedback-notice")
-                        .test_support()
-                        .text_xs()
-                        .text_color(muted)
-                        .child(notice),
-                )
-            })
-    });
+            .child(
+                div()
+                    .occlude()
+                    .flex_shrink_0()
+                    .child(self.document_layout_switch(chrome, cx)),
+            )
+            .child(
+                div().occlude().flex_shrink_0().child(
+                    crate::ui::window_chrome::chrome_tile_sized(
+                        Button::new("browser-detail-close").icon(Icon::new(IconName::Close)),
+                        CLOSE_TILE,
+                        crate::ui::tab_strip::RAIL_TILE_GLYPH,
+                        false,
+                        cx,
+                    )
+                    .rounded(px(crate::ui::tab_strip::RAIL_TILE_RADIUS))
+                    .tooltip(t(L10nKey::Close))
+                    .accessibility_label(t(L10nKey::Close))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.close_browser_detail(window, cx);
+                    })),
+                ),
+            );
 
-    let overlay = if covered
-        && load_error.is_none()
-        && !matches!(status, PageStatus::Failed(_) | PageStatus::Unsupported(_))
-    {
-        let frame = app
-            .right_panel
-            .web_pages
-            .get(&tab.id)
-            .and_then(|page| page.still_frame.clone());
-        Some(browser_still_frame(&tab.id, &title, &address, frame, cx))
-    } else {
-        browser_overlay(&tab.id, &status, &address, load_error.as_deref(), cx)
-    };
+        let body = v_flex()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .child(toolbar)
+            .children(source_row)
+            .children(feedback_row)
+            .child(viewport.children(overlay));
 
-    v_flex()
-        .flex_1()
-        .min_w_0()
-        .min_h_0()
-        .child(toolbar)
-        .child(identity_row)
-        .children(feedback_row)
-        .child(viewport.children(overlay))
-        .into_any_element()
+        let shell = v_flex()
+            .id("browser-detail-document")
+            .test_support()
+            .text_color(cx.theme().foreground)
+            .child(header)
+            .child(body);
+        // The fill chrome covers the workspace, so it stops window
+        // translucency and the theme backdrop the way the diff and GitHub
+        // shells do. Docked, the document column has already painted the
+        // surface.
+        let shell = match chrome {
+            DocumentChrome::Fill => shell
+                .absolute()
+                .inset_0()
+                .occlude()
+                .bg(
+                    match cx.try_global::<lyrel_ui_base::presets::ActiveBackground>() {
+                        Some(background) => crate::ui::theme::window_background_opaque(background),
+                        None => cx.theme().background.alpha(1.0).into(),
+                    },
+                )
+                .children(crate::ui::app::overlay_surface_layers(cx)),
+            DocumentChrome::Dock => shell.size_full().min_w_0(),
+        };
+        Some(shell.into_any_element())
+    }
 }
 
 /// The loading or failure state shown over the page area.

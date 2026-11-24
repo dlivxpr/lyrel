@@ -40,7 +40,9 @@ fn frame(vcx: &mut VisualTestContext) {
 fn finish_tab_switch(vcx: &mut VisualTestContext) {
     vcx.run_until_parked();
     vcx.executor()
-        .advance_clock(std::time::Duration::from_millis(250));
+        .advance_clock(std::time::Duration::from_millis(
+            crate::ui::panel_slide::PANEL_SLIDE_MS + 1,
+        ));
     vcx.run_until_parked();
     frame(vcx);
 }
@@ -49,7 +51,10 @@ fn open_page(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, address: &str)
     let id = app.update_in(vcx, |app, window, cx| {
         register_window(app, window, cx);
         app.open_web_page(address, None, cx);
-        let id = layout_active_web(&app.tool_layout()).expect("the new page is selected");
+        let id = app
+            .active_browser_detail()
+            .map(str::to_string)
+            .expect("the new page is the front detail");
         app.attach_test_browser_surface(&id, cx);
         id
     });
@@ -62,13 +67,7 @@ fn open_page(app: &Entity<LyrelApp>, vcx: &mut VisualTestContext, address: &str)
 }
 
 fn select_page(app: &mut LyrelApp, id: &str, window: &mut Window, cx: &mut Context<LyrelApp>) {
-    let entry = app
-        .tool_layout()
-        .order
-        .into_iter()
-        .find(|entry| matches!(entry, PanelTab::Web(tab) if tab.id == id))
-        .expect("page is open");
-    app.select_panel_tab(&entry, window, cx);
+    app.reveal_browser_page(id, window, cx);
 }
 
 fn page_surface<'a>(app: &'a LyrelApp, tab: &str) -> &'a BrowserSurfaceHost {
@@ -192,15 +191,21 @@ fn ordinary_toasts_clear_the_page_without_hiding_it(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     vcx.update(|window, cx| crate::ui::theme::apply_theme(Some(window), cx));
     let tab = open_page(&app, &mut vcx, "https://example.test/table");
-    let panel = app.update_in(&mut vcx, |app, window, cx| app.right_panel_px(window, cx));
+    let (column, panel) = app.update_in(&mut vcx, |app, window, cx| {
+        (
+            app.document_dock_px(window, cx)
+                .expect("the browser document docks beside the terminal"),
+            app.right_panel_final_px(window, cx),
+        )
+    });
     vcx.update(|window, cx| {
         assert_eq!(
             gpui_kit::component::Theme::global(cx)
                 .notification
                 .margins
                 .right,
-            px(panel + 8.),
-            "the toast stack clears the WebView at the content edge"
+            px(column + panel + 8.),
+            "the toast stack lands left of the docked page and the panel"
         );
         assert_eq!(
             gpui_kit::component::Theme::global(cx)
@@ -224,7 +229,7 @@ fn ordinary_toasts_clear_the_page_without_hiding_it(cx: &mut TestAppContext) {
                 .notification
                 .margins
                 .right,
-            px(panel + 8.),
+            px(column + panel + 8.),
             "the clearance survives the toast"
         );
     });
@@ -280,4 +285,66 @@ fn focused_popup_menu_stays_above_the_native_page(cx: &mut TestAppContext) {
         app.read_with(&vcx, |app, _| visibility(app, &tab)),
         Some(true)
     );
+}
+
+#[gpui_kit::test]
+fn the_page_paints_independently_of_the_panel_and_detail_close(cx: &mut TestAppContext) {
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    let tab = open_page(&app, &mut vcx, "https://example.test/independent");
+
+    // Switching the panel to another tool never dismisses the raised page
+    // or hides its surface: the detail is the paint authority, not the
+    // tool in front.
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.set_right_panel_tab(lyrel_core::core::config::RightPanelTab::Info, window, cx);
+    });
+    finish_tab_switch(&mut vcx);
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(app.active_browser_detail(), Some(tab.as_str()));
+        assert_eq!(visibility(app, &tab), Some(true));
+    });
+    vcx.update(|window, _| {
+        assert!(window.try_find("browser-detail-document").is_some());
+        assert!(window.try_find("browser-surface-anchor").is_some());
+    });
+
+    // Collapsing the panel keeps the paint too.
+    app.update_in(&mut vcx, |app, _window, cx| {
+        app.toggle_right_panel(cx);
+    });
+    finish_tab_switch(&mut vcx);
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(app.active_browser_detail(), Some(tab.as_str()));
+        assert_eq!(visibility(app, &tab), Some(true));
+    });
+
+    // Closing the detail hides the native page but leaves the page's row in
+    // the Browser tool's list; raising it again paints it independently.
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.close_browser_detail(window, cx)
+    });
+    finish_tab_switch(&mut vcx);
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(app.active_browser_detail(), None);
+        assert_eq!(visibility(app, &tab), Some(false));
+        assert!(
+            app.tool_layout().web_tabs.iter().any(|t| t.id == tab),
+            "closing the document never removes the page's list entry"
+        );
+    });
+    vcx.update(|window, _| {
+        assert!(window.try_find("browser-detail-document").is_none());
+    });
+
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.reveal_browser_page(&tab, window, cx);
+    });
+    finish_tab_switch(&mut vcx);
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(app.active_browser_detail(), Some(tab.as_str()));
+        assert_eq!(visibility(app, &tab), Some(true));
+    });
+    vcx.update(|window, _| {
+        assert!(window.try_find("browser-detail-document").is_some());
+    });
 }

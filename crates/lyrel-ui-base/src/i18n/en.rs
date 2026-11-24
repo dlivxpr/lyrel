@@ -2783,6 +2783,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::ToolHostClose => "Close {tool}",
         L10nKey::ToolHostCloseWeb => "Close {page}",
         L10nKey::PanelBrowserTitle => "Browser",
+        L10nKey::BrowserListNew => "New Page",
+        L10nKey::BrowserListEmpty => "No pages yet",
+        L10nKey::BrowserListEmptyHint => {
+            "Open one with New Page above, a link, or an agent preview."
+        }
         L10nKey::BrowserBack => "Back",
         L10nKey::BrowserForward => "Forward",
         L10nKey::BrowserReload => "Reload",
@@ -3457,6 +3462,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdRightPanelGitHub => "Right Panel: GitHub",
         L10nKey::CmdRightPanelSessions => "Right Panel: Session History",
         L10nKey::CmdRightPanelMonitor => "Right Panel: Activity Monitor",
+        L10nKey::CmdRightPanelBrowser => "Right Panel: Browser",
         L10nKey::CmdFocusRightPanelNavigation => "Focus Right Panel Navigation",
         L10nKey::CmdChangeTheme => "Change Theme",
         L10nKey::CmdResetFontSize => "Reset Font Size",

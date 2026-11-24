@@ -2147,6 +2147,11 @@ l10n_keys! {
     ToolHostCloseWeb,
     // The Side Panel browser tool, in the `+` menu and its own chrome.
     PanelBrowserTitle,
+    // The Browser tool's page list: the action that opens a new blank page.
+    BrowserListNew,
+    // The list's empty state: no pages yet, and where one comes from.
+    BrowserListEmpty,
+    BrowserListEmptyHint,
     BrowserBack,
     BrowserForward,
     BrowserReload,
@@ -2771,6 +2776,7 @@ l10n_keys! {
     CmdRightPanelGitHub,
     CmdRightPanelSessions,
     CmdRightPanelMonitor,
+    CmdRightPanelBrowser,
     CmdFocusRightPanelNavigation,
     CmdChangeTheme,
     CmdResetFontSize,

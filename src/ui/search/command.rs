@@ -280,6 +280,7 @@ impl CommandKind {
             ShowRightPanel(RightPanelTab::GitHub) => "right-panel-github",
             ShowRightPanel(RightPanelTab::Sessions) => "right-panel-sessions",
             ShowRightPanel(RightPanelTab::Monitor) => "right-panel-monitor",
+            ShowRightPanel(RightPanelTab::Browser) => "right-panel-browser",
             ClearTerminal => "clear-scrollback",
             FindInTerminal => "find",
             ToggleComposer => "composer",
@@ -446,6 +447,7 @@ impl CommandKind {
                 RightPanelTab::GitHub => "ShowRightPanelGitHub",
                 RightPanelTab::Sessions => "ShowRightPanelSessions",
                 RightPanelTab::Monitor => "ShowRightPanelMonitor",
+                RightPanelTab::Browser => "ShowRightPanelBrowser",
             },
             ClearTerminal => "ClearScrollback",
             FindInTerminal => "FindInTerminal",
@@ -797,6 +799,10 @@ impl Item {
             Item::localized(
                 L10nKey::CmdRightPanelMonitor,
                 ShowRightPanel(RightPanelTab::Monitor),
+            ),
+            Item::localized(
+                L10nKey::CmdRightPanelBrowser,
+                ShowRightPanel(RightPanelTab::Browser),
             ),
             Item::localized(L10nKey::CmdChangeTheme, OpenThemePicker),
             Item::localized(L10nKey::CmdResetFontSize, ResetFontSize),

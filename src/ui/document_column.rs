@@ -393,6 +393,49 @@ impl LyrelApp {
         self.tabs.get(self.tabs.active_index())?.document_front()
     }
 
+    pub(crate) fn active_browser_detail(&self) -> Option<&str> {
+        self.tabs.get(self.tabs.active_index())?.browser_detail()
+    }
+
+    pub(crate) fn reveal_browser_detail(&mut self, id: String, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.reveal_browser_detail(id);
+            self.hide_inactive_browser_surfaces(cx);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn close_browser_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .tabs
+            .active_mut()
+            .is_some_and(|tab| tab.dismiss_browser_detail())
+        {
+            self.hide_inactive_browser_surfaces(cx);
+            self.focus_content(self.document_front(), window, cx);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn remove_browser_detail(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was_visible = self.active_browser_detail() == Some(id);
+        for tab in self.tabs.iter_mut() {
+            if tab.browser_detail() == Some(id) {
+                tab.dismiss_browser_detail();
+            }
+        }
+        if was_visible {
+            self.hide_inactive_browser_surfaces(cx);
+            self.focus_content(self.document_front(), window, cx);
+        }
+        cx.notify();
+    }
+
     /// What the document column has reserved, from a side panel's point of
     /// view.
     ///
@@ -538,6 +581,7 @@ impl LyrelApp {
             OverlayTop::Code => self.render_code_overlay(chrome, window, cx),
             OverlayTop::Diff => self.render_diff_overlay(chrome, window, cx),
             OverlayTop::Github => self.render_github_detail_document(chrome, window, cx),
+            OverlayTop::Browser => self.render_browser_document(chrome, window, cx),
         }?;
         let (backing, handle) = self.document_resize(body, cx);
         Some(

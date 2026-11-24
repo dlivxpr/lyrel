@@ -8,12 +8,16 @@ fn detail_doc_panel(
     cx: &mut TestAppContext,
     kind: Kind,
 ) -> (
+    tempfile::TempDir,
     PathBuf,
     Entity<LyrelApp>,
     VisualTestContext,
     crate::daemon::transport::Stream,
 ) {
-    let root = scratch("detail-document");
+    let checkout = tempfile::tempdir().unwrap();
+    let root = lyrel_core::core::path_spelling::local_spelling_buf(
+        std::fs::canonicalize(checkout.path()).unwrap(),
+    );
     git(&root, &["init", "--quiet"]);
     git(
         &root,
@@ -39,12 +43,12 @@ fn detail_doc_panel(
             .iter()
             .any(|(q, l)| q.slug.full() == "acme/widgets" && q.kind == kind && l.loaded)
     });
-    (root, app, vcx, pane)
+    (checkout, root, app, vcx, pane)
 }
 
 #[gpui_kit::test]
 fn enter_opens_the_detail_document_and_escape_returns_to_the_list(cx: &mut TestAppContext) {
-    let (root, app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Issues);
+    let (_checkout, root, app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Issues);
     vcx.update(|window, cx| {
         window.render_frame(cx);
         let list = window.find("panel-github-rows-acme/widgets").bounds();
@@ -104,7 +108,7 @@ fn enter_opens_the_detail_document_and_escape_returns_to_the_list(cx: &mut TestA
 
 #[gpui_kit::test]
 fn clicking_a_row_opens_the_detail_over_a_file_and_close_restores_it(cx: &mut TestAppContext) {
-    let (_root, app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Issues);
+    let (_checkout, _root, app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Issues);
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("notes.txt");
     std::fs::write(&path, "hello").unwrap();
@@ -168,7 +172,7 @@ fn clicking_a_row_opens_the_detail_over_a_file_and_close_restores_it(cx: &mut Te
 
 #[gpui_kit::test]
 fn the_detail_document_docks_and_fills_like_other_documents(cx: &mut TestAppContext) {
-    let (root, _app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Issues);
+    let (_checkout, root, _app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Issues);
     vcx.update(|window, cx| {
         window.render_frame(cx);
         window.click("panel-github-item-7", cx);
@@ -200,7 +204,7 @@ fn the_detail_document_docks_and_fills_like_other_documents(cx: &mut TestAppCont
 /// hands the keyboard to the surface underneath.
 #[gpui_kit::test]
 fn a_pr_patch_round_trips_through_its_detail_back_to_the_unsaved_document(cx: &mut TestAppContext) {
-    let (root, app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Pulls);
+    let (_checkout, root, app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Pulls);
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("notes.txt");
     std::fs::write(&path, "hello").unwrap();
@@ -390,7 +394,7 @@ fn a_pr_patch_round_trips_through_its_detail_back_to_the_unsaved_document(cx: &m
 fn a_pr_patch_round_trip_with_no_prior_document_returns_to_the_selected_item(
     cx: &mut TestAppContext,
 ) {
-    let (root, app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Pulls);
+    let (_checkout, root, app, mut vcx, _pane) = detail_doc_panel(cx, Kind::Pulls);
     let key = app.read_with(&vcx, |app, _| {
         app.github
             .lists
@@ -437,7 +441,7 @@ fn a_pr_patch_round_trip_with_no_prior_document_returns_to_the_selected_item(
 /// opened from, and closing it still returns to that pull request.
 #[gpui_kit::test]
 fn a_pr_patch_keeps_its_originating_checkout_when_the_pane_moves_on(cx: &mut TestAppContext) {
-    let (root, app, mut vcx, mut pane) = detail_doc_panel(cx, Kind::Pulls);
+    let (_checkout, root, app, mut vcx, mut pane) = detail_doc_panel(cx, Kind::Pulls);
     let key = app.read_with(&vcx, |app, _| {
         app.github
             .lists

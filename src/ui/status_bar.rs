@@ -169,7 +169,7 @@ impl LyrelApp {
                 .get(self.tabs.active_index())
                 .and_then(|tab| tab.github_detail.as_ref())
                 .map(|doc| (doc.host_id, doc.cwd.as_path())),
-            None => None,
+            Some(crate::ui::tab::OverlayTop::Browser) | None => None,
         };
         let host = location.map_or_else(
             || self.remote_machine_label(cx),

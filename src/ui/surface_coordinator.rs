@@ -38,10 +38,8 @@ pub(crate) enum CoverSource {
     ParkDropTarget,
     /// The notification bell's inbox popover.
     InboxPopover,
-    /// The right Side Panel's open/close slide.
+    /// A workbench sidebar's open/close slide over the document area.
     SidePanelTransition,
-    /// The right panel's incoming-page entrance after a tool switch.
-    ToolSwitch,
 }
 
 /// The set of covers currently active in this window. Counted per source,

@@ -95,6 +95,7 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
+        self.hide_inactive_browser_surfaces(cx);
         // The deck's overlay covers the terminal column. Its +N control and
         // capacity budget live in that local frame, but the fan itself is
         // window-centred, so hand the deck the column's window rectangle
@@ -260,6 +261,16 @@ impl LyrelApp {
             Some(w) => (
                 Vec::new(),
                 self.render_document_column(w, document_chrome, window, cx),
+            ),
+            None if self.active_browser_detail().is_some() => (
+                self.render_browser_document(
+                    crate::ui::document_column::DocumentChrome::Fill,
+                    window,
+                    cx,
+                )
+                .into_iter()
+                .collect(),
+                None,
             ),
             None => {
                 let diff_overlay = self.render_diff_overlay(
@@ -758,4 +769,53 @@ mod displayed_gpui_tests {
             );
         });
     }
+}
+
+#[cfg(test)]
+#[gpui_kit::test]
+fn closing_browser_detail_restores_the_unsaved_editor(cx: &mut gpui_kit::TestAppContext) {
+    use gpui_kit::test::TestWindowExt as _;
+
+    let (app, mut vcx, _streams) = super::test_window::harness_with_tabs(cx, 1);
+    vcx.simulate_resize(gpui_kit::size(px(1440.), px(900.)));
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("notes.txt");
+    std::fs::write(&path, "hello").unwrap();
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx);
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let editor = loop {
+        vcx.run_until_parked();
+        if let Some(file) = app.read_with(&vcx, |app, cx| app.editor_active_local_file(cx)) {
+            break file.into_input();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fixture file must load"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    vcx.update(|window, cx| {
+        window.press("end", cx);
+        window.input("!", cx);
+    });
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.open_web_page("about:blank", None, cx);
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("browser-detail-document").visible());
+        assert!(window.try_find("code-status-bar").is_none());
+        window.click("browser-detail-close", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("browser-detail-document").is_none());
+        assert!(window.find("code-status-bar").visible());
+        window.input("?", cx);
+    });
+    assert_eq!(
+        editor.read_with(&vcx, |input, _| input.value().to_string()),
+        "hello!?"
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "hello");
 }
