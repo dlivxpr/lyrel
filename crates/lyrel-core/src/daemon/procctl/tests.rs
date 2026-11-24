@@ -72,7 +72,10 @@ fn fixture_role() -> bool {
             .and_then(|n| n.parse::<usize>().ok())
             .unwrap_or(0);
         for _ in 0..sleepers {
-            let _ = fixture_child("sleep", 0, fixture_lifetime());
+            let mut child = fixture_child("sleep", 0, fixture_lifetime());
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
         }
     }
     if role == "sleep"
@@ -108,12 +111,7 @@ fn fixture_child(role: &str, sleepers: usize, lifetime: Option<SocketAddr>) -> C
     }
     command
         .arg("--exact")
-        .arg(
-            std::thread::current()
-                .name()
-                .unwrap_or("procctl fixture")
-                .to_string(),
-        )
+        .arg(std::thread::current().name().unwrap_or("procctl fixture"))
         .env(ROLE, role)
         .env(SLEEPERS, sleepers.to_string())
         .stdin(std::process::Stdio::null())

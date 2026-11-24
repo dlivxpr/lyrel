@@ -1200,7 +1200,7 @@ fn hooked_agent_program_notes_stay_swallowed_when_desktop_timing_is_closed(
         cx,
         &mut daemon,
     );
-    cx.update_window((*window).into(), |_, window, cx| {
+    cx.update_window(*window, |_, window, cx| {
         pane.update(cx, |pane, cx| {
             pane.poll_agent_status(false, window, cx);
         })

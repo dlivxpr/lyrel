@@ -623,7 +623,7 @@ impl LyrelApp {
         let request = |tree: bool| {
             let app = app.clone();
             move |_: &gpui_kit::ClickEvent, window: &mut Window, cx: &mut gpui_kit::App| {
-                let _ = app.update(cx, |this, cx| {
+                app.update(cx, |this, cx| {
                     this.monitor_request_end(key, tree, window, cx);
                 });
             }
@@ -738,6 +738,7 @@ impl LyrelApp {
     /// tree action names every process it will cover, so an incomplete walk
     /// — or any row the daemon could not stamp — refuses it rather than
     /// guesses at the extent.
+    #[allow(clippy::too_many_arguments)]
     fn monitor_confirm_end(
         &mut self,
         owner: ProcessControlTarget,
@@ -1082,13 +1083,13 @@ impl LyrelApp {
                 this.monitor.select(key);
                 cx.notify();
             }))
-            .on_mouse_down(MouseButton::Right, {
-                let key = key;
+            .on_mouse_down(
+                MouseButton::Right,
                 cx.listener(move |this, _, _, cx| {
                     this.monitor.select(key);
                     cx.notify();
-                })
-            })
+                }),
+            )
             .context_menu(move |menu, _window, cx| Self::monitor_row_menu(menu, &app, key, cx))
             .child(
                 div()

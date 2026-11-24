@@ -352,6 +352,7 @@ impl BackdropAppearance {
 /// - `DWMWA_SYSTEMBACKDROP_TYPE` (`DwmSetWindowAttribute`), which the backend
 ///   sets for Mica/Mica Alt but never clears on the way back to a WCA
 ///   appearance, and which has no Acrylic value in the published enum at all.
+///
 /// What the app's native sync must do to the WCA accent (`WCA_ACCENT_POLICY`)
 /// after `gpui`'s `set_background_appearance` has run.
 #[cfg(any(target_os = "windows", test))]

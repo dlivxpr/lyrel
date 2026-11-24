@@ -154,12 +154,17 @@ fn local_files_tree_and_both_searches_share_the_context_pane_checkout(cx: &mut T
     // the checkout root of the focused one — a single root, never the nested
     // cwd, never a union of the two panes' roots, and for the linked
     // worktree never the common Git directory.
-    assert_shared_root(&app, &mut vcx, &repo_pane, &[fixture.repo_root.clone()]);
+    assert_shared_root(
+        &app,
+        &mut vcx,
+        &repo_pane,
+        std::slice::from_ref(&fixture.repo_root),
+    );
     assert_shared_root(
         &app,
         &mut vcx,
         &worktree_pane,
-        &[fixture.worktree_root.clone()],
+        std::slice::from_ref(&fixture.worktree_root),
     );
     // Outside Git the pane's own directory is the shared root.
     app.update_in(&mut vcx, |_, _, cx| {
@@ -167,7 +172,12 @@ fn local_files_tree_and_both_searches_share_the_context_pane_checkout(cx: &mut T
             pane.set_git_status_cwd_for_test(Some(fixture.plain.clone()));
         });
     });
-    assert_shared_root(&app, &mut vcx, &worktree_pane, &[fixture.plain.clone()]);
+    assert_shared_root(
+        &app,
+        &mut vcx,
+        &worktree_pane,
+        std::slice::from_ref(&fixture.plain),
+    );
 }
 
 #[gpui_kit::test]

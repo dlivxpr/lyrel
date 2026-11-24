@@ -467,6 +467,7 @@ pub(crate) struct WindowChrome {
 }
 
 impl WindowChrome {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new<F>(
         left_open: bool,
         right_open: bool,
@@ -495,15 +496,17 @@ impl WindowChrome {
         let left = group()
             .child(
                 tile(
-                    Button::new("titlebar-left-panel").icon(
-                        Icon::empty()
-                            .path(if left_open {
-                                "icons/panel-left.svg"
-                            } else {
-                                "icons/panel-left-collapsed.svg"
-                            })
-                            .size_4(),
-                    ),
+                    Button::new("titlebar-left-panel")
+                        .icon(
+                            Icon::empty()
+                                .path(if left_open {
+                                    "icons/panel-left.svg"
+                                } else {
+                                    "icons/panel-left-collapsed.svg"
+                                })
+                                .size_4(),
+                        )
+                        .aria_expanded(left_open),
                 )
                 .accessibility_label(t(if left_open {
                     L10nKey::TabTooltipHideSidebar
@@ -554,15 +557,17 @@ impl WindowChrome {
             )
             .child(
                 tile(
-                    Button::new("titlebar-right-panel").icon(
-                        Icon::empty()
-                            .path(if right_open {
-                                "icons/panel-right.svg"
-                            } else {
-                                "icons/panel-right-collapsed.svg"
-                            })
-                            .size_4(),
-                    ),
+                    Button::new("titlebar-right-panel")
+                        .icon(
+                            Icon::empty()
+                                .path(if right_open {
+                                    "icons/panel-right.svg"
+                                } else {
+                                    "icons/panel-right-collapsed.svg"
+                                })
+                                .size_4(),
+                        )
+                        .aria_expanded(right_open),
                 )
                 .accessibility_label(t(if right_open {
                     L10nKey::TabTooltipHideDetailPanel

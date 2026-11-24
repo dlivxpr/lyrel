@@ -1075,6 +1075,7 @@ impl EditorBuffers {
                     .language(language)
                     .tab_size(tab_size(indent))
                     .line_number(true)
+                    .active_line_only_when_focused(true)
                     .searchable(true)
                     .replaceable(true)
                     .folding(true)

@@ -1076,6 +1076,7 @@ impl LyrelApp {
         cx.notify();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn preview_share_landed(
         &mut self,
         tab_id: &str,

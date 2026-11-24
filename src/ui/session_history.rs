@@ -1034,16 +1034,11 @@ pub(crate) fn forget_sessions(host: HostId, removed: &[(String, Vec<String>)]) {
 
 /// Which directory the tool lists: following the context pane, or pinned to
 /// one checkout of its repository.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub(crate) enum SessionDirectory {
+    #[default]
     FollowCwd,
     Worktree(PathBuf),
-}
-
-impl Default for SessionDirectory {
-    fn default() -> Self {
-        SessionDirectory::FollowCwd
-    }
 }
 
 /// The identity a started scan belongs to: its host, the actual connection,
@@ -1393,6 +1388,7 @@ impl LyrelApp {
     /// generation is no longer the live one, or whose connection is not the
     /// object the registry holds anymore, retires without touching the
     /// panel: its answers belong to a scope the bound has already left.
+    #[allow(clippy::too_many_arguments)]
     fn session_history_native_landed(
         &mut self,
         generation: u64,
@@ -1453,6 +1449,7 @@ impl LyrelApp {
     /// limit warnings are on the listing now; the footer reads them. The
     /// same generation and connection fences as the native landing apply —
     /// a superseded service answer never repaints the current scope.
+    #[allow(clippy::too_many_arguments)]
     fn session_history_services_landed(
         &mut self,
         generation: u64,
@@ -2479,8 +2476,10 @@ mod tests {
 
     fn identity(agent: CLIAgent, id: &str, host: HostId, store: Option<&str>) -> SessionIdentity {
         let scope = store.map(|root| {
-            let mut scope = lyrel_core::host::session_operations::SessionScope::default();
-            scope.session_dir = Some(PathBuf::from(root));
+            let mut scope = lyrel_core::host::session_operations::SessionScope {
+                session_dir: Some(PathBuf::from(root)),
+                ..Default::default()
+            };
             scope
                 .environment
                 .insert("PI_CODING_AGENT_DIR".into(), root.into());
@@ -2546,21 +2545,27 @@ mod tests {
     /// service readout collapses to its connection selector.
     #[test]
     fn scoped_key_never_persists_live_bridge_or_credentials() {
-        let mut scope = lyrel_core::host::session_operations::SessionScope::default();
-        scope.opencode = Some(
-            lyrel_core::host::session_operations::opencode::OpenCodeScope {
-                connection_argv: vec!["opencode".into(), "--config".into(), "/srv/oc.json".into()],
-                launch_argv: vec!["--port".into(), "4096".into()],
-                server: Some(
-                    lyrel_core::host::session_operations::opencode::OpenCodeServer {
-                        pid: 42,
-                        urls: vec!["http://127.0.0.1:4096".into()],
-                    },
-                ),
-                bridge: None,
-                session: None,
-            },
-        );
+        let mut scope = lyrel_core::host::session_operations::SessionScope {
+            opencode: Some(
+                lyrel_core::host::session_operations::opencode::OpenCodeScope {
+                    connection_argv: vec![
+                        "opencode".into(),
+                        "--config".into(),
+                        "/srv/oc.json".into(),
+                    ],
+                    launch_argv: vec!["--port".into(), "4096".into()],
+                    server: Some(
+                        lyrel_core::host::session_operations::opencode::OpenCodeServer {
+                            pid: 42,
+                            urls: vec!["http://127.0.0.1:4096".into()],
+                        },
+                    ),
+                    bridge: None,
+                    session: None,
+                },
+            ),
+            ..Default::default()
+        };
         scope
             .environment
             .insert("OPENCODE_DB".into(), "/srv/oc.db".into());
@@ -2669,8 +2674,10 @@ mod tests {
     /// different terminal, and never defeats the live-writer overlap check.
     #[test]
     fn terminal_environment_neither_keys_nor_splits_store_identity() {
-        let mut scan_scope = lyrel_core::host::session_operations::SessionScope::default();
-        scan_scope.session_dir = Some(PathBuf::from("/store/pi"));
+        let mut scan_scope = lyrel_core::host::session_operations::SessionScope {
+            session_dir: Some(PathBuf::from("/store/pi")),
+            ..Default::default()
+        };
         scan_scope
             .environment
             .insert("PI_CODING_AGENT_DIR".into(), "/store/pi".into());
@@ -2921,12 +2928,14 @@ mod tests {
     /// the same scope keeps its loaded answer.
     #[test]
     fn worktree_choices_are_bound_to_directory_host_and_connection() {
-        let mut panel = SessionHistoryPanel::default();
-        panel.bound = SessionBound {
-            host: HostId::LOCAL,
-            connection: 7,
-            repo: None,
-            dir: Some(PathBuf::from("/repo/main")),
+        let mut panel = SessionHistoryPanel {
+            bound: SessionBound {
+                host: HostId::LOCAL,
+                connection: 7,
+                repo: None,
+                dir: Some(PathBuf::from("/repo/main")),
+            },
+            ..Default::default()
         };
         let scope = panel.worktree_scope(Path::new("/repo/main"));
         panel.worktrees_for = Some(scope.clone());
@@ -3676,7 +3685,7 @@ mod tests {
                     // the marker, so a landing that escaped the generation
                     // fence would show it on the panel.
                     kind: SessionErrorKind::Connection,
-                    message: marker.into(),
+                    message: marker,
                     retained: None,
                 }),
                 _ => Ok(fixture.opencode.clone()),

@@ -370,8 +370,10 @@ fn resume_focuses_an_open_exact_session_without_a_second_writer(cx: &mut TestApp
     let cwd = dir.path().canonicalize().unwrap();
     let first = make_idle_context(&app, &mut vcx, &mut stream, &cwd);
     // The pane runs the exact session: same agent, same native id, same scope.
-    let mut scope = lyrel_core::host::session_operations::SessionScope::default();
-    scope.session_file = Some(PathBuf::from("/store/hist365.jsonl"));
+    let scope = lyrel_core::host::session_operations::SessionScope {
+        session_file: Some(PathBuf::from("/store/hist365.jsonl")),
+        ..Default::default()
+    };
     DaemonMsg::Agent(Some(CLIAgent::Pi))
         .encode(&mut stream)
         .unwrap();
@@ -405,8 +407,10 @@ fn resume_focuses_an_open_exact_session_without_a_second_writer(cx: &mut TestApp
     let panes_before = pane_count(&app, &mut vcx);
     // The listing row carries the session's durable scope, exactly what the
     // running pane reports; identity matching is exact on both.
-    let mut req_scope = lyrel_core::host::session_operations::SessionScope::default();
-    req_scope.session_file = Some(PathBuf::from("/store/hist365.jsonl"));
+    let mut req_scope = lyrel_core::host::session_operations::SessionScope {
+        session_file: Some(PathBuf::from("/store/hist365.jsonl")),
+        ..Default::default()
+    };
     req_scope
         .environment
         .insert("PI_CODING_AGENT_DIR".into(), "/store".into());
@@ -423,14 +427,14 @@ fn resume_focuses_an_open_exact_session_without_a_second_writer(cx: &mut TestApp
     assert_eq!(tab_count(&app, &mut vcx), tabs_before, "no new tab");
     assert_eq!(pane_count(&app, &mut vcx), panes_before, "no new pane");
     let focused = vcx.update(|window, cx| window.focused(cx));
-    let first_focus = first.read_with(&mut vcx, |view, cx| view.focus_handle(cx));
+    let first_focus = first.read_with(&vcx, |view, cx| view.focus_handle(cx));
     assert_eq!(
         focused,
         Some(first_focus.clone()),
         "the original pane took focus"
     );
     assert_ne!(
-        second.read_with(&mut vcx, |view, cx| view.focus_handle(cx)),
+        second.read_with(&vcx, |view, cx| view.focus_handle(cx)),
         first_focus
     );
 }
@@ -481,12 +485,14 @@ fn resume_focuses_an_open_session_with_an_equivalent_store(cx: &mut TestAppConte
     });
     assert_eq!(
         vcx.update(|window, cx| window.focused(cx)),
-        Some(second.read_with(&mut vcx, |view, cx| view.focus_handle(cx))),
+        Some(second.read_with(&vcx, |view, cx| view.focus_handle(cx))),
         "the second pane starts focused"
     );
     let panes_before = pane_count(&app, &mut vcx);
-    let mut req_scope = lyrel_core::host::session_operations::SessionScope::default();
-    req_scope.session_file = Some(PathBuf::from("/store/hist365.jsonl"));
+    let mut req_scope = lyrel_core::host::session_operations::SessionScope {
+        session_file: Some(PathBuf::from("/store/hist365.jsonl")),
+        ..Default::default()
+    };
     req_scope
         .environment
         .insert("PI_CODING_AGENT_DIR".into(), "/store".into());
@@ -504,7 +510,7 @@ fn resume_focuses_an_open_session_with_an_equivalent_store(cx: &mut TestAppConte
     let focused = vcx.update(|window, cx| window.focused(cx));
     assert_eq!(
         focused,
-        Some(first.read_with(&mut vcx, |view, cx| view.focus_handle(cx))),
+        Some(first.read_with(&vcx, |view, cx| view.focus_handle(cx))),
         "the original pane took focus"
     );
 }
@@ -534,7 +540,7 @@ fn resume_refuses_an_unconfirmed_open_session_instead_of_a_second_writer(cx: &mu
     .encode(&mut stream)
     .unwrap();
     pump_until("the native session identity lands", || {
-        view.read_with(&mut vcx, |view, _| {
+        view.read_with(&vcx, |view, _| {
             view.agent() == Some(CLIAgent::Pi)
                 && view
                     .agent_session()
@@ -596,7 +602,7 @@ fn dispatch_focuses_a_session_opened_while_preparing(cx: &mut TestAppContext) {
         cx.notify();
         (view, stream)
     });
-    let second_focus = second.read_with(&mut vcx, |view, cx| view.focus_handle(cx));
+    let second_focus = second.read_with(&vcx, |view, cx| view.focus_handle(cx));
     assert_eq!(
         vcx.update(|window, cx| window.focused(cx)),
         Some(second_focus)
@@ -644,7 +650,7 @@ fn dispatch_focuses_a_session_opened_while_preparing(cx: &mut TestAppContext) {
     wait_for_scoped_session(&first, &mut vcx);
 
     release.send(()).unwrap();
-    let first_focus = first.read_with(&mut vcx, |view, cx| view.focus_handle(cx));
+    let first_focus = first.read_with(&vcx, |view, cx| view.focus_handle(cx));
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         vcx.run_until_parked();
@@ -689,11 +695,7 @@ fn resume_reuses_a_verified_idle_shell_in_the_source_directory(cx: &mut TestAppC
     settle(
         &mut vcx,
         "the prepared command reaches the idle shell",
-        |_| {
-            inputs_now(&mut stream)
-                .iter()
-                .any(|bytes| *bytes == expected)
-        },
+        |_| inputs_now(&mut stream).contains(&expected),
     );
     assert_eq!(tab_count(&app, &mut vcx), 1, "reuse opens no tab");
     assert_eq!(pane_count(&app, &mut vcx), 1, "reuse opens no pane");
@@ -714,7 +716,7 @@ fn resume_splits_right_when_the_context_pane_runs_a_program(cx: &mut TestAppCont
     // An ordinary program starts: the prompt leaves and stays away.
     report_prompt(&mut stream, &view, &mut vcx, false);
     poll(&view, &mut vcx);
-    assert!(view.read_with(&mut vcx, |view, _| view.busy().is_some()));
+    assert!(view.read_with(&vcx, |view, _| view.busy().is_some()));
     host.push(Ok(prepared(cwd.clone())));
 
     run_resume(&app, &mut vcx, request(Some(cwd.clone()), false));
@@ -742,14 +744,14 @@ fn resume_splits_right_when_the_context_pane_sits_on_the_alternate_screen(cx: &m
         .unwrap();
 
     pump_until("the alternate screen reaches the grid", || {
-        view.read_with(&mut vcx, |view, _| view.on_alt_screen())
+        view.read_with(&vcx, |view, _| view.on_alt_screen())
     });
     host.push(Ok(prepared(cwd.clone())));
 
     run_resume(&app, &mut vcx, request(Some(cwd.clone()), false));
     wait_split(&app, &mut vcx, "an alternate-screen context pane");
     assert!(
-        view.read_with(&mut vcx, |view, _| view.on_alt_screen()),
+        view.read_with(&vcx, |view, _| view.on_alt_screen()),
         "the full-screen program is still running where it was"
     );
 }
@@ -764,13 +766,13 @@ fn held_input_is_preserved_and_the_resume_splits_right(cx: &mut TestAppContext) 
     let view = make_idle_context(&app, &mut vcx, &mut stream, &cwd);
     // The user typed something and left it unsubmitted.
     view.update(&mut vcx, |view, cx| view.commit_text("git st", cx));
-    assert!(view.read_with(&mut vcx, |view, _| view.has_pending_prompt_input()));
+    assert!(view.read_with(&vcx, |view, _| view.has_pending_prompt_input()));
     host.push(Ok(prepared(cwd.clone())));
 
     run_resume(&app, &mut vcx, request(Some(cwd.clone()), false));
     wait_split(&app, &mut vcx, "a line the user is still holding");
     assert!(
-        view.read_with(&mut vcx, |view, _| view.has_pending_prompt_input()),
+        view.read_with(&vcx, |view, _| view.has_pending_prompt_input()),
         "the held input survives untouched"
     );
     let typed = inputs_now(&mut stream);
@@ -796,7 +798,7 @@ fn resume_splits_right_when_readiness_changed_before_dispatch(cx: &mut TestAppCo
     run_resume(&app, &mut vcx, request(Some(cwd.clone()), false));
     report_prompt(&mut stream, &view, &mut vcx, false);
     poll(&view, &mut vcx);
-    assert!(view.read_with(&mut vcx, |view, _| view.busy().is_some()));
+    assert!(view.read_with(&vcx, |view, _| view.busy().is_some()));
     release.send(()).unwrap();
     wait_split(&app, &mut vcx, "readiness that changed before dispatch");
 }
@@ -915,8 +917,10 @@ fn fork_still_opens_a_new_tab_even_when_the_session_is_open(cx: &mut TestAppCont
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path().canonicalize().unwrap();
     let view = make_idle_context(&app, &mut vcx, &mut stream, &cwd);
-    let mut scope = lyrel_core::host::session_operations::SessionScope::default();
-    scope.session_file = Some(PathBuf::from("/store/hist365.jsonl"));
+    let scope = lyrel_core::host::session_operations::SessionScope {
+        session_file: Some(PathBuf::from("/store/hist365.jsonl")),
+        ..Default::default()
+    };
     DaemonMsg::Agent(Some(CLIAgent::Pi))
         .encode(&mut stream)
         .unwrap();
@@ -932,7 +936,7 @@ fn fork_still_opens_a_new_tab_even_when_the_session_is_open(cx: &mut TestAppCont
     .unwrap();
 
     pump_until("the agent report lands", || {
-        view.read_with(&mut vcx, |view, _| view.agent() == Some(CLIAgent::Pi))
+        view.read_with(&vcx, |view, _| view.agent() == Some(CLIAgent::Pi))
     });
     let mut forked = prepared(std::env::temp_dir());
     forked.created = true;
@@ -1013,7 +1017,7 @@ fn resume_focuses_an_open_antigravity_conversation_by_exact_id(cx: &mut TestAppC
     .encode(&mut stream)
     .unwrap();
     pump_until("the Antigravity identity lands", || {
-        first.read_with(&mut vcx, |view, _| {
+        first.read_with(&vcx, |view, _| {
             view.agent() == Some(CLIAgent::Antigravity)
                 && view
                     .agent_session()
@@ -1029,10 +1033,12 @@ fn resume_focuses_an_open_antigravity_conversation_by_exact_id(cx: &mut TestAppC
     req.agent = CLIAgent::Antigravity;
     // The live hook need not repeat the scan's transcript path; the exact
     // conversation id is the identity the CLI itself assigned.
-    let mut saved = lyrel_core::host::session_operations::SessionScope::default();
-    saved.session_file = Some(PathBuf::from(
-        "/some/other/.gemini/antigravity-cli/brain/hist365/.system_generated/logs/transcript.jsonl",
-    ));
+    let saved = lyrel_core::host::session_operations::SessionScope {
+        session_file: Some(PathBuf::from(
+            "/some/other/.gemini/antigravity-cli/brain/hist365/.system_generated/logs/transcript.jsonl",
+        )),
+        ..Default::default()
+    };
     req.scope = Some(saved);
     run_resume(&app, &mut vcx, req);
     vcx.background_executor.run_until_parked();
@@ -1045,7 +1051,7 @@ fn resume_focuses_an_open_antigravity_conversation_by_exact_id(cx: &mut TestAppC
     assert_eq!(tab_count(&app, &mut vcx), tabs_before, "no new tab");
     assert_eq!(pane_count(&app, &mut vcx), panes_before, "no new pane");
     let focused = vcx.update(|window, cx| window.focused(cx));
-    let first_focus = first.read_with(&mut vcx, |view, cx| view.focus_handle(cx));
+    let first_focus = first.read_with(&vcx, |view, cx| view.focus_handle(cx));
     assert_eq!(focused, Some(first_focus), "the original pane took focus");
 }
 
@@ -1071,7 +1077,7 @@ fn a_direct_antigravity_fork_is_refused_before_the_host(cx: &mut TestAppContext)
     .encode(&mut stream)
     .unwrap();
     pump_until("the Antigravity identity lands", || {
-        source.read_with(&mut vcx, |view, _| {
+        source.read_with(&vcx, |view, _| {
             view.agent() == Some(CLIAgent::Antigravity)
                 && view
                     .agent_session()
@@ -1175,7 +1181,7 @@ fn exact_resume_reports_a_different_upstream_conversation(cx: &mut TestAppContex
     .encode(&mut stream)
     .unwrap();
     pump_until("the different conversation identity lands", || {
-        view.read_with(&mut vcx, |view, _| {
+        view.read_with(&vcx, |view, _| {
             view.agent() == Some(CLIAgent::Antigravity)
                 && view
                     .agent_session()

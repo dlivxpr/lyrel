@@ -69,6 +69,7 @@ impl LyrelApp {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn checkout_items(
     menu: PopupMenu,
     window: &mut Window,
@@ -131,6 +132,7 @@ fn checkout_items(
     checkout_file_actions(menu, window, cx, app, repo, workspace, host)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn branch_items(
     mut menu: PopupMenu,
     window: &Window,

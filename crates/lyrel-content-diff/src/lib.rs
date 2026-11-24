@@ -52,6 +52,10 @@ impl LineSpan {
     pub fn len(self) -> u32 {
         self.end - self.start + 1
     }
+
+    pub fn is_empty(self) -> bool {
+        self.len() == 0
+    }
 }
 
 /// What happened to one structural item.
@@ -307,7 +311,6 @@ fn item_nodes<'tree>(
         let mut cursor = node.walk();
         let specs: Vec<_> = node
             .named_children(&mut cursor)
-            .into_iter()
             .filter(|n| {
                 matches!(
                     n.kind(),
@@ -519,11 +522,11 @@ fn similarity(a: &str, b: &str) -> f64 {
     let mut total_b = 0i64;
     for tok in b.split_whitespace() {
         total_b += 1;
-        if let Some(c) = counts.get_mut(tok) {
-            if *c > 0 {
-                *c -= 1;
-                common += 1;
-            }
+        if let Some(c) = counts.get_mut(tok)
+            && *c > 0
+        {
+            *c -= 1;
+            common += 1;
         }
     }
     let total_a = a.split_whitespace().count() as i64;
@@ -870,7 +873,7 @@ fn assemble(
     for (key, anchor) in anchors {
         entries.push((key, 0, anchor));
     }
-    entries.sort_by(|a, b| (a.0.line, a.1).cmp(&(b.0.line, b.1)));
+    entries.sort_by_key(|a| (a.0.line, a.1));
 
     StructuralDiff {
         items: entries.into_iter().map(|(_, _, item)| item).collect(),

@@ -109,10 +109,9 @@ fn history_drops_readings_older_than_the_widest_window() {
     history.push(sample_at(0, 20., 8, 16), "instance-a");
     history.push(sample_at(0, 30., 8, 16), "instance-a");
     assert!(history.arrivals.len() >= 2, "the span limit is inclusive");
-    assert_eq!(
+    assert!(
         history.arrivals.front().map(|a| a.arrived_millis)
             <= history.arrivals.back().map(|a| a.arrived_millis),
-        true,
         "readings are kept in arrival order for the span trim"
     );
     // A zero total is not a memory reading and never enters the history.

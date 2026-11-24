@@ -1537,7 +1537,7 @@ mod tests {
         std::fs::create_dir_all(&deep).unwrap();
         let outside = scratch("occ3-out");
         assert_eq!(
-            occupancy(&*h, &wt, &[outside.clone()]),
+            occupancy(&*h, &wt, std::slice::from_ref(&outside)),
             Ok(false),
             "a cwd outside the checkout proves it is free"
         );

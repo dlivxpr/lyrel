@@ -1488,6 +1488,7 @@ impl PdfView {
                             .xsmall()
                             .flex_none()
                             .label(t(L10nKey::EditorPdfOutline))
+                            .aria_expanded(self.toc_open)
                             .accessibility_label(t(L10nKey::EditorPdfOutline))
                             .tooltip(t(L10nKey::EditorPdfOutline))
                             .on_click(

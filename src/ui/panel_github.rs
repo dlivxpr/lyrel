@@ -109,10 +109,10 @@ impl LyrelApp {
         // itself reads in the document area now; if the pane has since moved
         // to another repository, the document closes with it, and the list of
         // the repository shown is what the panel is about.
-        if let Some((slug, _)) = self.github.open.clone() {
-            if slug != chosen.slug {
-                self.github_close_detail(window, cx);
-            }
+        if let Some((slug, _)) = self.github.open.clone()
+            && slug != chosen.slug
+        {
+            self.github_close_detail(window, cx);
         }
 
         let query = self.github_query(&chosen.slug);

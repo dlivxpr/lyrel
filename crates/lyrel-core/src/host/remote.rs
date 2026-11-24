@@ -182,7 +182,7 @@ impl Host for RemoteHost {
 
     fn disk_usage(&self, dir: &Path) -> io::Result<crate::host::disk::DiskUsage> {
         guard_off_ui();
-        self.client.disk_usage(&dir.to_string_lossy().into_owned())
+        self.client.disk_usage(&dir.to_string_lossy())
     }
 
     fn separator(&self) -> char {

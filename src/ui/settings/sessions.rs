@@ -216,7 +216,7 @@ impl SessionDeleteFlow {
             if live.iter().any(|open| {
                 open.host == row.identity.host
                     && open.agent == row.identity.agent
-                    && delete_ids.iter().any(|id| open.id == *id)
+                    && delete_ids.contains(&open.id)
                     && (open.store() == SessionStore::Unconfirmed
                         || session_history::store_group_key(open) == store)
             }) {

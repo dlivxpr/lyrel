@@ -1548,10 +1548,8 @@ impl LyrelApp {
                 now,
                 reduce_motion,
             );
-            let rows_revealed = match &disclosure_frame {
-                frame if frame.reveal > 0. || frame.rows.iter().any(|&o| o > 0.) => true,
-                _ => false,
-            };
+            let rows_revealed =
+                disclosure_frame.reveal > 0. || disclosure_frame.rows.iter().any(|&o| o > 0.);
             let visible: Vec<usize> = match rows_revealed {
                 true => visible_tabs.clone(),
                 false => Vec::new(),

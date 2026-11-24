@@ -3,7 +3,7 @@ use gpui_kit::{Bounds, Pixels, point, px, size};
 pub enum Ink {
     Rect(Bounds<Pixels>),
     Shade(Bounds<Pixels>, f32),
-    Path(gpui_kit::Path<Pixels>),
+    Path(gpui_kit::Path),
 }
 
 pub fn glyph(c: char, bounds: Bounds<Pixels>, scale: f32) -> Option<Vec<Ink>> {
@@ -122,10 +122,10 @@ impl Cell {
             )
         };
         let center = stem + thickness / 2.;
-        let mut path = gpui_kit::Path::new(at(center, self.snap(self.y0)));
+        let mut path = gpui_kit::PathBuilder::fill();
         // GPUI's path is a triangle fan, not an arbitrary polygon tessellator.
         // Separate convex strips keep a concave curved stroke from filling in.
-        let curve = |path: &mut gpui_kit::Path<Pixels>,
+        let curve = |path: &mut gpui_kit::PathBuilder,
                      from: (f32, f32),
                      control: (f32, f32),
                      to: (f32, f32)| {
@@ -148,6 +148,7 @@ impl Cell {
                 path.line_to(previous.1);
                 path.line_to(next.1);
                 path.line_to(next.0);
+                path.close();
                 previous = next;
             }
         };
@@ -165,7 +166,7 @@ impl Cell {
                 (center, self.cy),
                 (center, self.snap(self.y1)),
             );
-            return vec![Ink::Path(path)];
+            return vec![Ink::Path(path.build().expect("valid math delimiter path"))];
         }
         let cap = self.snap(self.y0 + height * 0.12);
         let tip = self.x0 + width * 0.82;
@@ -205,7 +206,10 @@ impl Cell {
         } else {
             (join, self.y1)
         };
-        vec![Ink::Path(path), self.vstroke(self.cx, self.t, top, bottom)]
+        vec![
+            Ink::Path(path.build().expect("valid math delimiter path")),
+            self.vstroke(self.cx, self.t, top, bottom),
+        ]
     }
 
     fn arms(&self, u: Arm, d: Arm, l: Arm, r: Arm) -> Vec<Ink> {
@@ -362,26 +366,21 @@ impl Cell {
         const SEGS: usize = 3;
         const INNER_PTS: usize = 4;
         let step = std::f32::consts::FRAC_PI_2 / SEGS as f32;
-        let mut path: Option<gpui_kit::Path<Pixels>> = None;
+        let mut path = gpui_kit::PathBuilder::fill();
         for i in 0..SEGS {
             let t0 = step * i as f32;
             let t1 = step * (i + 1) as f32;
             let start = at(r + h, t0);
-            let p = match path.as_mut() {
-                Some(p) => {
-                    p.move_to(start);
-                    p
-                }
-                None => path.insert(gpui_kit::Path::new(start)),
-            };
+            path.move_to(start);
             let ctrl = at((r + h) / (step / 2.).cos(), (t0 + t1) / 2.);
-            p.curve_to(at(r + h, t1), ctrl);
-            p.line_to(at(r - h, t1));
+            path.curve_to(at(r + h, t1), ctrl);
+            path.line_to(at(r - h, t1));
             for k in (0..INNER_PTS).rev() {
-                p.line_to(at(r - h, t0 + (t1 - t0) * k as f32 / INNER_PTS as f32));
+                path.line_to(at(r - h, t0 + (t1 - t0) * k as f32 / INNER_PTS as f32));
             }
+            path.close();
         }
-        if let Some(p) = path {
+        if let Ok(p) = path.build() {
             ink.push(Ink::Path(p));
         }
         Some(ink)
@@ -429,11 +428,13 @@ impl Cell {
         let v = self.t * (w * w + hgt * hgt).sqrt() / w;
         let p = |x: f32, y: f32| point(px(x), px(y));
         let quad = |top_x: f32, bot_x: f32| {
-            let mut path = gpui_kit::Path::new(p(top_x, self.y0));
+            let mut path = gpui_kit::PathBuilder::fill();
+            path.move_to(p(top_x, self.y0));
             path.line_to(p(top_x, self.y0 + v));
             path.line_to(p(bot_x, self.y1));
             path.line_to(p(bot_x, self.y1 - v));
-            Ink::Path(path)
+            path.close();
+            Ink::Path(path.build().expect("valid diagonal path"))
         };
         Some(match c {
             '╱' => vec![quad(self.x1, self.x0)],
@@ -579,6 +580,10 @@ mod tests {
     }
 
     fn extents(ink: &[Ink]) -> (f32, f32, f32, f32) {
+        extents_at_scale(ink, 1.)
+    }
+
+    fn extents_at_scale(ink: &[Ink], scale: f32) -> (f32, f32, f32, f32) {
         let (mut nx, mut xx, mut ny, mut xy) = (f32::MAX, f32::MIN, f32::MAX, f32::MIN);
         let mut visit = |x: f32, y: f32| {
             nx = nx.min(x);
@@ -594,8 +599,23 @@ mod tests {
                     visit(x + b.size.width.as_f32(), y + b.size.height.as_f32());
                 }
                 Ink::Path(p) => {
-                    for v in &p.vertices {
-                        visit(v.xy_position.x.as_f32(), v.xy_position.y.as_f32());
+                    let mask = gpui_kit::ContentMask {
+                        bounds: Bounds::new(
+                            point(px(-1000.), px(-1000.)),
+                            size(px(10000.), px(10000.)),
+                        ),
+                    };
+                    let painted = gpui_kit::PaintedPath::new(
+                        p.clone(),
+                        scale,
+                        mask,
+                        gpui_kit::Background::default(),
+                    );
+                    let (mut paints, mut curves, mut tiles) = (Vec::new(), Vec::new(), Vec::new());
+                    painted.append_to(&mut paints, &mut curves, &mut tiles);
+                    for c in &curves {
+                        visit(c.p0.x / scale, c.p0.y / scale);
+                        visit(c.p1.x / scale, c.p1.y / scale);
                     }
                 }
             }
@@ -617,7 +637,7 @@ mod tests {
                         );
                         let ink = glyph(c, bounds, scale)
                             .unwrap_or_else(|| panic!("{c} falls back to disconnected font ink"));
-                        let (_, _, top, bottom) = extents(&ink);
+                        let (_, _, top, bottom) = extents_at_scale(&ink, scale);
                         let expected_top = (bounds.origin.y.as_f32() * scale).round() / scale;
                         let expected_bottom =
                             ((bounds.origin.y.as_f32() + height) * scale).round() / scale;

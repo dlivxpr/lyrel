@@ -737,7 +737,7 @@ impl LyrelApp {
             }
             let other = app.read(cx);
             for leaf in other.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
-                match pane_open_session_match(&leaf.read(cx), request, cx) {
+                match pane_open_session_match(leaf.read(cx), request, cx) {
                     Some(OpenSessionMatch::Same) => {
                         found = Some((leaf.entity_id().as_u64(), false));
                         break;
@@ -752,7 +752,7 @@ impl LyrelApp {
         }
         if found.is_none() {
             for leaf in self.tabs.iter().flat_map(|tab| tab.pane.terminals()) {
-                match pane_open_session_match(&leaf.read(cx), request, cx) {
+                match pane_open_session_match(leaf.read(cx), request, cx) {
                     Some(OpenSessionMatch::Same) => {
                         found = Some((leaf.entity_id().as_u64(), true));
                         break;

@@ -707,6 +707,12 @@ pub fn glyph_bounds_close(
         && close(left.size.height.0, right.size.height.0)
 }
 
+fn painted_path_color(path: &gpui_kit::PaintedPath) -> gpui_kit::Background {
+    let (mut paints, mut curves, mut tiles) = (Vec::new(), Vec::new(), Vec::new());
+    path.append_to(&mut paints, &mut curves, &mut tiles);
+    paints[0].color
+}
+
 /// Renders one production frame and returns the path primitives that land
 /// inside `cell`, with the solid colour they were painted with.
 pub fn glyph_paths_in_cell(
@@ -728,10 +734,10 @@ pub fn glyph_paths_in_cell(
                 .paths
                 .iter()
                 .filter(|path| {
-                    let visible = path.bounds.intersect(&cell);
+                    let visible = path.painted_bounds().intersect(&cell);
                     visible.size.width.0 > 0. && visible.size.height.0 > 0.
                 })
-                .map(|path| (path.bounds, path.color))
+                .map(|path| (path.painted_bounds(), painted_path_color(path)))
                 .collect()
         })
         .unwrap()
@@ -761,10 +767,16 @@ pub fn glyph_paths_with_clip_in_region(
                 .paths
                 .iter()
                 .filter(|path| {
-                    let visible = path.bounds.intersect(&region);
+                    let visible = path.painted_bounds().intersect(&region);
                     visible.size.width.0 > 0. && visible.size.height.0 > 0.
                 })
-                .map(|path| (path.bounds, path.content_mask.bounds, path.color))
+                .map(|path| {
+                    (
+                        path.painted_bounds(),
+                        path.content_mask().bounds,
+                        painted_path_color(path),
+                    )
+                })
                 .collect()
         })
         .unwrap()

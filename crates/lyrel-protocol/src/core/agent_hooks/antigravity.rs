@@ -88,7 +88,7 @@ fn looks_tool(entry: &serde_json::Value) -> bool {
 /// The command handler list under one event entry: the `hooks` array of a
 /// grouped tool entry, or the entry itself for a flat handler object.
 /// `None` when the shape cannot carry command handlers at all.
-fn handlers<'a>(entry: &'a serde_json::Value) -> Option<Vec<&'a serde_json::Value>> {
+fn handlers(entry: &serde_json::Value) -> Option<Vec<&serde_json::Value>> {
     if let Some(hooks) = entry.get("hooks") {
         return Some(hooks.as_array()?.iter().collect());
     }

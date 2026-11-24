@@ -812,6 +812,7 @@ impl ControlRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum ControlReply {
     #[serde(rename = "ok")]
     Ok(ReplyOk),

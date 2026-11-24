@@ -480,10 +480,10 @@ fn content_rows(index: usize, path: &str, cf: &ContentFile, inner: DiffViewMode)
                     }),
                     leads: rows.is_empty(),
                 }));
-                if let Some(hunk) = cf.file.hunks.get(item_ix) {
-                    if !hunk.lines.is_empty() {
-                        rows.extend(content_line_rows(&hunk.lines, item_ix, &path, inner));
-                    }
+                if let Some(hunk) = cf.file.hunks.get(item_ix)
+                    && !hunk.lines.is_empty()
+                {
+                    rows.extend(content_line_rows(&hunk.lines, item_ix, &path, inner));
                 }
             }
         }

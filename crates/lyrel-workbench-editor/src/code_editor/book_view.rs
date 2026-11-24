@@ -1109,6 +1109,7 @@ impl BookView {
                     .icon(IconName::Menu)
                     .label(t(L10nKey::EditorBookContents))
                     .selected(self.toc_open)
+                    .aria_expanded(self.toc_open)
                     .accessibility_label(t(L10nKey::EditorBookContents))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_contents(cx))),
             )
@@ -1119,6 +1120,7 @@ impl BookView {
                     .icon(IconName::Star)
                     .label(t(L10nKey::EditorBookBookmarks))
                     .selected(self.bookmarks_open)
+                    .aria_expanded(self.bookmarks_open)
                     .accessibility_label(t(L10nKey::EditorBookBookmarks))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_bookmarks(cx))),
             )
@@ -1129,6 +1131,7 @@ impl BookView {
                     .icon(IconName::Search)
                     .label(t(L10nKey::EditorBookSearch))
                     .selected(self.search_open)
+                    .aria_expanded(self.search_open)
                     .on_click(cx.listener(|this, _, window, cx| this.toggle_search(window, cx))),
             )
             .child(

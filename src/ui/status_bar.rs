@@ -875,9 +875,7 @@ mod tests {
         assert!(app.read_with(&vcx, |app, _| app.worktree_removal.is_none()));
         vcx.update(|window, _| {
             assert!(
-                window
-                    .try_find_by_label(&t(L10nKey::ScmWorktrees))
-                    .is_some(),
+                window.try_find_by_label(t(L10nKey::ScmWorktrees)).is_some(),
                 "the checkout menu offers the 工作树 submenu"
             );
         });

@@ -1409,20 +1409,20 @@ impl LyrelApp {
                 status: file.status,
             });
         }
-        if let Some(path) = untracked_focus(snap, overlay.focus.as_deref()) {
-            if !overlay.content.contains_key(path) {
-                let plan = if supplied {
-                    None
-                } else {
-                    plan_for(&overlay.source, path, path)
-                };
-                wants.push(Want {
-                    path: path.to_string(),
-                    old_path: path.to_string(),
-                    plan,
-                    status: FileStatus::Added,
-                });
-            }
+        if let Some(path) = untracked_focus(snap, overlay.focus.as_deref())
+            && !overlay.content.contains_key(path)
+        {
+            let plan = if supplied {
+                None
+            } else {
+                plan_for(&overlay.source, path, path)
+            };
+            wants.push(Want {
+                path: path.to_string(),
+                old_path: path.to_string(),
+                plan,
+                status: FileStatus::Added,
+            });
         }
         if wants.is_empty() {
             return;

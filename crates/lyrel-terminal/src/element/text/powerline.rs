@@ -45,16 +45,18 @@ impl PowerlineShape {
     }
 }
 
-pub fn powerline_path(bounds: Bounds<Pixels>, shape: PowerlineShape) -> gpui_kit::Path<Pixels> {
+pub fn powerline_path(bounds: Bounds<Pixels>, shape: PowerlineShape) -> gpui_kit::Path {
     let (x0, y0) = (bounds.origin.x, bounds.origin.y);
     let (x1, y1) = (x0 + bounds.size.width, y0 + bounds.size.height);
     let ymid = y0 + bounds.size.height / 2.;
 
     let tri = |a: Point<Pixels>, b: Point<Pixels>, c: Point<Pixels>| {
-        let mut p = gpui_kit::Path::new(a);
+        let mut p = gpui_kit::PathBuilder::fill();
+        p.move_to(a);
         p.line_to(b);
         p.line_to(c);
-        p
+        p.close();
+        p.build().expect("valid powerline triangle path")
     };
     let half_circle = |anchor_x: Pixels, dir: f32| {
         const SEGS: usize = 12;
@@ -71,14 +73,16 @@ pub fn powerline_path(bounds: Bounds<Pixels>, shape: PowerlineShape) -> gpui_kit
         };
 
         let step = std::f32::consts::PI / SEGS as f32;
-        let mut p = gpui_kit::Path::new(at(1., -std::f32::consts::FRAC_PI_2));
+        let mut p = gpui_kit::PathBuilder::fill();
+        p.move_to(at(1., -std::f32::consts::FRAC_PI_2));
         for i in 0..SEGS {
             let t0 = -std::f32::consts::FRAC_PI_2 + step * i as f32;
             let t1 = t0 + step;
             let ctrl = at(1. / (step / 2.).cos(), (t0 + t1) / 2.);
             p.curve_to(at(1., t1), ctrl);
         }
-        p
+        p.close();
+        p.build().expect("valid powerline half-circle path")
     };
     match shape {
         PowerlineShape::TriangleRight => tri(point(x0, y0), point(x1, ymid), point(x0, y1)),
@@ -169,16 +173,25 @@ mod tests {
             PowerlineShape::SlantUpperRight,
         ] {
             let path = powerline_path(bounds, shape);
-            assert!(!path.vertices.is_empty(), "{shape:?} produced no geometry");
+            let mask = gpui_kit::ContentMask {
+                bounds: Bounds::new(point(px(-1000.), px(-1000.)), size(px(10000.), px(10000.))),
+            };
+            let painted =
+                gpui_kit::PaintedPath::new(path, 1.0, mask, gpui_kit::Background::default());
+            let (mut paints, mut curves, mut tiles) = (Vec::new(), Vec::new(), Vec::new());
+            painted.append_to(&mut paints, &mut curves, &mut tiles);
+            assert!(!curves.is_empty(), "{shape:?} produced no geometry");
             let (mut min_x, mut max_x) = (px(f32::MAX), px(f32::MIN));
-            for v in &path.vertices {
-                let p = v.xy_position;
-                assert!(
-                    p.x >= x0 && p.x <= x0 + w && p.y >= y0 && p.y <= y0 + h,
-                    "{shape:?} vertex at {p:?} escapes the cell"
-                );
-                min_x = min_x.min(p.x);
-                max_x = max_x.max(p.x);
+            for curve in &curves {
+                for pt in [curve.p0, curve.p1] {
+                    let p = point(px(pt.x), px(pt.y));
+                    assert!(
+                        p.x >= x0 && p.x <= x0 + w && p.y >= y0 && p.y <= y0 + h,
+                        "{shape:?} vertex at {p:?} escapes the cell"
+                    );
+                    min_x = min_x.min(p.x);
+                    max_x = max_x.max(p.x);
+                }
             }
             assert_eq!(min_x, x0, "{shape:?} does not reach the left cell edge");
             assert_eq!(
@@ -188,13 +201,27 @@ mod tests {
             );
             match shape {
                 PowerlineShape::HalfCircleRight => assert!(
-                    path.vertices[1].xy_position.x <= x0 + w * 0.4
-                        && path.vertices[path.vertices.len() - 2].xy_position.x <= x0 + w * 0.4,
+                    curves.iter().any(|c| {
+                        c.p0.x != c.p1.x
+                            && (c.p0.y - y0.as_f32()).abs() < 1e-4
+                            && c.p1.x <= (x0 + w * 0.4).as_f32()
+                    }) && curves.iter().any(|c| {
+                        c.p0.x != c.p1.x
+                            && (c.p1.y - (y0 + h).as_f32()).abs() < 1e-4
+                            && c.p0.x <= (x0 + w * 0.4).as_f32()
+                    }),
                     "right caps should not collapse into a diagonal wedge"
                 ),
                 PowerlineShape::HalfCircleLeft => assert!(
-                    path.vertices[1].xy_position.x >= x0 + w * 0.6
-                        && path.vertices[path.vertices.len() - 2].xy_position.x >= x0 + w * 0.6,
+                    curves.iter().any(|c| {
+                        c.p0.x != c.p1.x
+                            && (c.p0.y - y0.as_f32()).abs() < 1e-4
+                            && c.p1.x >= (x0 + w * 0.6).as_f32()
+                    }) && curves.iter().any(|c| {
+                        c.p0.x != c.p1.x
+                            && (c.p1.y - (y0 + h).as_f32()).abs() < 1e-4
+                            && c.p0.x >= (x0 + w * 0.6).as_f32()
+                    }),
                     "left caps should not collapse into a diagonal wedge"
                 ),
                 _ => {}

@@ -99,6 +99,7 @@ impl Render for NotificationBell {
                     .xsmall()
                     .icon(IconName::Bell)
                     .when(unread > 0, |button| button.label(unread.to_string()))
+                    .aria_expanded(self.open)
                     .accessibility_label(t(L10nKey::NotificationInbox))
                     .tooltip(t(L10nKey::NotificationInbox)),
             )
