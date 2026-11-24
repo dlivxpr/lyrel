@@ -6302,7 +6302,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "block2 0.6.2",
@@ -6364,7 +6364,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-cli"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -6380,7 +6380,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-content-diff"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "similar 3.2.1",
  "tempfile",
@@ -6397,7 +6397,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-core"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "async_zip",
@@ -6439,7 +6439,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-document"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "csv",
  "encoding_rs",
@@ -6466,7 +6466,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-insights"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
@@ -6500,7 +6500,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-markdown-editor"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "gpui-kit",
  "image",
@@ -6518,7 +6518,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-protocol"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -6548,7 +6548,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-server"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "libc",
@@ -6566,7 +6566,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-terminal"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -6607,7 +6607,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-test-support"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "fs2",
  "libc",
@@ -6621,7 +6621,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-ui-base"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -6642,7 +6642,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-updater"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "async_zip",
  "libc",
@@ -6657,7 +6657,7 @@ dependencies = [
 
 [[package]]
 name = "lyrel-workbench-editor"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "core-foundation 0.10.1",
