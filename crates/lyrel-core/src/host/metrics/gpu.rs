@@ -19,17 +19,17 @@
 /// percentage, or the reason the platform could not supply one.
 #[derive(Debug)]
 pub(crate) enum GpuReading {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     Busy(f32),
     Unavailable(String),
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub(crate) struct GpuSampler {
     _private: (),
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 impl GpuSampler {
     pub(crate) fn open() -> Self {
         Self { _private: () }
@@ -41,6 +41,195 @@ impl GpuSampler {
         )
     }
 }
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::ffi::{CStr, c_char, c_int};
+
+    use core_foundation::base::{CFAllocatorRef, TCFType as _, kCFAllocatorDefault};
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef, CFMutableDictionaryRef};
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::CFString;
+
+    use super::GpuReading;
+
+    type KernReturn = c_int;
+    type MachPort = u32;
+    type IoObject = u32;
+    type IoIterator = IoObject;
+    type IoRegistryEntry = IoObject;
+
+    const KERN_SUCCESS: KernReturn = 0;
+    const MACH_PORT_NULL: MachPort = 0;
+    const IO_OBJECT_NULL: IoObject = 0;
+
+    #[link(name = "IOKit", kind = "framework")]
+    unsafe extern "C" {
+        fn IOServiceMatching(name: *const c_char) -> CFMutableDictionaryRef;
+        fn IOServiceGetMatchingServices(
+            main_port: MachPort,
+            matching: CFMutableDictionaryRef,
+            existing: *mut IoIterator,
+        ) -> KernReturn;
+        fn IOIteratorNext(iterator: IoIterator) -> IoObject;
+        fn IORegistryEntryCreateCFProperties(
+            entry: IoRegistryEntry,
+            properties: *mut CFMutableDictionaryRef,
+            allocator: CFAllocatorRef,
+            options: u32,
+        ) -> KernReturn;
+        fn IOObjectRelease(object: IoObject) -> KernReturn;
+    }
+
+    struct OwnedIoObject(IoObject);
+
+    impl Drop for OwnedIoObject {
+        fn drop(&mut self) {
+            if self.0 != IO_OBJECT_NULL {
+                // SAFETY: `self.0` is an owned IOKit object handle returned by
+                // `IOServiceGetMatchingServices` or `IOIteratorNext`.
+                unsafe {
+                    IOObjectRelease(self.0);
+                }
+            }
+        }
+    }
+
+    pub(crate) struct GpuSampler {
+        _private: (),
+    }
+
+    impl GpuSampler {
+        pub(crate) fn open() -> Self {
+            Self { _private: () }
+        }
+
+        pub(crate) fn sample(&mut self) -> GpuReading {
+            match read_accelerator_utilization() {
+                Ok(percent) => GpuReading::Busy(percent),
+                Err(reason) => GpuReading::Unavailable(reason),
+            }
+        }
+    }
+
+    /// Read whole-host GPU utilization from macOS IOKit `IOAccelerator`
+    /// `PerformanceStatistics` dictionaries, taking the busiest accelerator
+    /// when more than one GPU is present.
+    fn read_accelerator_utilization() -> Result<f32, String> {
+        const SERVICE_CLASS: &CStr = c"IOAccelerator";
+        // SAFETY: `SERVICE_CLASS` is a NUL-terminated ASCII C string.
+        let matching = unsafe { IOServiceMatching(SERVICE_CLASS.as_ptr()) };
+        if matching.is_null() {
+            return Err("creating the IOAccelerator matching dictionary failed".into());
+        }
+
+        let mut raw_iterator: IoIterator = IO_OBJECT_NULL;
+        // SAFETY: `IOServiceGetMatchingServices` consumes one reference to
+        // `matching` regardless of its return code and writes `raw_iterator`.
+        let status =
+            unsafe { IOServiceGetMatchingServices(MACH_PORT_NULL, matching, &mut raw_iterator) };
+        if status != KERN_SUCCESS {
+            return Err(format!(
+                "querying IOAccelerator services failed (kern_return {status})"
+            ));
+        }
+        let iterator = OwnedIoObject(raw_iterator);
+
+        let mut busiest: Option<f64> = None;
+        loop {
+            // SAFETY: `iterator.0` is a live `io_iterator_t`.
+            let raw_service = unsafe { IOIteratorNext(iterator.0) };
+            if raw_service == IO_OBJECT_NULL {
+                break;
+            }
+            let service = OwnedIoObject(raw_service);
+            if let Some(utilization) = service_utilization(service.0) {
+                busiest = Some(busiest.map_or(utilization, |best| best.max(utilization)));
+            }
+        }
+
+        match busiest {
+            Some(utilization) => Ok(utilization.clamp(0.0, 100.0) as f32),
+            None => Err("this host does not expose GPU accelerator statistics".into()),
+        }
+    }
+
+    fn service_utilization(service: IoRegistryEntry) -> Option<f64> {
+        let mut raw_props: CFMutableDictionaryRef = std::ptr::null_mut();
+        // SAFETY: `service` is a valid IOKit registry entry and `raw_props`
+        // receives a newly retained CFMutableDictionary on `KERN_SUCCESS`.
+        let status = unsafe {
+            IORegistryEntryCreateCFProperties(service, &mut raw_props, kCFAllocatorDefault, 0)
+        };
+        if status != KERN_SUCCESS || raw_props.is_null() {
+            return None;
+        }
+        // SAFETY: `IORegistryEntryCreateCFProperties` follows the Create Rule.
+        let props: CFDictionary<CFString, core_foundation::base::CFType> =
+            unsafe { CFDictionary::wrap_under_create_rule(raw_props as CFDictionaryRef) };
+
+        let stats_key = CFString::from_static_string("PerformanceStatistics");
+        let stats_val = props.find(&stats_key)?;
+        let stats_dict = stats_val.downcast::<CFDictionary>()?;
+        // SAFETY: `PerformanceStatistics` keys are CFStrings and values are CFTypes.
+        let stats: CFDictionary<CFString, core_foundation::base::CFType> =
+            unsafe { CFDictionary::wrap_under_get_rule(stats_dict.as_concrete_TypeRef()) };
+
+        extract_utilization(|key| {
+            let cf_key = CFString::from_static_string(key);
+            stats
+                .find(&cf_key)?
+                .downcast::<CFNumber>()
+                .and_then(|num| num.to_f64())
+                .filter(|v| v.is_finite() && *v >= 0.0)
+        })
+    }
+
+    /// Pick the headline GPU utilization percentage from an `IOAccelerator`'s
+    /// `PerformanceStatistics` dictionary: `Device Utilization %` when present,
+    /// otherwise the busier of `Renderer Utilization %` and `Tiler Utilization %`.
+    fn extract_utilization(mut read: impl FnMut(&'static str) -> Option<f64>) -> Option<f64> {
+        if let Some(device) = read("Device Utilization %") {
+            return Some(device);
+        }
+        let renderer = read("Renderer Utilization %");
+        let tiler = read("Tiler Utilization %");
+        match (renderer, tiler) {
+            (Some(r), Some(t)) => Some(r.max(t)),
+            (Some(r), None) => Some(r),
+            (None, Some(t)) => Some(t),
+            (None, None) => None,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn extract_utilization_prefers_device_then_falls_back_to_renderer_or_tiler() {
+            let full = |key: &str| match key {
+                "Device Utilization %" => Some(18.0),
+                "Renderer Utilization %" => Some(42.0),
+                "Tiler Utilization %" => Some(7.0),
+                _ => None,
+            };
+            assert_eq!(extract_utilization(full), Some(18.0));
+
+            let fallback = |key: &str| match key {
+                "Renderer Utilization %" => Some(12.0),
+                "Tiler Utilization %" => Some(29.0),
+                _ => None,
+            };
+            assert_eq!(extract_utilization(fallback), Some(29.0));
+
+            assert_eq!(extract_utilization(|_| None), None);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) use macos::GpuSampler;
 
 #[cfg(windows)]
 mod windows {
@@ -447,3 +636,21 @@ mod windows {
 
 #[cfg(windows)]
 pub(crate) use windows::GpuSampler;
+
+#[cfg(all(test, target_os = "macos"))]
+mod macos_gpu_tests {
+    use super::*;
+
+    #[test]
+    fn macos_gpu_sampler_returns_utilization() {
+        let mut sampler = GpuSampler::open();
+        let reading = sampler.sample();
+        let GpuReading::Busy(percent) = reading else {
+            panic!("macOS GPU sampler should return Busy utilization, got: {reading:?}");
+        };
+        assert!(
+            percent.is_finite() && (0.0..=100.0).contains(&percent),
+            "macOS GPU utilization out of range: {percent}"
+        );
+    }
+}

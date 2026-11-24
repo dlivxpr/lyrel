@@ -108,6 +108,18 @@ impl CLIAgent {
         }
     }
 
+    /// Runtime executable stems observed after a launcher wrapper `exec`s the
+    /// underlying binary (for example, macOS Homebrew cask's `agy` wrapper
+    /// execs `.../antigravity`, and Windows runs `antigravity-cli.exe`). Kept
+    /// separate from [`Self::aliases`] so `binary()` and shell `scope_programs`
+    /// stay pinned to the user-facing CLI entry point.
+    pub(crate) fn runtime_names(self) -> &'static [&'static str] {
+        match self {
+            CLIAgent::Antigravity => &["antigravity", "antigravity-cli"],
+            _ => &[],
+        }
+    }
+
     pub fn slug(self) -> &'static str {
         match self {
             CLIAgent::OpenCode => "opencode",
@@ -278,9 +290,12 @@ impl CLIAgent {
     }
 
     fn match_token(token: &str) -> Option<CLIAgent> {
-        CLIAgent::ALL
-            .into_iter()
-            .find(|a| a.aliases().contains(&token))
+        CLIAgent::ALL.into_iter().find(|a| {
+            a.aliases()
+                .iter()
+                .chain(a.runtime_names().iter())
+                .any(|name| name.eq_ignore_ascii_case(token))
+        })
     }
 
     /// The program a launch with no override runs: the first name the agent
@@ -2078,6 +2093,33 @@ mod tests {
         );
         let mut legacy = serde_json::Deserializer::from_slice(b"\"future-agent\"");
         assert_eq!(deserialize_optional_agent(&mut legacy).unwrap(), None);
+    }
+
+    #[test]
+    fn detects_antigravity_runtime_binaries_and_normalizes_default_launch() {
+        let homebrew_bin =
+            "/opt/homebrew/Caskroom/antigravity-cli/1.5.15,5514532022517760/antigravity";
+        for command in [
+            homebrew_bin,
+            "antigravity",
+            "antigravity-cli",
+            "antigravity-cli.exe",
+        ] {
+            assert_eq!(
+                CLIAgent::detect_from_argv(&argv(&[command])),
+                Some(CLIAgent::Antigravity),
+                "runtime binary {command} must be detected as Antigravity"
+            );
+        }
+        assert_eq!(
+            CLIAgent::Antigravity.launch_argv_for_default(&argv(&[
+                homebrew_bin,
+                "--effort",
+                "high"
+            ])),
+            Some(argv(&["agy", "--effort", "high"])),
+            "default launch normalizes the runtime binary back to agy"
+        );
     }
 
     #[test]

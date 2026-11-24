@@ -202,6 +202,7 @@ pub(crate) fn label_of(
 pub(crate) fn agent_tab_label(agent: crate::core::cli_agent::CLIAgent) -> &'static str {
     match agent {
         crate::core::cli_agent::CLIAgent::OhMyPi => "OMP",
+        crate::core::cli_agent::CLIAgent::Antigravity => "AGY",
         _ => agent.slug(),
     }
 }
@@ -3105,5 +3106,13 @@ mod tests {
         let named = menu_agents(&few, &two, now);
         assert_eq!(named, vec![CLIAgent::OhMyPi, CLIAgent::Pi]);
         assert_eq!(named.len(), few.len());
+    }
+
+    #[test]
+    fn antigravity_tab_label_is_uppercase_agy() {
+        assert_eq!(
+            agent_tab_label(crate::core::cli_agent::CLIAgent::Antigravity),
+            "AGY"
+        );
     }
 }
