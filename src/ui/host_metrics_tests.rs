@@ -608,12 +608,10 @@ fn monitor_history_survives_being_offscreen(cx: &mut TestAppContext) {
     );
 }
 
-/// The narrowing order, exercised through a real window: microcharts first,
-/// then the Park word, then the whole capsule. Widths come from the same
-/// public budget the product derives its thresholds from, so both platforms
-/// exercise the same stages however their native controls differ.
+/// Microcharts disappear first, then the readings. Both platforms exercise
+/// the same stages at widths that account for their native controls.
 #[gpui_kit::test]
-fn narrow_windows_drop_charts_then_compress_park_then_hide_the_capsule(cx: &mut TestAppContext) {
+fn narrow_windows_drop_charts_then_hide_the_capsule(cx: &mut TestAppContext) {
     let server = HostServer::new();
     let (app, mut vcx, _pane_streams) = harness_with_tabs(cx, 1);
     vcx.update(|window, cx| {
@@ -630,33 +628,25 @@ fn narrow_windows_drop_charts_then_compress_park_then_hide_the_capsule(cx: &mut 
 
     let rem = 16.;
     use crate::ui::window_chrome::{
-        PARK_ENTRY_COMPACT_W, PARK_ENTRY_FULL_W, titlebar_native_controls_width,
-        titlebar_required_width,
+        PARK_ENTRY_W, titlebar_native_controls_width, titlebar_required_width,
     };
     let controls = vcx.update(|window, _| titlebar_native_controls_width(window));
     let full_w = titlebar_required_width(
         rem,
         false,
         controls,
-        PARK_ENTRY_FULL_W,
+        PARK_ENTRY_W,
         capsule_strip_w(3, true, rem),
     );
     let no_charts_w = titlebar_required_width(
         rem,
         false,
         controls,
-        PARK_ENTRY_FULL_W,
-        capsule_strip_w(3, false, rem),
-    );
-    let compact_park_w = titlebar_required_width(
-        rem,
-        false,
-        controls,
-        PARK_ENTRY_COMPACT_W,
+        PARK_ENTRY_W,
         capsule_strip_w(3, false, rem),
     );
 
-    // Wide: the full two-line capsule sits right of the labelled Park entry.
+    // Wide: the full two-line capsule sits right of the icon-and-count entry.
     vcx.simulate_resize(size(px(full_w + 40.), px(720.)));
     settle(&mut vcx);
     vcx.update(|window, _| {
@@ -669,15 +659,15 @@ fn narrow_windows_drop_charts_then_compress_park_then_hide_the_capsule(cx: &mut 
         assert!(window.find("titlebar-metric-readings").visible());
         assert!(window.find("titlebar-metric-trends").visible());
         assert!(
-            (window.find("titlebar-park").bounds().size.width - px(108.)).abs() <= px(1.),
-            "the wide entry keeps its labelled form"
+            (entry.size.width - px(56.)).abs() <= px(1.),
+            "the wide window uses the compact icon-and-count entry"
         );
         assert!(capsule.left() >= entry.right());
         assert!(window.find("titlebar-split-right").bounds().left() >= capsule.right());
         assert!(window.find("titlebar-add").bounds().right() <= entry.left());
     });
 
-    // Microcharts no longer fit: the readings survive, Park keeps its word.
+    // Microcharts no longer fit: the readings and the same Park entry survive.
     vcx.simulate_resize(size(px(no_charts_w + 8.), px(720.)));
     settle(&mut vcx);
     vcx.update(|window, _| {
@@ -691,28 +681,14 @@ fn narrow_windows_drop_charts_then_compress_park_then_hide_the_capsule(cx: &mut 
         assert!(window.find("titlebar-metric-cpu-value").visible());
         assert!(window.find("titlebar-metric-gpu-value").visible());
         assert!(
-            (window.find("titlebar-park").bounds().size.width - px(108.)).abs() <= px(1.),
-            "losing the microcharts cannot move the Park entry yet"
+            (window.find("titlebar-park").bounds().size.width - px(56.)).abs() <= px(1.),
+            "losing the microcharts does not resize the Park entry"
         );
         assert!(capsule.left() >= window.find("titlebar-park").bounds().right());
     });
 
-    // Park compresses to icon + count next; the capsule stays readable.
-    vcx.simulate_resize(size(px(compact_park_w + 8.), px(720.)));
-    settle(&mut vcx);
-    vcx.update(|window, _| {
-        let entry = window.find("titlebar-park");
-        assert!(
-            (entry.bounds().size.width - px(56.)).abs() <= px(1.),
-            "the compressed entry is the icon+count pill"
-        );
-        assert!(window.find("titlebar-metrics").visible());
-        assert!(window.find("titlebar-metrics").bounds().left() >= entry.bounds().right());
-    });
-
-    // Narrowest: the capsule hides entirely; the compact entry stays, and
-    // the chrome around it never yields.
-    vcx.simulate_resize(size(px(compact_park_w - 40.), px(720.)));
+    // Narrowest: the capsule hides entirely, preserving Park and the controls.
+    vcx.simulate_resize(size(px(no_charts_w - 40.), px(720.)));
     settle(&mut vcx);
     vcx.update(|window, _| {
         assert!(window.try_find("titlebar-metrics").is_none());
@@ -742,7 +718,7 @@ fn narrow_windows_drop_charts_then_compress_park_then_hide_the_capsule(cx: &mut 
         rem,
         false,
         controls,
-        PARK_ENTRY_COMPACT_W * (rem / 16.),
+        PARK_ENTRY_W * (rem / 16.),
         capsule_strip_w(3, false, rem),
     );
     vcx.simulate_resize(size(px(scaled_compact + 30.), px(720.)));

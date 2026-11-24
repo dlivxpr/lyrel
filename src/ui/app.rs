@@ -2328,6 +2328,71 @@ impl LyrelApp {
         });
     }
 
+    fn parked_pane_title(view: &TerminalView, cwd: &str) -> String {
+        use lyrel_core::core::program_status::plain_program_text;
+        use lyrel_core::core::tab_view::{
+            is_shell_program_title, strip_host_prefix, strip_status_mark,
+        };
+
+        if let Some(title) = view
+            .agent_session()
+            .and_then(|session| session.readout.session_title)
+            .map(|title| plain_program_text(&title))
+            .filter(|title| !title.trim().is_empty())
+        {
+            return title;
+        }
+        if let Some(title) = view.with_program_status(|status| {
+            let record = status.representative()?;
+            [record.title(), record.app()]
+                .into_iter()
+                .flatten()
+                .map(plain_program_text)
+                .find(|text| !text.trim().is_empty())
+        }) {
+            return title;
+        }
+        if let Some(agent) = view.agent() {
+            return crate::ui::tab_strip::agent_tab_label(agent).to_owned();
+        }
+
+        let directory = cwd
+            .trim_end_matches(['/', '\\'])
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or(cwd);
+        if let Some(title) = view.stated_title().filter(|t| !is_shell_program_title(t)) {
+            let title = strip_host_prefix(strip_status_mark(title)).trim();
+            // An integrated shell's prompt title is a path, even after the
+            // next command starts. Use its basename as the idle fallback.
+            if !title.is_empty()
+                && (directory.is_empty()
+                    || title
+                        .trim_end_matches(['/', '\\'])
+                        .rsplit(['/', '\\'])
+                        .next()
+                        != Some(directory))
+            {
+                return plain_program_text(title);
+            }
+        }
+        let command = view.terminal.running_command();
+        if !command.is_empty()
+            && let Ok(line) = percent_encoding::percent_decode_str(&command).decode_utf8()
+            && let Some(program) = lyrel_core::core::cli_agent::launch_program(&line)
+            && let Some(name) = program.rsplit(['/', '\\']).next().filter(|n| !n.is_empty())
+        {
+            // Shell arguments can contain credentials or prompt bodies.
+            return plain_program_text(name);
+        }
+        if directory.is_empty() {
+            lyrel_terminal::view::DEFAULT_TITLE.to_owned()
+        } else {
+            plain_program_text(directory)
+        }
+    }
+
     fn sync_parked_deck(&self, window: &mut Window, cx: &mut App) {
         use crate::ui::parked_deck::{ParkedCard, ParkedDeckLabels};
         let tab = self.tabs.get(self.tabs.active_index());
@@ -2337,12 +2402,15 @@ impl LyrelApp {
             .map(|slot| match &slot {
                 PaneSlot::Ready(view) => {
                     let view = view.read(cx);
+                    let cwd = view
+                        .cwd()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_default();
+                    let title = Self::parked_pane_title(view, &cwd);
                     let card = ParkedCard::new(
                         slot.entity_id().as_u64(),
-                        view.title.clone(),
-                        view.cwd()
-                            .map(|path| path.display().to_string())
-                            .unwrap_or_default(),
+                        title,
+                        cwd,
                         !view.terminal.exited,
                     );
                     if view.ssh_disconnected() && !view.terminal.exited {

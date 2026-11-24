@@ -17,7 +17,24 @@ pub(in super::super) enum AgentProbe {
     #[cfg(any(unix, test))]
     Foreground(Option<(CLIAgent, Vec<String>)>),
     #[cfg(windows)]
-    AntigravityChild(bool),
+    AntigravityChild(AntigravitySighting),
+}
+
+/// Where an agy was found below the pane's shell, which is what decides
+/// whether it may name the pane. ConPTY has no foreground PGID, so the
+/// process tree stands in for it.
+#[cfg(windows)]
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub(in super::super) enum AntigravitySighting {
+    /// No agy below the pane's shell.
+    #[default]
+    Absent,
+    /// agy runs below the shell but under another process — a tool call by
+    /// the agent that still owns the pane, or an explicit wrapper. Present,
+    /// but not the foreground.
+    Nested,
+    /// agy is a direct child of the shell: the pane's foreground.
+    Foreground,
 }
 
 pub(in super::super) struct ForegroundProbes {
@@ -91,15 +108,28 @@ impl OutputObservation {
             #[cfg(any(unix, test))]
             AgentProbe::Foreground(agent) => Some(agent),
             #[cfg(windows)]
-            AgentProbe::AntigravityChild(present)
+            AgentProbe::AntigravityChild(sighting)
                 if facts.remote.is_none()
                     && match facts.agent {
-                        None => present,
-                        Some(CLIAgent::Antigravity) => !present && facts.agent_argv.is_none(),
-                        Some(_) => false,
+                        None => sighting != AntigravitySighting::Absent,
+                        Some(CLIAgent::Antigravity) => {
+                            sighting == AntigravitySighting::Absent && facts.agent_argv.is_none()
+                        }
+                        // Only a foreground agy — a direct child of this
+                        // pane's shell — may replace the agent standing here.
+                        // A nested agy is the established agent's own tool
+                        // call (or a wrapper), so the agent that still owns
+                        // the pane keeps it; its hooks already say so, and
+                        // the probe must not overrule them. A leftover
+                        // identity, by contrast, has no live agy beneath it,
+                        // so a real foreground launch still takes the row.
+                        Some(_) => sighting == AntigravitySighting::Foreground,
                     } =>
             {
-                Some(present.then(|| (CLIAgent::Antigravity, Vec::new())))
+                Some(
+                    (sighting != AntigravitySighting::Absent)
+                        .then(|| (CLIAgent::Antigravity, Vec::new())),
+                )
             }
             #[cfg(windows)]
             AgentProbe::AntigravityChild(_) => None,

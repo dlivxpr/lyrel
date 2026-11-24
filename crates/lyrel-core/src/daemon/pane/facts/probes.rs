@@ -150,14 +150,19 @@ pub(in super::super) fn foreground_agent(
     _master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
     shell_pid: Option<u32>,
 ) -> AgentProbe {
+    use super::reader::AntigravitySighting;
     let Some((pid, processes)) = shell_pid.and_then(|pid| {
         crate::daemon::winproc::checked_snapshot().map(|processes| (pid, processes))
     }) else {
         return AgentProbe::Unavailable;
     };
-    AgentProbe::AntigravityChild(crate::daemon::winproc::has_antigravity_child(
-        &processes, pid,
-    ))
+    let present = crate::daemon::winproc::has_antigravity_child(&processes, pid);
+    let foreground = crate::daemon::winproc::has_foreground_antigravity(&processes, pid);
+    AgentProbe::AntigravityChild(match (present, foreground) {
+        (_, true) => AntigravitySighting::Foreground,
+        (true, false) => AntigravitySighting::Nested,
+        (false, false) => AntigravitySighting::Absent,
+    })
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]

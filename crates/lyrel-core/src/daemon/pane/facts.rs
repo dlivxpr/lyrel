@@ -672,9 +672,12 @@ fn apply_agent(
         st.agent_session = None;
         emit(DaemonMsg::AgentStatus(None));
     }
-    if agent.is_none() {
-        st.agent_argv = None;
-    }
+    // The launch args belong to the previous agent just as much as its
+    // session id does. A switch to an agent detected without argv (the
+    // Windows process probe) must not leave the old agent's args standing:
+    // they would be read as the new agent's launch line, and they would
+    // block the probe's own clear-on-exit.
+    st.agent_argv = None;
     emit(DaemonMsg::Agent(agent));
     st.agent = agent;
     stamp_launch_argv(st, argv, emit);

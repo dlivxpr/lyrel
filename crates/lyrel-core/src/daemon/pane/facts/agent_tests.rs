@@ -113,6 +113,99 @@ fn name_only_detection_keeps_the_mapped_launch_argv() {
     );
 }
 
+/// Drive one read through a `FactReader` whose agent probe answers
+/// `AntigravityChild(sighting)`, and apply what it observed to `state`.
+#[cfg(windows)]
+fn apply_antigravity_probe(state: &mut PaneState, sighting: super::reader::AntigravitySighting) {
+    let probes = ForegroundProbes {
+        group: Box::new(|| Some(1234)),
+        remote: Box::new(|| None),
+        agent: Box::new(move || AgentProbe::AntigravityChild(sighting)),
+        cwd: Box::new(|| None),
+        local_group: |_| Some(true),
+    };
+    let mut reader = FactReader::new(probes);
+    let before = reader.before_read((true, true));
+    let observation = reader.parse([b"agy output".as_slice()]);
+    let foreground_running = || false;
+    let observation = reader.observe(observation, &foreground_running, before);
+    state.with_facts(|facts, emit| observation.apply(facts, emit));
+}
+
+/// A manually started agy is the one agent a ConPTY pane can name from the
+/// process tree. A *foreground* agy (a direct child of the shell) must
+/// replace a leftover identity — an agent whose exit hook never arrived — or
+/// the row keeps naming the previous agent while agy runs.
+#[cfg(windows)]
+#[test]
+fn antigravity_child_probe_replaces_a_leftover_agent_identity() {
+    use super::reader::AntigravitySighting;
+    use crate::core::cli_agent::CLIAgent;
+
+    let mut state = test_state(true);
+    state.with_facts(|facts, emit| {
+        apply_agent(facts, Some((CLIAgent::OhMyPi, vec!["omp".into()])), emit)
+    });
+    assert_eq!(state.facts.agent, Some(CLIAgent::OhMyPi));
+
+    apply_antigravity_probe(&mut state, AntigravitySighting::Foreground);
+    assert_eq!(
+        state.facts.agent,
+        Some(CLIAgent::Antigravity),
+        "a foreground agy replaces the leftover agent"
+    );
+    assert!(
+        state.facts.agent_argv.is_none(),
+        "the previous agent's launch args do not become agy's"
+    );
+}
+
+/// A *nested* agy — a tool call under the agent that still owns the pane —
+/// must not replace that agent, or the row would name the child while the
+/// parent is the real foreground, and (its hooks being dropped as foreign)
+/// stay wrong until the parent exits.
+#[cfg(windows)]
+#[test]
+fn a_nested_antigravity_does_not_replace_the_owning_agent() {
+    use super::reader::AntigravitySighting;
+    use crate::core::cli_agent::CLIAgent;
+
+    let mut state = test_state(true);
+    state.with_facts(|facts, emit| {
+        apply_agent(facts, Some((CLIAgent::OhMyPi, vec!["omp".into()])), emit)
+    });
+
+    apply_antigravity_probe(&mut state, AntigravitySighting::Nested);
+    assert_eq!(
+        state.facts.agent,
+        Some(CLIAgent::OhMyPi),
+        "a nested agy is the owning agent's tool call, not the foreground"
+    );
+    assert_eq!(state.facts.agent_argv, Some(vec!["omp".to_string()]));
+}
+
+/// The probe only knows agy: its absence says nothing about whatever else
+/// the pane is running, so it must never clear another agent's identity.
+#[cfg(windows)]
+#[test]
+fn antigravity_child_absence_does_not_clear_another_agent() {
+    use super::reader::AntigravitySighting;
+    use crate::core::cli_agent::CLIAgent;
+
+    let mut state = test_state(true);
+    state.with_facts(|facts, emit| {
+        apply_agent(facts, Some((CLIAgent::OhMyPi, vec!["omp".into()])), emit)
+    });
+
+    apply_antigravity_probe(&mut state, AntigravitySighting::Absent);
+    assert_eq!(
+        state.facts.agent,
+        Some(CLIAgent::OhMyPi),
+        "no agy child is not evidence about the agent that is running"
+    );
+    assert_eq!(state.facts.agent_argv, Some(vec!["omp".to_string()]));
+}
+
 #[test]
 fn sniff_osc133_command_capture_drives_agent_detection() {
     let custom = std::collections::HashMap::new();

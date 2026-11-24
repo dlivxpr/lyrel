@@ -288,6 +288,12 @@ impl LyrelApp {
             window,
             |app, _view, ev: &lyrel_terminal::view::AgentDetected, _window, cx| {
                 app.note_agent_detected(ev.0, cx);
+                // The identity change is the sidebar's avatar and label, and
+                // nothing else repaints for it: a detection-only agent has no
+                // session edge, and a program-status note can land before the
+                // probe that names the agent. Repaint so the row follows the
+                // pane the moment the agent does.
+                cx.notify();
             },
         )
         .detach();
@@ -394,6 +400,9 @@ impl LyrelApp {
                 summary_changed |= tab.refresh_program_summary(cx);
             }
             in_active_tab |= index == active;
+        }
+        if in_active_tab && self.tabs[active].is_parked_slot(&PaneSlot::Ready(view.clone()), cx) {
+            self.sync_parked_deck(window, cx);
         }
         // The bar presents the Context Pane's representative, which can sit
         // behind a tab-wide state another pane owns. Compare what it would

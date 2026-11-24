@@ -32,6 +32,7 @@ use crate::ui::app::LyrelApp;
 use crate::ui::desktop_lookups::HostLinks;
 use crate::ui::local_link::{LocalLink, LocalLinkStatus};
 use crate::ui::remote_workspace::{MachineStatus, RemoteLinks};
+use crate::ui::window_chrome::METRICS_GROUP_GAP_REM;
 use lyrel_ui_base::config::Config;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
@@ -56,9 +57,6 @@ const CAPSULE_FULL_W: f32 = 204.;
 const CAPSULE_COMPACT_W: f32 = 168.;
 /// Inner breathing room, mirrored by the capsule builder.
 const CAPSULE_PAD: f32 = 10.;
-/// Between the capsule and the right command group — the same gap the old
-/// tiles carried, still included in the width handed to the chrome budget.
-const TITLEBAR_TILE_GAP: f32 = 12.;
 
 /// Strip width (capsule plus its trailing gap) for `count` enabled metrics
 /// at `rem_size` — the number the chrome budget subtracts beside the
@@ -70,7 +68,7 @@ pub(crate) fn capsule_strip_w(count: u8, charts: bool, rem_size: f32) -> f32 {
     } else {
         CAPSULE_COMPACT_W
     };
-    ((base * f32::from(count) / 3.).ceil() + TITLEBAR_TILE_GAP) * (rem_size / 16.)
+    (base * f32::from(count) / 3.).ceil() * (rem_size / 16.) + METRICS_GROUP_GAP_REM * rem_size
 }
 
 #[derive(Clone)]
@@ -972,7 +970,7 @@ fn titlebar_capsule(
 ) -> AnyElement {
     let count = u8::from(cpu) + u8::from(ram) + u8::from(gpu);
     let scale = rem_size / 16.;
-    let width = capsule_strip_w(count, charts, rem_size) - TITLEBAR_TILE_GAP * scale;
+    let width = capsule_strip_w(count, charts, rem_size) - METRICS_GROUP_GAP_REM * rem_size;
     let chart_w =
         ((width - 2. * CAPSULE_PAD * scale - 2. * 6. * scale) / f32::from(count)).max(12. * scale);
     let detail = readout.detail.clone();
@@ -1433,17 +1431,12 @@ impl LyrelApp {
         }
         match self.titlebar_chrome_fit(window, cx) {
             crate::ui::window_chrome::TitlebarFit::Full => Some(true),
-            crate::ui::window_chrome::TitlebarFit::NoCharts
-            | crate::ui::window_chrome::TitlebarFit::CompactPark => Some(false),
+            crate::ui::window_chrome::TitlebarFit::NoCharts => Some(false),
             crate::ui::window_chrome::TitlebarFit::HiddenMetrics => None,
         }
     }
 
-    /// The shared narrowing decision for this frame: the Park entry form and
-    /// the capsule variant agree because both read this one fit. Metrics
-    /// switched off or a filling document hand the center slot everything the
-    /// fixed chrome does not take (capsule widths `0`), so Park keeps its
-    /// labelled form there.
+    /// The narrowing decision shared by metrics sampling and rendering.
     pub(crate) fn titlebar_chrome_fit(
         &self,
         window: &Window,

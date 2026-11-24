@@ -442,6 +442,88 @@ fn parked_output_does_not_cause_continuous_window_repaint(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn parked_card_tracks_the_panes_current_task(cx: &mut TestAppContext) {
+    use crate::daemon::protocol::DaemonMsg;
+    use lyrel_core::core::program_status::{
+        ProgramDelta, ProgramRecord, ProgramSnapshot, ProgramState, ProgramStatusFrame,
+    };
+
+    let (app, mut vcx, mut streams) = test_window::harness_with_tabs(cx, 1);
+    vcx.simulate_resize(size(px(1200.), px(800.)));
+    let pane = app.update_in(&mut vcx, |app, window, cx| {
+        cx.set_reduce_motion(true);
+        let pane = app.tabs[0].pane.first_leaf().unwrap();
+        app.park_pane(pane.entity_id(), window, cx);
+        pane
+    });
+    let title = |title: &str, version| {
+        ProgramRecord::new(
+            String::new(),
+            ProgramState::Working,
+            None,
+            Some("fixture".into()),
+            Some(title.into()),
+            None,
+            None,
+            version,
+            version,
+            0,
+        )
+    };
+    let frames = [
+        (
+            "Compile",
+            ProgramStatusFrame::Baseline(ProgramSnapshot::new(
+                "parked-task".into(),
+                1,
+                0,
+                vec![title("Compile", 1)],
+            )),
+        ),
+        (
+            "Run tests",
+            ProgramStatusFrame::Update(ProgramDelta::new(
+                "parked-task".into(),
+                2,
+                0,
+                vec![title("Run tests", 2)],
+                Vec::new(),
+            )),
+        ),
+    ];
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("titlebar-park", cx);
+    });
+    let card = ("parked-card", pane.entity_id().as_u64() as usize);
+    for (expected, frame) in frames {
+        DaemonMsg::ProgramStatus(frame)
+            .encode(&mut streams[0])
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            vcx.run_until_parked();
+            let title_matches = vcx.update(|window, cx| {
+                window.render_frame(cx);
+                window
+                    .find(card)
+                    .label()
+                    .and_then(|label| label.lines().next())
+                    == Some(expected)
+            });
+            if title_matches {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "card should show {expected}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn park_menu_uses_its_captured_terminal_not_the_previously_focused_one(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
     vcx.update(|_, cx| cx.set_reduce_motion(true));

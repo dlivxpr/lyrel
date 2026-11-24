@@ -275,6 +275,9 @@ pub(crate) fn window_controls_drawn(fullscreen: bool) -> bool {
 /// metrics strip are present. Narrow windows drop the strip, never this.
 const TITLEBAR_DRAG_MIN_WIDTH: f32 = 40.;
 
+/// Space between the resource capsule and the right command group, in rem.
+pub(super) const METRICS_GROUP_GAP_REM: f32 = 0.75;
+
 /// One command group's width: three `size_8` tiles plus its pad and gaps.
 /// Every part is rem-based, so the group follows `ui_font_size`; the
 /// metrics tiles do not.
@@ -325,28 +328,20 @@ pub(super) fn titlebar_native_controls_width(window: &Window) -> f32 {
     gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * f32::from(count)
 }
 
-/// The Park entry's widths at the default scale (`rem = 16`): the labelled
-/// form (icon + word + count) and the narrow form (icon + count). Both stay
-/// under the reviewed `12rem` cap, and the entry button sizes itself from
-/// these same numbers — the title-bar budget subtracts exactly what the
-/// button takes.
-pub(crate) const PARK_ENTRY_FULL_W: f32 = 108.;
-pub(crate) const PARK_ENTRY_COMPACT_W: f32 = 56.;
+/// Width of the icon-and-count Park entry at the default 16px rem.
+pub(crate) const PARK_ENTRY_W: f32 = 56.;
 /// Breathing room the fit predicate keeps between the centered Park slot and
 /// whichever side approaches it.
 pub(crate) const CENTER_SLOT_GAP: f32 = 8.;
 
-/// The compromises the chrome makes this frame so the centered Park entry,
-/// the metrics capsule, the command groups and the native controls all fit
-/// without overlapping.
+/// Which version of the metrics capsule fits beside the centered Park entry
+/// and the fixed window controls.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TitlebarFit {
-    /// Park keeps its word and the capsule keeps its microcharts.
+    /// Readings and microcharts fit.
     Full,
-    /// The capsule lost its microcharts; Park keeps its word.
+    /// Only the readings fit.
     NoCharts,
-    /// Park collapsed to icon + count as well.
-    CompactPark,
     /// Even the compact capsule no longer fits: the top metrics hide.
     HiddenMetrics,
 }
@@ -356,22 +351,12 @@ impl TitlebarFit {
     pub(crate) fn capsule_charts(self) -> bool {
         matches!(self, Self::Full)
     }
-
-    /// Whether the Park entry collapsed to icon + count this frame.
-    pub(crate) fn park_compact(self) -> bool {
-        matches!(self, Self::CompactPark | Self::HiddenMetrics)
-    }
 }
 
-/// The narrowing decision for one frame, shared by paint and demand: as the
-/// window narrows, the microcharts go first, then the Park word, then the
-/// whole metrics capsule. `capsule_full_w` / `capsule_compact_w` are the
-/// strip widths `host_metrics` hands the chrome — readings plus trends, or
-/// readings only, each with its trailing gap. Pass `0.` where the metrics
-/// are switched off or a filling document owns the strip's space, so the
-/// center slot gets everything the fixed chrome does not take. `park_shown`
-/// is `false` where no terminal tab exists and the center slot renders
-/// nothing at all.
+/// The narrowing decision shared by paint and sampling. Microcharts go first,
+/// then the whole metrics capsule. Each capsule width includes its trailing gap.
+/// Both widths are zero when metrics are disabled or a filling document owns
+/// their space. The Park entry keeps its size wherever a terminal tab exists.
 pub(crate) fn titlebar_fit(
     viewport_width: f32,
     rem_size: f32,
@@ -381,27 +366,19 @@ pub(crate) fn titlebar_fit(
     capsule_full_w: f32,
     capsule_compact_w: f32,
 ) -> TitlebarFit {
-    let scale = rem_size / 16.;
-    let park_full = if park_shown {
-        PARK_ENTRY_FULL_W * scale
+    let park_width = if park_shown {
+        PARK_ENTRY_W * (rem_size / 16.)
     } else {
         0.
     };
-    let park_compact = if park_shown {
-        PARK_ENTRY_COMPACT_W * scale
-    } else {
-        0.
-    };
-    let fits = |park, capsule| {
+    let fits = |capsule| {
         viewport_width
-            >= titlebar_required_width(rem_size, fullscreen, controls_width, park, capsule)
+            >= titlebar_required_width(rem_size, fullscreen, controls_width, park_width, capsule)
     };
-    if fits(park_full, capsule_full_w) {
+    if fits(capsule_full_w) {
         TitlebarFit::Full
-    } else if fits(park_full, capsule_compact_w) {
+    } else if fits(capsule_compact_w) {
         TitlebarFit::NoCharts
-    } else if fits(park_compact, capsule_compact_w) {
-        TitlebarFit::CompactPark
     } else {
         TitlebarFit::HiddenMetrics
     }
@@ -647,6 +624,7 @@ impl WindowChrome {
             .h_full()
             .justify_end()
             .pr(rems(trailing_inset))
+            .gap(rems(METRICS_GROUP_GAP_REM))
             .when_some(self.metrics, |strip, (metrics, _)| strip.child(metrics))
             .child(self.right);
         let controls_drawn = window_controls_drawn(window.is_fullscreen());
@@ -818,15 +796,10 @@ mod gpui_tests {
         assert!(right + px(TRAFFIC_LIGHT_INSET) <= px(crate::ui::window_chrome::TITLE_BAR_LEAD));
     }
 
-    /// The narrowing order the chrome agreed on, as exact thresholds derived
-    /// from the fixed reserve: microcharts first, then the Park word, then
-    /// the whole capsule.
+    /// Microcharts disappear first, then the readings, while Park keeps its size.
     #[test]
     fn titlebar_fit_stages_narrowing_in_the_approved_order() {
-        use super::{
-            PARK_ENTRY_COMPACT_W, PARK_ENTRY_FULL_W, TitlebarFit, titlebar_fit,
-            titlebar_required_width,
-        };
+        use super::{PARK_ENTRY_W, TitlebarFit, titlebar_fit, titlebar_required_width};
         // The capsule widths the product derives for all three metrics.
         let capsule_full = crate::ui::host_metrics::capsule_strip_w(3, true, 16.);
         let capsule_compact = crate::ui::host_metrics::capsule_strip_w(3, false, 16.);
@@ -836,16 +809,9 @@ mod gpui_tests {
         } else {
             gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * 3.
         };
-        let full_need =
-            titlebar_required_width(rem, false, controls, PARK_ENTRY_FULL_W, capsule_full);
+        let full_need = titlebar_required_width(rem, false, controls, PARK_ENTRY_W, capsule_full);
         let compact_need =
-            titlebar_required_width(rem, false, controls, PARK_ENTRY_FULL_W, capsule_compact);
-        let park_compact_need =
-            titlebar_required_width(rem, false, controls, PARK_ENTRY_COMPACT_W, capsule_compact);
-        assert!(
-            PARK_ENTRY_FULL_W <= 192.,
-            "the reviewed width cap for the Park entry is 12rem"
-        );
+            titlebar_required_width(rem, false, controls, PARK_ENTRY_W, capsule_compact);
         assert_eq!(
             titlebar_fit(
                 full_need,
@@ -892,37 +858,12 @@ mod gpui_tests {
                 capsule_full,
                 capsule_compact
             ),
-            TitlebarFit::CompactPark
-        );
-        assert_eq!(
-            titlebar_fit(
-                park_compact_need,
-                rem,
-                false,
-                controls,
-                true,
-                capsule_full,
-                capsule_compact
-            ),
-            TitlebarFit::CompactPark
-        );
-        assert_eq!(
-            titlebar_fit(
-                park_compact_need - 1.,
-                rem,
-                false,
-                controls,
-                true,
-                capsule_full,
-                capsule_compact
-            ),
             TitlebarFit::HiddenMetrics
         );
-        // No metrics to show (settings off, or a filling document): the
-        // center slot keeps the labelled Park form whenever it fits at all.
+        // No metrics reserve when the settings or document mode hides the capsule.
         assert_eq!(
             titlebar_fit(
-                titlebar_required_width(rem, false, controls, PARK_ENTRY_FULL_W, 0.),
+                titlebar_required_width(rem, false, controls, PARK_ENTRY_W, 0.),
                 rem,
                 false,
                 controls,
@@ -934,9 +875,6 @@ mod gpui_tests {
         );
         assert!(TitlebarFit::Full.capsule_charts());
         assert!(!TitlebarFit::NoCharts.capsule_charts());
-        assert!(!TitlebarFit::NoCharts.park_compact());
-        assert!(TitlebarFit::CompactPark.park_compact());
-        assert!(TitlebarFit::HiddenMetrics.park_compact());
     }
 
     /// The Park entry sits at the geometric window midpoint whatever the
@@ -995,9 +933,11 @@ mod gpui_tests {
                             capsule.left() >= entry.right(),
                             "width {width}: the capsule clears Park"
                         );
+                        // The first button also sits behind the group's 0.125rem inset.
+                        let spacing = right_group.left() - capsule.right();
                         assert!(
-                            right_group.left() >= capsule.right(),
-                            "width {width}: the right group clears the capsule"
+                            (spacing.as_f32() - 0.875 * font_size).abs() <= 1.,
+                            "width {width} font {font_size}: the capsules keep a visible gap, got {spacing:?} to the first button"
                         );
                     }
                     let gap = window.find("workbench-right-gap-drag").bounds();

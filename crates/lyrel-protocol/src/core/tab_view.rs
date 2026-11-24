@@ -255,6 +255,17 @@ fn is_agent_dir_fallback(agent: CLIAgent, title: &str) -> bool {
     }
 }
 
+/// A directory-fallback title belonging to a *different* agent than the one
+/// in the pane. OMP's `π - dir` is its own signature: no other agent writes
+/// it, so when the pane's agent has moved on (or was detected as something
+/// else) the leftover title is stale and must not outrank the agent rung —
+/// the same reason a placeholder never masks the agent's own label.
+fn is_foreign_dir_fallback(agent: CLIAgent, title: &str) -> bool {
+    CLIAgent::ALL
+        .into_iter()
+        .any(|other| other != agent && is_agent_dir_fallback(other, title))
+}
+
 impl TabView {
     pub fn label(&self) -> TabLabel<'_> {
         if let Some(name) = self
@@ -277,6 +288,7 @@ impl TabView {
                 let cleaned = strip_status_mark(raw_osc);
                 if !cleaned.is_empty()
                     && !is_agent_placeholder_title(agent, cleaned)
+                    && !is_foreign_dir_fallback(agent, cleaned)
                     && !(session_title.is_some() && is_agent_dir_fallback(agent, cleaned))
                 {
                     return TabLabel::Osc(cleaned);
@@ -689,6 +701,49 @@ mod tests {
             with_dir_fallback.label(),
             TabLabel::Osc("UPG: Upgrade gpui-kit"),
             "session title must win over OMP's 'π - dir' fallback title"
+        );
+    }
+
+    /// A pane whose agent moved on from OMP keeps OMP's `π - dir` title
+    /// until something retires it — and with no shell integration nothing
+    /// does. That leftover must not name the tab while another agent runs:
+    /// the agent rung is the live answer. OMP's own row is untouched.
+    #[test]
+    fn another_agents_dir_fallback_title_does_not_name_the_tab() {
+        let moved_on = TabView {
+            osc_title: Some("π - lyrel".into()),
+            agent: Some(CLIAgent::Antigravity),
+            cwd: Some("/work".into()),
+            ..view()
+        };
+        assert_eq!(
+            moved_on.label(),
+            TabLabel::Agent(CLIAgent::Antigravity),
+            "OMP's leftover fallback title must not mask the detected agent"
+        );
+
+        let with_session = TabView {
+            osc_title: Some("π - lyrel".into()),
+            agent: Some(CLIAgent::Antigravity),
+            session_title: Some("Fix the sidebar".into()),
+            ..view()
+        };
+        assert_eq!(
+            with_session.label(),
+            TabLabel::Osc("Fix the sidebar"),
+            "the new agent's own session title still wins"
+        );
+
+        let omp_still_here = TabView {
+            osc_title: Some("π - lyrel".into()),
+            agent: Some(CLIAgent::OhMyPi),
+            cwd: Some("/work".into()),
+            ..view()
+        };
+        assert_eq!(
+            omp_still_here.label(),
+            TabLabel::Osc("π - lyrel"),
+            "OMP's own fallback still names its tab while it runs"
         );
     }
 }
