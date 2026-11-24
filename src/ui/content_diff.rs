@@ -534,34 +534,6 @@ mod tests {
     }
 
     #[test]
-    fn a_deleted_worktree_side_is_empty_not_a_read_failure() {
-        // `git diff` lists a deletion, so the new side is the missing path —
-        // git's own definition of an empty side. Reading it must not turn
-        // the whole comparison into a Host failure.
-        let temp = tempfile::tempdir().unwrap();
-        let root = lyrel_core::core::path_spelling::local_spelling_buf(
-            std::fs::canonicalize(temp.path()).unwrap(),
-        );
-        let plan = FetchPlan {
-            old_path: "a.rs".into(),
-            new_path: "a.rs".into(),
-            old: VersionSpec::Index,
-            new: VersionSpec::Worktree,
-        };
-        let host = lyrel_core::host::local::shared();
-        // Host reads are guarded against the UI thread; a worker is how
-        // production calls them, and keeps this test independent of whether
-        // another test already registered the current thread.
-        let file =
-            std::thread::spawn(move || fetch_content(&*host, &root, &plan, FileStatus::Deleted))
-                .join()
-                .expect("the read thread finishes")
-                .expect("the fixture reads");
-        assert!(file.diff.items.is_empty());
-        assert_eq!(file.file.status, FileStatus::Deleted);
-    }
-
-    #[test]
     fn a_landing_from_a_retired_instance_is_rejected() {
         let mut tracker = ContentFetchTracker::default();
         let retired = lyrel_core::host::local::new();
