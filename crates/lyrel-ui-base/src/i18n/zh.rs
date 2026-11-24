@@ -13,7 +13,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::NotificationInbox => "通知",
         L10nKey::NotificationClearHistory => "清空通知历史",
         L10nKey::NotificationScope => {
-            "收录本机应用的成功、信息、警告与错误提示，保留最近 500 条；不含系统通知、终端输出和 GUI 关闭期间的事件。"
+            "收录本机应用提示、智能体等待与结果以及终端事件，保留最近 500 条；不含系统通知和 GUI 关闭期间的事件。"
         }
         L10nKey::NotificationDetails => "完整内容",
         L10nKey::NotificationBack => "返回通知列表",
@@ -2744,6 +2744,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::DiffContentItemArray => "数组",
         L10nKey::DiffContentItemSequence => "序列",
         L10nKey::DiffContentItemItem => "条目",
+        L10nKey::DiffContentItemComment => "注释",
         L10nKey::PendingConnecting => "正在连接 {machine}…",
         L10nKey::PendingUnreachable => "无法连接到 {machine}",
         L10nKey::WorktreePromptNeedsName => "worktree 需要一个名称",
@@ -3325,6 +3326,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppAgentHooksNoLyrelHooks => "没有找到 lyrel 钩子，无需移除",
         L10nKey::AppAgentHooksInstallFailed => "无法安装钩子：{error}",
         L10nKey::AppAgentHooksRemoveFailed => "无法移除钩子：{error}",
+        L10nKey::AppAgentHooksAntigravityUpdateServer => {
+            "这台远程主机的 lyrel-server 版本过旧，无法运行 Antigravity 钩子；请更新该远程主机上的 lyrel-server 后重新安装。"
+        }
         L10nKey::AppKeybindingDisplacedNote => {
             "{action} 占用了原属于 {previous} 的快捷键，{previous} 现在没有快捷键了。"
         }

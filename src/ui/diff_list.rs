@@ -386,7 +386,18 @@ fn content_file_rows(index: usize, file: &FileDiff, content: &ContentViews<'_>) 
         Some(ContentState::Ready(cf)) => content_rows(index, &file.path, cf, inner),
         Some(ContentState::Failed(reason)) => {
             let mut rows = vec![DiffRow::ContentStatus(reason.message())];
-            rows.extend(hunk_rows(file, DiffViewMode::Split));
+            // A supplied patch has no versions to read, so its fallback is
+            // Split, as specified. Any other failure is the line view
+            // standing in for a structural read that could not be produced:
+            // draw it the way the line view would draw this file at this
+            // width — the paired columns when they fit, a single column
+            // when they do not, and one side only for a new or deleted
+            // file, whose original side is the whole story.
+            let fallback = match reason {
+                ContentFailure::PatchOnly => DiffViewMode::Split,
+                _ => file_mode(file, inner),
+            };
+            rows.extend(hunk_rows(file, fallback));
             rows
         }
         Some(ContentState::Loading) | None => {
@@ -399,6 +410,30 @@ fn content_file_rows(index: usize, file: &FileDiff, content: &ContentViews<'_>) 
 fn content_rows(index: usize, path: &str, cf: &ContentFile, inner: DiffViewMode) -> Vec<DiffRow> {
     let _ = index;
     let path = SharedString::from(path.to_string());
+    // A move is two items: the block at its new position and the source
+    // anchor at the position it left. Each side's jump names the OTHER
+    // item's index, so pair them before any row is built — the anchor by
+    // the new start it points at, the block by the old start it left. A
+    // miss is impossible by construction (the matcher emits the two
+    // together) and lands on a row no jump target matches, a no-op rather
+    // than a jump to the wrong block.
+    let mut block_at_new_start: HashMap<u32, usize> = HashMap::new();
+    let mut anchor_at_old_start: HashMap<u32, usize> = HashMap::new();
+    for (item_ix, item) in cf.diff.items.iter().enumerate() {
+        match item {
+            Item::Source { old, .. } => {
+                anchor_at_old_start.insert(old.start, item_ix);
+            }
+            Item::Block(block)
+                if matches!(block.kind, BlockKind::Moved | BlockKind::MovedEdited) =>
+            {
+                if let Some(new) = block.new {
+                    block_at_new_start.insert(new.start, item_ix);
+                }
+            }
+            Item::Block(_) => {}
+        }
+    }
     let mut rows: Vec<DiffRow> = Vec::new();
     for (item_ix, item) in cf.diff.items.iter().enumerate() {
         match item {
@@ -415,7 +450,10 @@ fn content_rows(index: usize, path: &str, cf: &ContentFile, inner: DiffViewMode)
                 old: *old,
                 new_start: *new_start,
                 jump: RowId {
-                    hunk: item_ix,
+                    hunk: block_at_new_start
+                        .get(new_start)
+                        .copied()
+                        .unwrap_or(item_ix),
                     row: CONTENT_HEADER_ROW,
                 },
             })),
@@ -431,9 +469,14 @@ fn content_rows(index: usize, path: &str, cf: &ContentFile, inner: DiffViewMode)
                     new: block.new,
                     formatting_only: block.formatting_only,
                     edits: block.edits.len(),
-                    jump: moved.then_some(RowId {
-                        hunk: item_ix,
-                        row: CONTENT_ANCHOR_ROW,
+                    jump: moved.then(|| {
+                        let anchor = block
+                            .old
+                            .and_then(|old| anchor_at_old_start.get(&old.start).copied());
+                        RowId {
+                            hunk: anchor.unwrap_or(item_ix),
+                            row: CONTENT_ANCHOR_ROW,
+                        }
                     }),
                     leads: rows.is_empty(),
                 }));

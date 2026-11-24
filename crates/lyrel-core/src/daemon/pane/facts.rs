@@ -162,11 +162,10 @@ impl PaneFacts {
     pub(super) fn apply_events(
         &mut self,
         events: Vec<AgentEvent>,
-        notification: Option<String>,
         emit: &mut dyn FnMut(DaemonMsg),
     ) -> FactChange {
         let before = observed_facts(self);
-        apply_agent_signals(self, events, notification, emit);
+        apply_agent_signals(self, events, None, emit);
         self.change_since(Some(before))
     }
 
@@ -397,7 +396,21 @@ fn apply_signals(st: &mut PaneFacts, signals: SniffSignals, emit: &mut dyn FnMut
             last_exit: shell.last_exit_code,
         });
     }
-    apply_agent_signals(st, signals.agent_events, signals.notification, emit);
+    apply_agent_signals(
+        st,
+        signals.agent_events,
+        signals.notifications.back().map(|(_, body)| body.as_str()),
+        emit,
+    );
+    for (title, body) in signals.notifications {
+        emit(DaemonMsg::ProgramNote(
+            crate::daemon::protocol::ProgramNote {
+                id: uuid::Uuid::new_v4(),
+                title,
+                body,
+            },
+        ));
+    }
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -437,7 +450,7 @@ fn kimi_observer(
 fn apply_agent_signals(
     st: &mut PaneFacts,
     events: Vec<crate::core::cli_agent::AgentEvent>,
-    notification: Option<String>,
+    notification: Option<&str>,
     emit: &mut dyn FnMut(DaemonMsg),
 ) {
     use crate::core::cli_agent::{AgentEventKind, AgentSessionState, AgentStatus};
@@ -546,7 +559,7 @@ fn apply_agent_signals(
             .agent_session
             .get_or_insert_with(AgentSessionState::default);
         sess.status = AgentStatus::Waiting;
-        sess.message = Some(body);
+        sess.message = Some(body.to_owned());
         sess.note_transition(previous, now_ms);
     }
 

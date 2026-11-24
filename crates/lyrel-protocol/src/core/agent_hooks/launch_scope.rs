@@ -220,11 +220,16 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
                 "--query-file",
             ]
             .contains(&key);
+        // Valued options agree with the exact-resume adapter
+        // (`host/session_operations/antigravity.rs`): a configured launch the
+        // adapter can replay must not read as ambiguous here. `--add-dir` is
+        // valued through the shared `values` list above.
         let antigravity_value = agent == HookAgent::Antigravity
             && [
                 "--prompt-interactive",
                 "-i",
                 "--effort",
+                "--mode",
                 "--input-format",
                 "--json-schema",
                 "--output-format",
@@ -286,7 +291,6 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
             && !(agent == HookAgent::OpenCode && key == "--auto")
             && !(agent == HookAgent::Antigravity
                 && [
-                    "--add-dir",
                     "--dangerously-skip-permissions",
                     "--disable-slash-commands",
                     "--new-project",

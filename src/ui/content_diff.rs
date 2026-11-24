@@ -242,11 +242,12 @@ impl ContentFetchTracker {
     }
 }
 
-/// Read one side's bytes on the Host. Failures of a git-addressed side mean
-/// the side does not exist — that is how git itself defines an added,
-/// deleted, or initial-commit side. The working-tree side follows the same
-/// rule for a deletion (`git diff` lists the file, but the path is gone),
-/// while any other working-tree read failure is a real error.
+/// Read one side's bytes on the Host. A git-addressed side that does not
+/// exist — an added, deleted, or initial-commit side — reads as empty bytes,
+/// exactly how git itself defines it; a repository-level failure is an
+/// error, never an empty side. The working-tree side follows the same rule
+/// for a deletion (`git diff` lists the file, but the path is gone), while
+/// any other working-tree read failure is a real error.
 fn read_side(
     host: &dyn lyrel_core::host::Host,
     root: &Path,
@@ -333,8 +334,8 @@ pub(crate) fn fetch_content(
     let old_text = String::from_utf8_lossy(&old_bytes).into_owned();
     let new_text = String::from_utf8_lossy(&new_bytes).into_owned();
 
-    let language = language_for_path(Path::new(&plan.new_path))
-        .or_else(|| language_for_path(Path::new(&plan.old_path)))
+    let language = language_for_path(&plan.new_path)
+        .or_else(|| language_for_path(&plan.old_path))
         .ok_or(ContentFailure::Unsupported)?;
     let diff = structural_diff(language, &old_text, &new_text).map_err(|error| match error {
         ContentError::Unsupported => ContentFailure::Unsupported,
@@ -471,6 +472,7 @@ pub(crate) fn item_label(label: &str) -> L10nKey {
         "variable" => L10nKey::DiffContentItemVariable,
         "array" => L10nKey::DiffContentItemArray,
         "sequence" => L10nKey::DiffContentItemSequence,
+        "comment" => L10nKey::DiffContentItemComment,
         _ => L10nKey::DiffContentItemItem,
     }
 }

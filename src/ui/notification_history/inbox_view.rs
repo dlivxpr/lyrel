@@ -1,5 +1,5 @@
 use super::{
-    Inbox, PendingItem, Record, Severity, Source, ensure, history, navigate, pending,
+    Inbox, PendingItem, PendingState, Record, Severity, Source, ensure, history, navigate, pending,
     pending_element_id, source_exists,
 };
 use gpui_kit::base::SelectableText;
@@ -486,12 +486,32 @@ fn render_pending_item(
     _window: &Window,
     cx: &App,
 ) -> impl IntoElement + use<> {
+    use lyrel_core::core::program_status::BlockedKind;
     let source = item.source.clone();
     let id = pending_element_id(&source);
     let now_ms = lyrel_core::core::config::unix_now().saturating_mul(1000);
     let waited = item
         .since_ms
         .map(|since| crate::ui::home::waiting_for(now_ms.saturating_sub(since) / 1000));
+    // A blocked program names why it waits; an agent's own wait needs no
+    // qualifier beyond its age.
+    let reason = match item.state {
+        PendingState::Waiting => None,
+        PendingState::Blocked(kind) => Some(
+            t(match kind {
+                Some(BlockedKind::Permission) => L10nKey::ProgramPermission,
+                Some(BlockedKind::Question) => L10nKey::ProgramQuestion,
+                Some(BlockedKind::Auth) => L10nKey::ProgramAuth,
+                None => L10nKey::ProgramBlocked,
+            })
+            .to_string(),
+        ),
+    };
+    let detail = match (reason, waited) {
+        (Some(reason), Some(waited)) => Some(format!("{reason} · {waited}")),
+        (Some(reason), None) => Some(reason),
+        (None, waited) => waited,
+    };
     h_flex()
         .id(id.clone())
         .test_support()
@@ -516,17 +536,17 @@ fn render_pending_item(
                 .text_ellipsis()
                 .child(source.label.clone()),
         )
-        .when_some(waited, |row, waited| {
+        .when_some(detail, |row, detail| {
             row.child(
                 div()
                     .id(format!("{id}-age"))
                     .test_support()
                     .role(gpui_kit::Role::Label)
-                    .aria_label(waited.clone())
+                    .aria_label(detail.clone())
                     .flex_none()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(waited),
+                    .child(detail),
             )
         })
         .child(

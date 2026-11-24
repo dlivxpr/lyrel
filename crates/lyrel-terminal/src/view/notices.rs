@@ -213,40 +213,44 @@ impl TerminalView {
     /// `Unfocused` holds a note back only while the reader is looking at this
     /// very pane — and only from the desktop: a held-back note still enters
     /// the shared history, since closing desktop delivery must not lose
-    /// eligible events. A pane whose agent reports through lyrel's hooks
-    /// already gets its Waiting and Done notices from `poll_agent_status`
-    /// whenever `hooks_notify`, so the program's own copy is a duplicate
-    /// there and never reaches the history either.
+    /// eligible events. A pane whose agent reports through lyrel's hooks is
+    /// different: there the rich session itself is the correlation — lyrel's
+    /// hooks are the notification source for that agent's activity, so the
+    /// program's own copy of those notices is a duplicate. That holds no
+    /// matter whether the desktop timing is open right now: the hook path
+    /// records its notice regardless of the timing gate, so letting the OSC
+    /// copy through a timing-closed moment would only double the history
+    /// entry. The whole batch is therefore dropped before pacing, exactly as
+    /// `AgentActivity`'s rich-session gate keeps an ordinary completion from
+    /// duplicating a hook outcome.
     ///
     /// At most a few per pane every few seconds reach the history and the
     /// desktop (pane output is untrusted), with one note saying the rest
     /// were not shown.
-    pub fn show_program_notes(
-        &self,
-        hooks_notify: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn show_program_notes(&self, window: &mut Window, cx: &mut Context<Self>) {
         let notes = self.terminal.take_osc_notes();
         let watched = window.is_window_active() && self.focus_handle.is_focused(window);
         let hooked = self.terminal.agent_session().is_some_and(|s| s.rich);
         let cfg = cx.global::<Config>();
         // Explicit OSC delivery is its own toggle beside the ordinary
         // command one; both still sit under the shared delivery timing.
-        let show = cfg.notify_on_command_finish.allows(watched)
-            && cfg.terminal_notifications.osc_desktop
-            && !(hooked && hooks_notify);
+        let show =
+            cfg.notify_on_command_finish.allows(watched) && cfg.terminal_notifications.osc_desktop;
+        if hooked {
+            if !notes.is_empty() {
+                log::debug!(
+                    "{} program notification(s) swallowed as hook duplicates",
+                    notes.len()
+                );
+            }
+            return;
+        }
         if !notes.is_empty() {
             log::debug!(
                 "{} program notification(s) {}",
                 notes.len(),
                 if show { "shown" } else { "held back" }
             );
-        }
-        // A hooked agent's copy duplicates the hook notice: dropped whole,
-        // before pacing, exactly as before — it neither records nor delivers.
-        if hooked && hooks_notify {
-            return;
         }
         // The budget bounds intake into the history exactly as it bounds
         // delivery to the desktop; a poll that starts dropping the remainder
@@ -262,12 +266,12 @@ impl TerminalView {
                 self.notify_pane(agent, &body, cx);
             }
         }
-        for (title, body) in notes {
+        for lyrel_core::daemon::protocol::ProgramNote { id, title, body } in notes {
             let message = match &title {
                 Some(title) => format!("{title} — {body}"),
                 None => body.clone(),
             };
-            let identity = format!("osc|{}|{title:?}|{body}", self.event_source_prefix());
+            let identity = format!("osc|{id}");
             if self.record_pane_event(&identity, Severity::Info, &message, window, cx) && show {
                 match &title {
                     Some(title) => crate::desktop_notification::notify_desktop_for_pane(

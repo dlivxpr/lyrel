@@ -128,6 +128,9 @@ impl OscTokenizer {
 /// A desktop notification: its title, if it has one, and its body.
 pub type Note = (Option<String>, String);
 
+/// A burst keeps only its newest few notes pending desktop delivery.
+pub const MAX_PENDING_NOTES: usize = 3;
+
 pub fn parse_notification(payload: &[u8]) -> Option<Note> {
     if let Some(rest) = payload.strip_prefix(b"9;") {
         let first = rest.split(|&b| b == b';').next().unwrap_or(rest);

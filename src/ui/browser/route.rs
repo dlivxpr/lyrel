@@ -19,13 +19,10 @@
 //! from the same stable key. Two Hosts therefore never share cookies or
 //! localStorage, and a Host's data survives a restart.
 //!
-//! Origin semantics, documented rather than papered over: web storage is
-//! origin-scoped, and a forward's local port is the origin's port. When a
-//! reconnect lands on a different local port, the page is a new origin — its
-//! cookies and localStorage from the old port are not visible. The old origin
-//! remains in the Host's partition, so a forward that comes back on the same
-//! port sees its old data again. The external-browser action is a separate
-//! browser with its own storage either way.
+//! Changing a forward's local port changes the browser origin and therefore
+//! the bucket for localStorage and IndexedDB. Cookies use host/domain and
+//! path rules without port isolation inside a Host's partition. The external
+//! browser has its own site data.
 
 use lyrel_core::core::session::RemoteTarget;
 use lyrel_terminal::loopback::{LoopbackUrl, parse_loopback_url};
@@ -36,11 +33,7 @@ use std::sync::Arc;
 /// The named site-data partition one Host's pages use.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserSiteData {
-    /// Stable partition name: `local`, or `host-<HostId>`. It is derived from
-    /// the Host's connection identity, not its label, so renaming a profile
-    /// keeps the same site data.
-    pub(crate) key: String,
-    /// The directory holding the Windows WebView2 profile.
+    /// The profile directory on Windows and the partition identity on macOS.
     pub(crate) dir: PathBuf,
 }
 
@@ -193,7 +186,7 @@ impl gpui_kit::Global for BrowserForwardVerifier {}
 /// config dir itself is unavailable — the surface then reports Unsupported
 /// rather than borrowing a shared profile.
 pub(crate) fn browser_site_data(tab: &crate::ui::right_panel::WebTab) -> Option<BrowserSiteData> {
-    let root = lyrel_core::core::config::config_dir_path()?;
+    let root = std::path::absolute(lyrel_core::core::config::config_dir_path()?).ok()?;
     let key = tab
         .host
         .as_ref()
@@ -201,7 +194,6 @@ pub(crate) fn browser_site_data(tab: &crate::ui::right_panel::WebTab) -> Option<
         .unwrap_or_else(|| "local".to_string());
     Some(BrowserSiteData {
         dir: root.join("browser").join(&key),
-        key,
     })
 }
 
@@ -238,11 +230,9 @@ pub(crate) fn route_plan(
     url: &str,
     cx: &gpui_kit::App,
 ) -> Result<RoutePlan, RouteFailure> {
-    let loopback = parse_loopback_url(url).ok_or_else(|| {
-        RouteFailure::new(format!(
-            "{url} is not a loopback address this page can forward"
-        ))
-    })?;
+    let loopback = normalized_loopback_url(url)
+        .and_then(|url| parse_loopback_url(&url))
+        .ok_or_else(|| RouteFailure::new("this loopback address cannot be forwarded"))?;
     let workspace = owning_workspace(tab, cx)?;
     if workspace.shares_localhost() || matches!(&workspace.target, RemoteTarget::LocalStdio { .. })
     {
@@ -267,7 +257,13 @@ pub(crate) fn route_plan(
 
 /// Whether `url` is a loopback address the routing rules apply to.
 pub(crate) fn is_loopback(url: &str) -> bool {
-    parse_loopback_url(url).is_some()
+    super::policy::loopback_origin(url).is_some()
+}
+
+fn normalized_loopback_url(address: &str) -> Option<String> {
+    let origin = super::policy::loopback_origin(address)?;
+    let url = url::Url::parse(address).ok()?;
+    Some(format!("{origin}{}", &url[url::Position::BeforePath..]))
 }
 
 /// The Host-spelling address for a loopback URL a page asked to load. When
@@ -285,27 +281,26 @@ pub(crate) fn original_loopback_url(url: &str, last: Option<&VerifiedForward>) -
 
 /// Replaces one origin prefix with another, only at an origin boundary.
 fn rewrite_origin(url: &str, from: &str, to: &str) -> Option<String> {
-    let rest = url.strip_prefix(from)?;
-    if rest.is_empty() || matches!(rest.as_bytes()[0], b'/' | b'?' | b'#') {
-        Some(format!("{to}{rest}"))
-    } else {
-        None
+    let at_origin = |url: &str| {
+        url.strip_prefix(from)
+            .is_some_and(|rest| rest.is_empty() || matches!(rest.as_bytes()[0], b'/' | b'?' | b'#'))
+    };
+    if at_origin(url) {
+        return Some(format!("{to}{}", &url[from.len()..]));
     }
+    let normalized = normalized_loopback_url(url)?;
+    at_origin(&normalized).then(|| format!("{to}{}", &normalized[from.len()..]))
 }
 
-/// The durable `WKWebsiteDataStore` identifier for a partition key. It is a
-/// UUID-shaped value derived deterministically from the same stable key as
-/// the Windows directory, so both engines name the same Host the same way and
-/// a restart finds the data again. Only the macOS host consumes it; the tests
-/// pin its determinism on every platform.
+/// Derive the `WKWebsiteDataStore` identifier from the full profile path.
+/// Like the Windows profile directory, this scopes the store to both the
+/// Host and the Lyrel configuration root, including isolated test instances.
 #[cfg(any(target_os = "macos", test))]
-pub(crate) fn site_data_identifier(key: &str) -> [u8; 16] {
-    // Two FNV-1a passes with different seeds fill the 128 bits; this is an
-    // identifier, not a security primitive.
-    let first = fnv1a64(key.as_bytes(), 0xcbf2_9ce4_8422_2325);
-    let mut tail = key.as_bytes().to_vec();
-    tail.extend_from_slice(b"/lyrel-browser");
-    let second = fnv1a64(&tail, 0x9e37_79b9_7f4a_7c15);
+pub(crate) fn site_data_identifier(dir: &std::path::Path) -> [u8; 16] {
+    // Two FNV-1a passes fill a stable identifier from the native path bytes.
+    let path = dir.as_os_str().as_encoded_bytes();
+    let first = fnv1a64(path, 0xcbf2_9ce4_8422_2325);
+    let second = fnv1a64(path, 0x9e37_79b9_7f4a_7c15);
     let mut bytes = [0u8; 16];
     bytes[..8].copy_from_slice(&first.to_be_bytes());
     bytes[8..].copy_from_slice(&second.to_be_bytes());
@@ -414,27 +409,27 @@ mod tests {
         let local = browser_site_data(&tab(None)).expect("a config dir");
         let alpha = browser_site_data(&tab(Some(direct("alpha.test")))).expect("a config dir");
         let beta = browser_site_data(&tab(Some(direct("beta.test")))).expect("a config dir");
-        assert_eq!(local.key, "local");
-        assert_ne!(alpha.key, beta.key);
+        let same_host = browser_site_data(&tab(Some(direct("alpha.test")))).expect("a config dir");
+        assert!(local.dir.ends_with("browser/local"));
+        assert_ne!(alpha.dir, local.dir);
         assert_ne!(alpha.dir, beta.dir);
-        assert_ne!(alpha.key, local.key);
-        assert_eq!(
-            alpha.key,
-            browser_site_data(&tab(Some(direct("alpha.test"))))
-                .expect("a config dir")
-                .key,
-            "the same Host keeps one partition"
-        );
+        assert_eq!(alpha.dir, same_host.dir);
         assert_ne!(
-            site_data_identifier(&alpha.key),
-            site_data_identifier(&beta.key)
+            site_data_identifier(&alpha.dir),
+            site_data_identifier(&beta.dir)
         );
         assert_eq!(
-            site_data_identifier(&alpha.key),
-            site_data_identifier(&alpha.key),
-            "the identifier is stable across launches"
+            site_data_identifier(&alpha.dir),
+            site_data_identifier(&same_host.dir)
         );
-        let identifier = site_data_identifier(&alpha.key);
+        let separate_config = std::path::Path::new("other-config")
+            .join("browser")
+            .join(alpha.dir.file_name().unwrap());
+        assert_ne!(
+            site_data_identifier(&alpha.dir),
+            site_data_identifier(&separate_config)
+        );
+        let identifier = site_data_identifier(&alpha.dir);
         assert_eq!(identifier[6] >> 4, 4, "a well-formed UUID version");
         assert_eq!(identifier[8] >> 6, 2, "a well-formed UUID variant");
     }

@@ -322,10 +322,8 @@ impl Host {
             )?;
         }
 
-        // A frame inside the page navigates on its own: same policy, same
-        // deny. Subresource requests (images, XHR) are not filtered — an
-        // ordinary page needs them, and their top-level counterpart is the
-        // route that matters.
+        // A subframe must obey the same navigation guard, without replacing
+        // the top-level page when the frame's route is refused.
         let frame_shared = shared.clone();
         unsafe {
             webview.add_FrameNavigationStarting(
@@ -335,9 +333,17 @@ impl Host {
                     };
                     let uri = match argument_uri(&args) {
                         Ok(uri) => uri,
-                        Err(_) => return Ok(()),
+                        Err(_) => {
+                            let _ = args.SetCancel(true);
+                            return Ok(());
+                        }
                     };
-                    if super::super::policy::classify(&uri) == super::super::policy::Route::Deny {
+                    let allowed = frame_shared
+                        .try_borrow()
+                        .is_ok_and(|state| state.guard.allows(&uri));
+                    if !allowed
+                        || super::super::policy::classify(&uri) == super::super::policy::Route::Deny
+                    {
                         let _ = args.SetCancel(true);
                         emit(
                             &frame_shared,

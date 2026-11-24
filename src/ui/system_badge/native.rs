@@ -103,6 +103,11 @@ mod platform {
 
     thread_local! {
         static TASKBAR: RefCell<Option<ITaskbarList3>> = const { RefCell::new(None) };
+        /// The last rasterized badge, kept only so the one-second reconcile
+        /// does not redraw the same label. It is not taskbar-required
+        /// lifetime: `SetOverlayIcon` copies the icon during the call — "the
+        /// taskbar makes and uses its own copy of the icon" — so the handle
+        /// only ever has to outlive the call itself.
         static ICON: RefCell<Option<(String, HICON)>> = const { RefCell::new(None) };
     }
 
@@ -133,8 +138,10 @@ mod platform {
             };
             for &hwnd in windows {
                 // SAFETY: `hwnd` names a live top-level window of this
-                // process, and the icon stays alive in `ICON` until it is
-                // replaced or cleared.
+                // process. The taskbar copies the icon during the call (the
+                // `SetOverlayIcon` documentation: "the taskbar makes and
+                // uses its own copy of the icon"), so no button borrows this
+                // handle — `ICON` keeping it alive only saves a redraw.
                 let result =
                     unsafe { taskbar.SetOverlayIcon(hwnd, icon.unwrap_or_default(), &description) };
                 if let Err(error) = result {
@@ -210,8 +217,10 @@ mod platform {
         let icon = draw_icon(label)?;
         ICON.with(|cell| {
             if let Some((_, old)) = cell.borrow_mut().replace((label.to_owned(), icon)) {
-                // SAFETY: `old` was created by this module and is no longer
-                // installed on any taskbar button after the replace above.
+                // SAFETY: `old` was created by this module. Destroying it
+                // cannot pull the overlay from under a taskbar button: every
+                // `SetOverlayIcon` that received it already copied it, and
+                // buttons show the taskbar's copies, not this handle.
                 unsafe {
                     let _ = DestroyIcon(old);
                 }

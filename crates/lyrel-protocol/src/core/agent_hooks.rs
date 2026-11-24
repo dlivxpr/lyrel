@@ -777,9 +777,13 @@ pub fn uninstall_hooks(target: &HookTarget, agent: HookAgent) -> anyhow::Result<
 }
 
 pub fn refresh_hooks(target: &HookTarget) -> usize {
+    refresh_hooks_where(target, |_| true)
+}
+
+fn refresh_hooks_where(target: &HookTarget, include: impl Fn(HookAgent) -> bool) -> usize {
     let mut refreshed = 0;
     for agent in HookAgent::ALL {
-        if hooks_state(target, agent) != HooksState::Outdated {
+        if !include(agent) || hooks_state(target, agent) != HooksState::Outdated {
             continue;
         }
         match install_hooks(target, agent) {
@@ -800,12 +804,21 @@ pub fn refresh_hooks(target: &HookTarget) -> usize {
     refreshed
 }
 
+/// Refresh the stale lyrel-owned hooks on a remote Host. Antigravity hook
+/// commands run `agent-hook antigravity` on that Host's server, so they are
+/// only (re)written when the peer advertised `antigravity-v1`; an older peer
+/// keeps its entries untouched rather than receiving commands its binary
+/// cannot consume.
 pub fn refresh_remote_hooks(
     host: &dyn Host,
     home: PathBuf,
     commands: &std::collections::HashMap<String, String>,
+    antigravity_supported: bool,
 ) -> usize {
-    refresh_hooks(&HookTarget::remote(host, home).with_launch_commands(commands))
+    refresh_hooks_where(
+        &HookTarget::remote(host, home).with_launch_commands(commands),
+        |agent| agent != HookAgent::Antigravity || antigravity_supported,
+    )
 }
 
 pub fn refresh_hooks_at_launch(commands: &std::collections::HashMap<String, String>) -> usize {
@@ -1623,6 +1636,46 @@ mod tests {
         assert_eq!(hooks_state(&target, HookAgent::Pi), HooksState::Installed);
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A peer without `antigravity-v1` cannot run `agent-hook antigravity`,
+    /// so the connect-time refresh leaves its stale entries untouched instead
+    /// of rewriting commands the old binary cannot consume.
+    #[test]
+    fn remote_refresh_skips_antigravity_without_the_peer_capability() {
+        let directory = tempfile::tempdir().unwrap();
+        let host = FakeRemote::shared();
+        let target = HookTarget::remote(&*host, directory.path().into());
+        install_hooks(&target, HookAgent::Antigravity).unwrap();
+        let path = HookAgent::Antigravity.target_path(&target).unwrap();
+        // Age the entry the way a shape change would: one event short.
+        let mut registry: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        registry["lyrel"].as_object_mut().unwrap().remove("Stop");
+        std::fs::write(&path, serde_json::to_string_pretty(&registry).unwrap()).unwrap();
+        assert_eq!(
+            hooks_state(&target, HookAgent::Antigravity),
+            HooksState::Outdated
+        );
+
+        let commands = std::collections::HashMap::new();
+        assert_eq!(
+            refresh_remote_hooks(&*host, directory.path().into(), &commands, false),
+            0
+        );
+        assert_eq!(
+            hooks_state(&target, HookAgent::Antigravity),
+            HooksState::Outdated,
+            "a peer without antigravity-v1 keeps its stale entry untouched"
+        );
+        assert_eq!(
+            refresh_remote_hooks(&*host, directory.path().into(), &commands, true),
+            1
+        );
+        assert_eq!(
+            hooks_state(&target, HookAgent::Antigravity),
+            HooksState::Installed
+        );
     }
 
     fn local_host() -> crate::host::SharedHost {

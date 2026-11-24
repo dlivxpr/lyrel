@@ -163,6 +163,10 @@ pub(crate) fn gated_len(msg: &DaemonMsg) -> usize {
         // Lifted from the same PTY read as the output around them.
         DaemonMsg::Graphics(b) => b.len(),
         DaemonMsg::ClipboardWrite(b) => b.len(),
+        DaemonMsg::ProgramNote(note) => {
+            // Conservatively account for JSON escapes and fixed envelope fields.
+            6 * (note.body.len() + note.title.as_ref().map_or(0, String::len)) + 128
+        }
         // Bounded by `ColorFrame`'s own 260-operation ceiling.
         DaemonMsg::Colors(b) => b.len(),
         // One full bounded glossary snapshot.
@@ -453,7 +457,7 @@ impl Subscriptions {
         self.observers.clear();
     }
 
-    fn broadcast(
+    pub(super) fn broadcast(
         &mut self,
         msg: DaemonMsg,
         len: usize,

@@ -77,7 +77,7 @@ impl OutputObservation {
         self.signals.cwd.is_some()
             || self.signals.title.is_some()
             || !self.signals.agent_events.is_empty()
-            || self.signals.notification.is_some()
+            || !self.signals.notifications.is_empty()
             || !self.signals.shell.is_empty()
             || self.remote.is_some()
             || !matches!(self.agent, AgentProbe::Unavailable)

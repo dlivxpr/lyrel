@@ -47,28 +47,68 @@ const HISTORY_SPAN_MILLIS: u64 = 3_600_000;
 /// long views aggregate samples per slot and keep the peak.
 const BUCKET_COUNT: usize = 60;
 
-/// Fixed capsule widths handed to the chrome budget, matching the capsule
-/// built in [`titlebar_capsule`]. `CAPSULE_FULL_W` is the reviewed
-/// approximately-204 px two-line capsule at the default scale: readings on
-/// the upper line, short trends below. `CAPSULE_COMPACT_W` is the
-/// readings-only line the narrowing order falls back to before Park
-/// compresses and the capsule then hides.
-const CAPSULE_FULL_W: f32 = 204.;
-const CAPSULE_COMPACT_W: f32 = 168.;
+/// Per-metric minimum column widths at the default 16px rem, measured with
+/// the chrome's 12px (`text_xs`) system font: the identifying label, the 3px
+/// gap and the widest reading the metric can show. CPU and GPU cap at
+/// `100%`; RAM carries a unit and is sized for a three-digit gibibyte value
+/// (`888.8 GB`) — a rarer four-digit reading still ellipsizes honestly
+/// instead of widening every host's capsule.
+const CPU_COLUMN_W: f32 = 54.;
+const RAM_COLUMN_W: f32 = 78.;
+const GPU_COLUMN_W: f32 = 55.;
+/// The sparkline width the reviewed two-line capsule gave every metric:
+/// (204 - 2*10 padding - 2*6 gaps) / 3 ≈ 57. A charts capsule never narrows
+/// a column below it.
+const CHART_COLUMN_MIN_W: f32 = 57.;
+/// Gap between the capsule's columns, mirrored by the readings and trends
+/// rows.
+const CAPSULE_COLUMN_GAP: f32 = 6.;
 /// Inner breathing room, mirrored by the capsule builder.
 const CAPSULE_PAD: f32 = 10.;
 
-/// Strip width (capsule plus its trailing gap) for `count` enabled metrics
-/// at `rem_size` — the number the chrome budget subtracts beside the
-/// centered Park slot. Proportional for the partial toolbars the settings
-/// allow, and rem-scaled like the rest of the chrome.
-pub(crate) fn capsule_strip_w(count: u8, charts: bool, rem_size: f32) -> f32 {
-    let base = if charts {
-        CAPSULE_FULL_W
+/// One enabled metric's column width at the default scale: its reading
+/// minimum, widened to the sparkline minimum when charts show.
+fn capsule_column_w(reading_min: f32, charts: bool) -> f32 {
+    if charts {
+        reading_min.max(CHART_COLUMN_MIN_W)
     } else {
-        CAPSULE_COMPACT_W
-    };
-    (base * f32::from(count) / 3.).ceil() * (rem_size / 16.) + METRICS_GROUP_GAP_REM * rem_size
+        reading_min
+    }
+}
+
+/// The enabled metrics' column widths at the default scale, in paint order.
+fn capsule_columns(cpu: bool, ram: bool, gpu: bool, charts: bool) -> impl Iterator<Item = f32> {
+    [
+        cpu.then_some(CPU_COLUMN_W),
+        ram.then_some(RAM_COLUMN_W),
+        gpu.then_some(GPU_COLUMN_W),
+    ]
+    .into_iter()
+    .flatten()
+    .map(move |reading_min| capsule_column_w(reading_min, charts))
+}
+
+/// The capsule's content width at the default 16px rem: padding, one column
+/// per enabled metric and the gaps between them. The width is the sum of the
+/// enabled columns — never a proportional share of the three-metric capsule —
+/// so a lone RAM reading keeps its full `13.1 GB` instead of ellipsizing.
+fn capsule_content_w(cpu: bool, ram: bool, gpu: bool, charts: bool) -> f32 {
+    let mut columns = 0u8;
+    let mut width = 2. * CAPSULE_PAD;
+    for column in capsule_columns(cpu, ram, gpu, charts) {
+        width += column;
+        columns += 1;
+    }
+    width + CAPSULE_COLUMN_GAP * f32::from(columns.saturating_sub(1))
+}
+
+/// Strip width (capsule plus its trailing gap) for the enabled metrics at
+/// `rem_size` — the number the chrome budget subtracts beside the centered
+/// Park slot. Every enabled metric contributes its own minimum column, and
+/// the whole strip is rem-scaled like the rest of the chrome.
+pub(crate) fn capsule_strip_w(cpu: bool, ram: bool, gpu: bool, charts: bool, rem_size: f32) -> f32 {
+    capsule_content_w(cpu, ram, gpu, charts).ceil() * (rem_size / 16.)
+        + METRICS_GROUP_GAP_REM * rem_size
 }
 
 #[derive(Clone)]
@@ -914,20 +954,24 @@ fn trend_chart(
 /// One metric's reading in the capsule's upper line: identifying label and
 /// current value. The wrapper keeps the old tile's element id and its host
 /// detail as the accessible name, so pending and failed samplers still speak
-/// their state word through the same seam.
+/// their state word through the same seam. The column is the metric's own
+/// measured width, so a wide RAM value never borrows from its neighbours;
+/// the value's ellipsis remains only as the honest fallback for readings
+/// beyond the measured minimum.
 fn capsule_reading(
     id: &'static str,
     label: &'static str,
     detail: &str,
     value: String,
+    width: f32,
     cx: &App,
 ) -> AnyElement {
     h_flex()
         .id(id)
         .aria_label(gpui_kit::SharedString::from(detail))
         .test_support()
-        .flex_1()
-        .min_w_0()
+        .w(px(width))
+        .flex_none()
         .items_center()
         .justify_center()
         .gap(px(3.))
@@ -968,11 +1012,12 @@ fn titlebar_capsule(
     rem_size: f32,
     cx: &mut Context<LyrelApp>,
 ) -> AnyElement {
-    let count = u8::from(cpu) + u8::from(ram) + u8::from(gpu);
     let scale = rem_size / 16.;
-    let width = capsule_strip_w(count, charts, rem_size) - METRICS_GROUP_GAP_REM * rem_size;
-    let chart_w =
-        ((width - 2. * CAPSULE_PAD * scale - 2. * 6. * scale) / f32::from(count)).max(12. * scale);
+    let width = capsule_strip_w(cpu, ram, gpu, charts, rem_size) - METRICS_GROUP_GAP_REM * rem_size;
+    // Every metric paints in its own measured column — the same widths the
+    // chrome budget summed — so the readings row and the trends row agree
+    // and no reading is squeezed by its neighbours.
+    let column = |reading_min: f32| capsule_column_w(reading_min, charts) * scale;
     let detail = readout.detail.clone();
     let cpu_color = cx.theme().accent;
     let memory_color = cx.theme().success;
@@ -991,6 +1036,7 @@ fn titlebar_capsule(
             "CPU",
             &detail,
             readout.cpu_text(),
+            column(CPU_COLUMN_W),
             cx,
         ));
     }
@@ -1000,6 +1046,7 @@ fn titlebar_capsule(
             t(L10nKey::HostMetricsRam),
             &detail,
             readout.memory_text(),
+            column(RAM_COLUMN_W),
             cx,
         ));
     }
@@ -1009,6 +1056,7 @@ fn titlebar_capsule(
             "GPU",
             &detail,
             readout.gpu_text(),
+            column(GPU_COLUMN_W),
             cx,
         ));
     }
@@ -1026,8 +1074,8 @@ fn titlebar_capsule(
             TrendSeries::Cpu,
             cpu_color,
             100.,
-            chart_w,
-            12.,
+            column(CPU_COLUMN_W),
+            12. * scale,
         ));
     }
     if ram {
@@ -1037,8 +1085,8 @@ fn titlebar_capsule(
             TrendSeries::Memory,
             memory_color,
             100.,
-            chart_w,
-            12.,
+            column(RAM_COLUMN_W),
+            12. * scale,
         ));
     }
     if gpu {
@@ -1048,8 +1096,8 @@ fn titlebar_capsule(
             TrendSeries::Gpu,
             gpu_color,
             100.,
-            chart_w,
-            12.,
+            column(GPU_COLUMN_W),
+            12. * scale,
         ));
     }
 
@@ -1450,8 +1498,8 @@ impl LyrelApp {
             (0., 0.)
         } else {
             (
-                capsule_strip_w(count, true, rem),
-                capsule_strip_w(count, false, rem),
+                capsule_strip_w(toolbar.cpu, toolbar.ram, toolbar.gpu, true, rem),
+                capsule_strip_w(toolbar.cpu, toolbar.ram, toolbar.gpu, false, rem),
             )
         };
         crate::ui::window_chrome::titlebar_fit(
@@ -1550,7 +1598,10 @@ impl LyrelApp {
             rem,
             cx,
         );
-        Some((strip, capsule_strip_w(count, charts, rem)))
+        Some((
+            strip,
+            capsule_strip_w(toolbar.cpu, toolbar.ram, toolbar.gpu, charts, rem),
+        ))
     }
 
     /// The Activity Monitor's resource section: the shared trend-range

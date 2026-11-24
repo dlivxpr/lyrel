@@ -15,7 +15,7 @@ use gpui_kit::{
 use crate::core::git::status::DecoStatus;
 use crate::ui::scm::diff::{
     self as git_diff, CommitLabel, DiffSnapshot, DiffSource, DiffStats, FileDiff, FileStatus,
-    LineKind, Truncation,
+    LineKind, MAX_RENDERED_FILES, Truncation,
 };
 use lyrel_content_diff::{BlockKind, LineSpan};
 use lyrel_core::core::config::DiffViewMode;
@@ -789,6 +789,7 @@ impl LyrelApp {
     pub(crate) fn render_diff_overlay(
         &mut self,
         chrome: DocumentChrome,
+        width: f32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
@@ -814,7 +815,7 @@ impl LyrelApp {
                 .with_uniform_item_height(measurement.row_height());
             overlay.measurement = Some(measurement);
         }
-        let inner = content_inner_mode(window.viewport_size().width);
+        let inner = content_inner_mode(px(width));
         let body = self.sync_diff_rows(inner, cx)?;
         let overlay = self
             .tabs
@@ -1381,6 +1382,12 @@ impl LyrelApp {
             if focused.is_some_and(|f| f != idx) {
                 continue;
             }
+            // The row list stops at the render cap; reading both versions of
+            // a file whose card is never drawn is work past the cap for
+            // nothing.
+            if focused.is_none() && idx >= MAX_RENDERED_FILES {
+                break;
+            }
             let expanded = if focused == Some(idx) {
                 overlay.expanded.get(&file.path).copied().unwrap_or(true)
             } else {
@@ -1448,12 +1455,9 @@ impl LyrelApp {
                             .insert(want.path, ContentState::Failed(ContentFailure::PatchOnly));
                     }
                     Some(plan) => {
-                        let supported =
-                            lyrel_content_diff::language_for_path(Path::new(&want.path))
-                                .or_else(|| {
-                                    lyrel_content_diff::language_for_path(Path::new(&want.old_path))
-                                })
-                                .is_some();
+                        let supported = lyrel_content_diff::language_for_path(&want.path)
+                            .or_else(|| lyrel_content_diff::language_for_path(&want.old_path))
+                            .is_some();
                         if supported {
                             overlay
                                 .content
@@ -2776,7 +2780,10 @@ fn view_mode(cx: &gpui_kit::App) -> DiffViewMode {
 const CONTENT_PAIRED_MIN_WIDTH: Pixels = px(560.);
 
 /// Which layout a content-aware block's inner lines use: the paired view when
-/// the surface can carry two columns, a single sequence otherwise.
+/// the surface can carry two columns, a single sequence otherwise. `width` is
+/// the surface the overlay actually occupies — the document column's when
+/// docked, the body area's when filling — never the window's, which counts
+/// the side panels the overlay does not cover.
 fn content_inner_mode(width: Pixels) -> DiffViewMode {
     match f32::from(width) >= f32::from(CONTENT_PAIRED_MIN_WIDTH) {
         true => DiffViewMode::Split,
@@ -5336,8 +5343,9 @@ mod content_view_tests {
             "the missing capability is named"
         );
         assert!(
-            rows.iter().any(|row| matches!(row, DiffRow::Split { .. })),
-            "the ordinary line diff still draws"
+            rows.iter()
+                .any(|row| matches!(row, DiffRow::Unified { .. })),
+            "the ordinary line diff still draws, single-column at this width"
         );
         assert_eq!(
             vcx.update(|_, cx| cx.global::<Config>().diff_view),
@@ -6155,6 +6163,9 @@ mod content_view_tests {
         let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
         open(&app, &mut vcx, &root, Some("a.rs"), &["a.rs"]);
         pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
+        // The paired layout is a property of the document column, not the
+        // window: seat a column at or over the paired minimum.
+        vcx.simulate_resize(gpui_kit::size(gpui_kit::px(1600.), gpui_kit::px(900.)));
         frame(&app, &mut vcx);
 
         let rows = rows(&app, &mut vcx);
@@ -6168,16 +6179,28 @@ mod content_view_tests {
         assert_eq!(beta.kind, BlockKind::MovedEdited);
         assert_eq!(beta.old, Some(LineSpan { start: 3, end: 5 }));
         assert_eq!(beta.new, Some(LineSpan { start: 5, end: 7 }));
-        assert!(beta.jump.is_some(), "a moved block can jump to its source");
-        assert!(
-            rows.iter().any(|row| matches!(
-                row,
-                DiffRow::ContentAnchor(anchor)
-                    if anchor.name.as_deref() == Some("beta") && anchor.new_start == 5
-            )),
-            "the old position keeps a jumpable anchor"
+        let beta_anchor = rows
+            .iter()
+            .find_map(|row| match row {
+                DiffRow::ContentAnchor(anchor) if anchor.name.as_deref() == Some("beta") => {
+                    Some(anchor)
+                }
+                _ => None,
+            })
+            .expect("the old position keeps a jumpable anchor");
+        assert_eq!(beta_anchor.new_start, 5);
+        let jump = beta.jump.expect("a moved block can jump to its source");
+        assert_eq!(jump.row, CONTENT_ANCHOR_ROW);
+        assert_eq!(
+            jump.hunk, beta_anchor.index,
+            "the block's jump names its own anchor, not itself"
         );
-        // The harness window is wide enough for the paired layout.
+        assert_eq!(beta_anchor.jump.row, CONTENT_HEADER_ROW);
+        assert_eq!(
+            beta_anchor.jump.hunk, beta.index,
+            "the anchor's jump names its block, not itself"
+        );
+        // The resized window seats a docked column wide enough to pair.
         assert!(
             rows.iter()
                 .any(|row| matches!(row, DiffRow::ContentSplit { .. })),
@@ -6257,7 +6280,10 @@ mod content_view_tests {
         open(&app, &mut vcx, &root, Some("a.rs"), &["a.rs"]);
         pump_until(&app, &mut vcx, |app| overlay_ready(app, "a.rs"));
 
-        vcx.simulate_resize(gpui_kit::size(gpui_kit::px(480.), gpui_kit::px(900.)));
+        // A 1000pt window seats a docked column of 370pt — under the paired
+        // minimum — while a 1600pt one seats 670pt, over it. The decision
+        // reads the column, not the window.
+        vcx.simulate_resize(gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(900.)));
         frame(&app, &mut vcx);
         let narrow = rows(&app, &mut vcx);
         assert!(
@@ -6273,13 +6299,13 @@ mod content_view_tests {
             "and not the paired one"
         );
 
-        vcx.simulate_resize(gpui_kit::size(gpui_kit::px(900.), gpui_kit::px(900.)));
+        vcx.simulate_resize(gpui_kit::size(gpui_kit::px(1600.), gpui_kit::px(900.)));
         frame(&app, &mut vcx);
         let wide = rows(&app, &mut vcx);
         assert!(
             wide.iter()
                 .any(|row| matches!(row, DiffRow::ContentSplit { .. })),
-            "a wide surface pairs the columns again"
+            "a wide column pairs the columns again"
         );
     }
 
@@ -6321,9 +6347,15 @@ mod content_view_tests {
                 .any(|row| matches!(row, DiffRow::ContentStatus(L10nKey::DiffContentUnsupported))),
             "the fallback names its reason"
         );
+        let notes_ix = rows
+            .iter()
+            .position(|row| matches!(row, DiffRow::FileHeader(head) if head.path == "notes.txt"))
+            .expect("notes.txt has a card");
         assert!(
-            rows.iter().any(|row| matches!(row, DiffRow::Split { .. })),
-            "and the ordinary line diff still draws"
+            rows[notes_ix..]
+                .iter()
+                .any(|row| matches!(row, DiffRow::Unified { .. })),
+            "and the ordinary line diff still draws — single-column for a new file"
         );
         assert_eq!(
             vcx.update(|_, cx| cx.global::<Config>().diff_view),

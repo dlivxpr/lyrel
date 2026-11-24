@@ -198,6 +198,33 @@ fn comment_and_literal_changes_are_real_edits() {
 }
 
 #[test]
+fn whitespace_inside_a_literal_or_comment_is_content_not_formatting() {
+    // Code spacing collapses, but the bytes inside a string or a comment
+    // are the program's content: changing them is an edit, never a
+    // formatting-only block.
+    let old = "fn a() {}\n\nfn b() {\n    // greet  the user\n    let msg = \"a  b\";\n}\n";
+    let new = "fn a() {}\n\nfn b() {\n    // greet the user\n    let msg = \"a b\";\n}\n";
+    let diff = structural_diff("rust", old, new).expect("rust parses");
+    let b = blocks(&diff)
+        .into_iter()
+        .find(|b| b.name.as_deref() == Some("b"))
+        .expect("b changed");
+    assert!(
+        !b.formatting_only,
+        "the comment and the string changed inside: {b:?}"
+    );
+    assert_eq!(
+        b.edits
+            .iter()
+            .filter(|e| e.kind != EditKind::Context)
+            .count(),
+        4,
+        "both lines report their edits: {:?}",
+        b.edits
+    );
+}
+
+#[test]
 fn added_and_deleted_items_report_their_whole_text_as_edits() {
     let diff = structural_diff("rust", OLD_BASIC, NEW_BASIC).expect("rust parses");
     let delta = blocks(&diff)
@@ -234,14 +261,23 @@ fn reordered_blocks_read_in_new_file_order() {
 
 #[test]
 fn unsupported_language_and_unknown_extension() {
-    assert_eq!(
-        language_for_path(std::path::Path::new("x.rs")),
-        Some("rust")
-    );
-    assert_eq!(language_for_path(std::path::Path::new("x.TSX")), None);
-    assert_eq!(language_for_path(std::path::Path::new("noext")), None);
+    assert_eq!(language_for_path("x.rs"), Some("rust"));
+    assert_eq!(language_for_path("x.TSX"), None);
+    assert_eq!(language_for_path("noext"), None);
     let err = structural_diff("cobol", "a", "b").unwrap_err();
     assert_eq!(err, ContentError::Unsupported);
+}
+
+#[test]
+fn language_selection_reads_git_paths_not_native_ones() {
+    // Git paths are `/`-separated on every platform: a `\` is an ordinary
+    // file-name character, never a separator, and a drive-letter-looking
+    // prefix is part of the name. The native `Path` parser would read both
+    // by the desktop's rules and disagree with the Host that named the file.
+    assert_eq!(language_for_path("dir\\name.rs"), Some("rust"));
+    assert_eq!(language_for_path("c:.rs"), Some("rust"));
+    assert_eq!(language_for_path("src/.gitignore"), None);
+    assert_eq!(language_for_path("dir.rs/"), None);
 }
 
 #[test]
@@ -386,6 +422,44 @@ fn yaml_top_level_keys_match_by_name() {
         .expect("the version key changed");
     assert_eq!(version.kind, BlockKind::Modified);
     assert!(!version.formatting_only);
+}
+
+#[test]
+fn yaml_comments_between_pairs_are_items_of_their_own() {
+    let old = "name: lyrel\n# retries before giving up\nretries: 3\n";
+    let new = "name: lyrel\n# retries before failing\nretries: 3\n";
+    let diff = structural_diff("yaml", old, new).expect("yaml parses");
+    // The changed comment was dropped from the structure once; now it is
+    // an item, so the edit is visible as its deletion and addition. The
+    // pairs around it are untouched and stay out of the sequence.
+    let comments: Vec<_> = blocks(&diff)
+        .into_iter()
+        .filter(|b| b.label == "comment")
+        .collect();
+    assert!(
+        comments.iter().any(|b| b.kind == BlockKind::Deleted)
+            && comments.iter().any(|b| b.kind == BlockKind::Added),
+        "a changed top-level comment is visible: {comments:?}"
+    );
+    assert!(
+        blocks(&diff).iter().all(|b| b.label == "comment"),
+        "the unchanged pairs report nothing: {:?}",
+        blocks(&diff)
+    );
+}
+
+#[test]
+fn yaml_a_moved_comment_reads_as_a_move() {
+    let old = "name: lyrel\n# retries before giving up\nretries: 3\n";
+    let new = "# retries before giving up\nname: lyrel\nretries: 3\n";
+    let diff = structural_diff("yaml", old, new).expect("yaml parses");
+    let moved = blocks(&diff)
+        .into_iter()
+        .find(|b| b.label == "comment")
+        .expect("the comment is an item");
+    assert_eq!(moved.kind, BlockKind::Moved);
+    assert_eq!(moved.old, Some(LineSpan { start: 2, end: 2 }));
+    assert_eq!(moved.new, Some(LineSpan { start: 1, end: 1 }));
 }
 
 #[test]
@@ -1137,7 +1211,7 @@ fn every_advertised_extension_dispatches_to_its_own_grammar() {
     ];
     for (path, language) in cases {
         assert_eq!(
-            language_for_path(std::path::Path::new(path)),
+            language_for_path(path),
             Some(language),
             "{path} must dispatch to {language}"
         );

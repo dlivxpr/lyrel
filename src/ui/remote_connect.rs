@@ -170,11 +170,20 @@ fn refresh_agent_hooks_once(
         Ok(mut seen) if !seen.contains(&id) => seen.push(id),
         _ => return,
     }
+    // Antigravity hook commands only run on a server that speaks
+    // `antigravity-v1`; an older peer keeps its entries untouched.
+    let antigravity_supported = host
+        .peer()
+        .has_feature(crate::daemon::control::feature::ANTIGRAVITY);
     let (host, home) = (Arc::clone(host), home.to_path_buf());
     let launch_commands = launch_commands.clone();
     std::thread::spawn(move || {
-        let refreshed =
-            crate::core::agent_hooks::refresh_remote_hooks(&*host, home, &launch_commands);
+        let refreshed = crate::core::agent_hooks::refresh_remote_hooks(
+            &*host,
+            home,
+            &launch_commands,
+            antigravity_supported,
+        );
         if refreshed > 0 {
             log::info!("refreshed {refreshed} stale agent hook integration(s) on {id:?}");
         }

@@ -336,6 +336,11 @@ const TOML_KINDS: &[KindSpec] = &[
         label: "section",
         name: NameRule::FirstLine,
     },
+    KindSpec {
+        kind: "comment",
+        label: "comment",
+        name: NameRule::Text,
+    },
 ];
 
 const YAML_KINDS: &[KindSpec] = &[
@@ -347,6 +352,11 @@ const YAML_KINDS: &[KindSpec] = &[
     KindSpec {
         kind: "block_sequence",
         label: "sequence",
+        name: NameRule::Text,
+    },
+    KindSpec {
+        kind: "comment",
+        label: "comment",
         name: NameRule::Text,
     },
 ];
@@ -448,13 +458,17 @@ pub(crate) fn kind_spec(spec: &LangSpec, kind: &str) -> Option<&'static KindSpec
 }
 
 /// YAML nests everything under `document` / `block_node` layers; walk through
-/// them to the mapping pairs that carry identity.
+/// them to the mapping pairs that carry identity. A comment sitting between
+/// the pairs is an item of its own — dropped, a comment-only edit would have
+/// no structural presence at all. A comment *inside* a pair's span never
+/// reaches here: the pair is pushed whole and the mapping under it is not
+/// descended, so the pair's text stays its only account.
 pub(crate) fn yaml_document_pairs<'tree>(
     node: tree_sitter::Node<'tree>,
 ) -> Vec<tree_sitter::Node<'tree>> {
     fn descend<'tree>(node: tree_sitter::Node<'tree>, out: &mut Vec<tree_sitter::Node<'tree>>) {
         match node.kind() {
-            "document" | "block_node" | "comment" => {
+            "document" | "block_node" => {
                 let mut cursor = node.walk();
                 for child in node.named_children(&mut cursor) {
                     descend(child, out);
@@ -463,7 +477,7 @@ pub(crate) fn yaml_document_pairs<'tree>(
             "block_mapping" => {
                 let mut cursor = node.walk();
                 for child in node.named_children(&mut cursor) {
-                    if child.kind() == "block_mapping_pair" {
+                    if matches!(child.kind(), "block_mapping_pair" | "comment") {
                         out.push(child);
                     }
                 }

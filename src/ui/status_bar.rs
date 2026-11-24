@@ -94,6 +94,7 @@ fn context_pill(
         .flex_shrink_1()
         .min_w_0()
         .h(rems(1.5))
+        .flex()
         .items_center()
         .gap(px(6.))
         .px(rems(0.5))

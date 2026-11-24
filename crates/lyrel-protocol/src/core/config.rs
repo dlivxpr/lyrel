@@ -815,9 +815,8 @@ pub struct ActivityChannels {
     pub sound: bool,
     /// Whether a tab with this activity counts once toward the app icon's
     /// system badge. Waiting and Failed default on, Ended stays off, and
-    /// Running has no badge channel at all. A row written without this key
-    /// keeps the struct default (off); a whole missing row takes the
-    /// Waiting/Failed default above.
+    /// Running has no badge channel. Rows that omit this field are off
+    /// unless the legacy config migration applies the new defaults.
     #[serde(default)]
     pub badge: bool,
 }
@@ -886,6 +885,7 @@ impl ProgramActivity {
         match activity {
             ActivityState::Running => ActivityChannels {
                 tab: self.running.tab,
+                desktop: false,
                 ..ActivityChannels::default()
             },
             ActivityState::Waiting => self.waiting,

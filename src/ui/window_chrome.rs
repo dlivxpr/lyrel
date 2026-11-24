@@ -801,8 +801,9 @@ mod gpui_tests {
     fn titlebar_fit_stages_narrowing_in_the_approved_order() {
         use super::{PARK_ENTRY_W, TitlebarFit, titlebar_fit, titlebar_required_width};
         // The capsule widths the product derives for all three metrics.
-        let capsule_full = crate::ui::host_metrics::capsule_strip_w(3, true, 16.);
-        let capsule_compact = crate::ui::host_metrics::capsule_strip_w(3, false, 16.);
+        let capsule_full = crate::ui::host_metrics::capsule_strip_w(true, true, true, true, 16.);
+        let capsule_compact =
+            crate::ui::host_metrics::capsule_strip_w(true, true, true, false, 16.);
         let rem = 16.;
         let controls = if cfg!(target_os = "macos") {
             0.

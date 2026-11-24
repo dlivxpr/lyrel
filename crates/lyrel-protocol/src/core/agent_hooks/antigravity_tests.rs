@@ -148,6 +148,46 @@ fn antigravity_registry_lifecycle_preserves_user_entries_and_preferences() {
 }
 
 #[test]
+fn a_configured_launch_with_mode_and_add_dir_still_parses_the_scope() {
+    // The exact-resume adapter treats `--mode` and `--add-dir` as valued
+    // options; a configured launch carrying them must not read as ambiguous
+    // here, or hook management reports ScopeUnavailable for a valid line.
+    let dir = tempfile::tempdir().unwrap();
+    let host = crate::host::local::LocalHost::new();
+    let target = HookTarget::remote(&*host, dir.path().into()).with_launch_commands(
+        &std::collections::HashMap::from([(
+            "antigravity".into(),
+            "agy --mode interactive --add-dir /extra --model test-model".into(),
+        )]),
+    );
+    assert!(matches!(
+        hooks_diagnostic(&target, HookAgent::Antigravity),
+        Some(HooksDiagnostic::AntigravityRegistry { .. })
+    ));
+    install_hooks(&target, HookAgent::Antigravity).unwrap();
+    assert_eq!(
+        hooks_state(&target, HookAgent::Antigravity),
+        HooksState::Installed
+    );
+    uninstall_hooks(&target, HookAgent::Antigravity).unwrap();
+    assert_eq!(
+        hooks_state(&target, HookAgent::Antigravity),
+        HooksState::NotInstalled
+    );
+
+    // A valued option missing its value stays ambiguous, matching the
+    // adapter's "incomplete launch option" refusal.
+    let incomplete = HookTarget::remote(&*host, dir.path().into()).with_launch_commands(
+        &std::collections::HashMap::from([("antigravity".into(), "agy --mode".into())]),
+    );
+    assert!(matches!(
+        hooks_diagnostic(&incomplete, HookAgent::Antigravity),
+        Some(HooksDiagnostic::ScopeUnavailable { .. })
+    ));
+    assert!(install_hooks(&incomplete, HookAgent::Antigravity).is_err());
+}
+
+#[test]
 fn antigravity_registry_rejects_foreign_lyrel_and_invalid_schema() {
     let dir = tempfile::tempdir().unwrap();
     let host = crate::host::local::LocalHost::new();

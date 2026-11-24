@@ -40,12 +40,31 @@ pub(crate) fn classify(address: &str) -> Route {
     }
 }
 
-/// The origin of `address` when it points at this machine's loopback. The
-/// forwarded-endpoint guard compares exactly this value: the scheme, the
-/// loopback host spelling and the port together are the origin web storage
-/// is scoped to.
+/// Canonical loopback origin, including the effective port. Native engines
+/// normalize the hostname before making requests, so the guard must too.
 pub(crate) fn loopback_origin(address: &str) -> Option<String> {
-    lyrel_terminal::loopback::parse_loopback_url(address).map(|loopback| loopback.origin())
+    let url = url::Url::parse(address).ok()?;
+    let port = match url.scheme() {
+        "http" => url.port().unwrap_or(80),
+        "https" => url.port().unwrap_or(443),
+        _ => return None,
+    };
+    let host = url.host()?;
+    let local = match host {
+        url::Host::Domain(host) => {
+            let host = host.trim_end_matches('.');
+            host == "localhost" || host.ends_with(".localhost")
+        }
+        url::Host::Ipv4(ip) => ip.is_loopback() || ip.is_unspecified(),
+        url::Host::Ipv6(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip
+                    .to_ipv4_mapped()
+                    .is_some_and(|ip| ip.is_loopback() || ip.is_unspecified())
+        }
+    };
+    local.then(|| format!("{}://{host}:{port}", url.scheme()))
 }
 
 /// Whether `address` spells the built-in blank page.

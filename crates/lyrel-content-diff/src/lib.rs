@@ -12,7 +12,6 @@
 mod languages;
 
 use std::collections::HashMap;
-use std::path::Path;
 
 use languages::{KindSpec, LangSpec, NameRule};
 
@@ -148,9 +147,23 @@ pub const MAX_FUZZY_BLOCK_LINES: usize = 10_000;
 pub const SIMILARITY_THRESHOLD: f64 = 0.5;
 
 /// The grammar name for a reviewable path, if this build supports one.
-pub fn language_for_path(path: &Path) -> Option<&'static str> {
-    let ext = path.extension()?.to_str()?;
-    languages::spec_for_extension(ext).map(|s| s.name)
+///
+/// `path` is a Git path: `/`-separated on every platform, with no drive
+/// letters and no `\` separators. The extension therefore comes off the
+/// final `/`-separated component directly — never through the native
+/// `Path` parser, which would read a remote Linux path by the desktop's
+/// rules (a `\` in a file name is a separator on Windows, an ordinary
+/// character on the Linux host that named it) and disagree with the Host
+/// that produced the path.
+pub fn language_for_path(path: &str) -> Option<&'static str> {
+    let name = path.rsplit('/').next().unwrap_or_default();
+    let dot = name.rfind('.')?;
+    // A leading dot names a hidden file; it is not an extension separator —
+    // the same call `Path::extension` makes.
+    if dot == 0 {
+        return None;
+    }
+    languages::spec_for_extension(&name[dot + 1..]).map(|s| s.name)
 }
 
 /// Compare `old_text` with `new_text` structurally in `language`.
@@ -219,7 +232,8 @@ struct RawItem {
     end_byte: usize,
     /// The exact text of the item.
     text: String,
-    /// Whitespace-normalized token stream, for formatting comparisons.
+    /// Token stream with code spacing collapsed but string and comment
+    /// text exact, for formatting comparisons.
     norm: String,
 }
 
@@ -357,7 +371,7 @@ fn raw_item(spec: &LangSpec, text: &str, node: tree_sitter::Node) -> RawItem {
         name,
         start_byte,
         end_byte,
-        norm: normalize(slice, spec.significant_indent),
+        norm: normalize(node, text, end_byte, spec.significant_indent),
         text: slice.to_string(),
     }
 }
@@ -407,31 +421,92 @@ fn read_name(kind: &KindSpec, text: &str, node: tree_sitter::Node) -> Option<Str
     }
 }
 
-/// Whitespace-insensitive token stream, for formatting-only detection and
-/// fuzzy similarity. Comments and string contents survive as tokens, so a
-/// change to either is never mistaken for a formatting change.
+/// Token stream with inter-token whitespace collapsed, for formatting-only
+/// detection and fuzzy similarity. String and comment tokens keep their
+/// exact text, so a change inside either — even a whitespace-only one — is
+/// never mistaken for a formatting change; only the spacing between code
+/// tokens collapses.
 ///
 /// In whitespace-significant languages (Python, YAML) a line's leading
-/// whitespace is structure, so it stays in the stream: dedenting a statement
-/// out of a block is an edit, not formatting. Blank lines and trailing spaces
-/// remain cosmetic.
-fn normalize(text: &str, significant_indent: bool) -> String {
+/// whitespace is structure, so each line keeps its raw indent in the
+/// stream: dedenting a statement out of a block is an edit, not formatting.
+/// Blank lines and trailing spaces remain cosmetic.
+fn normalize(
+    node: tree_sitter::Node,
+    text: &str,
+    end_byte: usize,
+    significant_indent: bool,
+) -> String {
+    let mut tokens = Vec::new();
+    collect_leaves(node, end_byte, &mut tokens);
+    let mut out = String::new();
     if !significant_indent {
-        return text.split_whitespace().collect::<Vec<_>>().join(" ");
-    }
-    text.lines()
-        .filter_map(|line| {
-            let line = line.trim_end();
-            let rest = line.trim_start();
-            if rest.is_empty() {
-                return None;
+        for (ix, token) in tokens.iter().enumerate() {
+            if ix > 0 {
+                out.push(' ');
             }
-            let indent = &line[..line.len() - rest.len()];
-            let tokens = rest.split_whitespace().collect::<Vec<_>>().join(" ");
-            Some(format!("{indent}{tokens}"))
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+            out.push_str(&text[token.start_byte()..token.end_byte()]);
+        }
+        return out;
+    }
+    let mut prev_end_row: Option<usize> = None;
+    for token in &tokens {
+        let start_row = token.start_position().row;
+        match prev_end_row {
+            // The previous token ended on this line: same-line spacing is
+            // cosmetic.
+            Some(prev) if start_row <= prev => out.push(' '),
+            _ => {
+                if prev_end_row.is_some() {
+                    out.push('\n');
+                }
+                // The line's leading whitespace, byte-exact: a tab/space
+                // change is a real edit in these languages.
+                let line_start = text[..token.start_byte()]
+                    .rfind('\n')
+                    .map_or(0, |nl| nl + 1);
+                out.push_str(&text[line_start..token.start_byte()]);
+            }
+        }
+        out.push_str(&text[token.start_byte()..token.end_byte()]);
+        prev_end_row = Some(token.end_position().row);
+    }
+    out
+}
+
+/// Leaves and complete literals/comments in source order. Some grammars
+/// expose only the quotes as a string's children, so descending into that
+/// node would drop its content. Use a cursor to keep traversal off the stack.
+fn collect_leaves<'tree>(
+    root: tree_sitter::Node<'tree>,
+    end_byte: usize,
+    out: &mut Vec<tree_sitter::Node<'tree>>,
+) {
+    let mut cursor = root.walk();
+    'walk: loop {
+        let node = cursor.node();
+        let kind = node.kind();
+        if node.child_count() == 0
+            || (node.is_named()
+                && (kind.contains("string")
+                    || kind.contains("comment")
+                    || matches!(kind, "quoted_key" | "interpreted_string_literal")))
+        {
+            if node.start_byte() < end_byte {
+                out.push(node);
+            }
+        } else if cursor.goto_first_child() {
+            continue;
+        }
+        loop {
+            if cursor.goto_next_sibling() {
+                continue 'walk;
+            }
+            if !cursor.goto_parent() {
+                break 'walk;
+            }
+        }
+    }
 }
 
 /// Token multiset similarity in `[0, 1]`, cheap and formatting-robust.

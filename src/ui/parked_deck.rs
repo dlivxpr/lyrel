@@ -15,6 +15,7 @@ use gpui_kit::{
     },
 };
 use lyrel_core::core::machine::TabId;
+use lyrel_ui_base::rounding::POPOVER_RADIUS;
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Instant};
 
 mod graphics;
@@ -824,7 +825,7 @@ impl ParkedDeck {
             .text_color(cx.theme().foreground)
             .border_1()
             .border_color(cx.theme().border)
-            .rounded_lg()
+            .rounded(POPOVER_RADIUS)
             .overflow_hidden()
             .track_focus(&self.focus)
             .role(Role::Group)

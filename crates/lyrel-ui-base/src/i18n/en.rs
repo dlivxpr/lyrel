@@ -13,7 +13,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::NotificationInbox => "Notifications",
         L10nKey::NotificationClearHistory => "Clear notification history",
         L10nKey::NotificationScope => {
-            "App toasts on this computer: success, information, warnings and errors · latest 500. Excludes system notifications, terminal output and events while the GUI is closed."
+            "App toasts, agent waits and results, and terminal events on this computer · latest 500. Excludes system notifications and events while the GUI is closed."
         }
         L10nKey::NotificationDetails => "Full message",
         L10nKey::NotificationBack => "Back to notifications",
@@ -3087,6 +3087,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::DiffContentItemArray => "array",
         L10nKey::DiffContentItemSequence => "sequence",
         L10nKey::DiffContentItemItem => "item",
+        L10nKey::DiffContentItemComment => "comment",
         L10nKey::PendingConnecting => "Connecting to {machine}…",
         L10nKey::PendingUnreachable => "Could not reach {machine}",
         L10nKey::WorktreePromptNeedsName => "The worktree needs a name",
@@ -3726,6 +3727,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::AppAgentHooksNoLyrelHooks => "No lyrel hooks found; nothing to remove",
         L10nKey::AppAgentHooksInstallFailed => "Could not install hooks: {error}",
         L10nKey::AppAgentHooksRemoveFailed => "Could not remove hooks: {error}",
+        L10nKey::AppAgentHooksAntigravityUpdateServer => {
+            "This remote Host's lyrel-server is too old for Antigravity hooks; update lyrel-server there, then install again."
+        }
         L10nKey::AppKeybindingDisplacedNote => {
             "{action} took the shortcut from {previous}, which is now unset."
         }

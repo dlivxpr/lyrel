@@ -1,7 +1,16 @@
 use super::*;
 use crate::view::test_support::*;
 use gpui_kit::TestAppContext;
+use lyrel_core::daemon::protocol::{DaemonMsg, ProgramNote};
 use lyrel_ui_base::notification_history::Severity;
+
+fn osc_note(id: u128, body: impl Into<String>) -> DaemonMsg {
+    DaemonMsg::ProgramNote(ProgramNote {
+        id: uuid::Uuid::from_u128(id),
+        title: None,
+        body: body.into(),
+    })
+}
 
 /// What the label ladder asks a pane: are you showing a name of your own,
 /// or still standing under the app's? (#740)
@@ -1027,8 +1036,7 @@ fn osc_notes_record_within_the_ingress_budget(cx: &mut TestAppContext) {
     // the queue cap — to decide what is shown and what is dropped.
     let mut delivered = Vec::new();
     for index in 0..NOTES_PER_WINDOW + 2 {
-        let note = format!("\x1b]9;t395-flood-{index}\x1b\\").into_bytes();
-        lyrel_core::daemon::protocol::DaemonMsg::Output(note)
+        osc_note(10_000 + index as u128, format!("t395-flood-{index}"))
             .encode(&mut daemon)
             .unwrap();
         let want = (index + 1).min(NOTES_PER_WINDOW + 1);
@@ -1103,7 +1111,7 @@ fn hooked_agent_program_notes_are_swallowed_before_the_history(cx: &mut TestAppC
         cx,
         &mut daemon,
     );
-    lyrel_core::daemon::protocol::DaemonMsg::Output(b"\x1b]9;t395-hook-duplicate\x1b\\".to_vec())
+    osc_note(11_000, "t395-hook-duplicate")
         .encode(&mut daemon)
         .unwrap();
     for _ in 0..400 {
@@ -1121,5 +1129,96 @@ fn hooked_agent_program_notes_are_swallowed_before_the_history(cx: &mut TestAppC
         record_count(cx),
         baseline,
         "the hook duplicate never lands in the history"
+    );
+}
+
+/// The hook/OSC duplicate suppression is the rich session itself, not the
+/// desktop timing gate: with desktop delivery hard-closed (`Never`), a hooked
+/// pane's program note is still swallowed, while the hook notice it
+/// duplicates still records — letting the OSC copy through the
+/// timing-closed moment would double the history entry.
+#[gpui_kit::test]
+fn hooked_agent_program_notes_stay_swallowed_when_desktop_timing_is_closed(
+    cx: &mut TestAppContext,
+) {
+    let _capture = crate::desktop_notification::capture_test_notifications();
+    let _ = take_notifications();
+    let (window, mut daemon) = harness(cx);
+    let _ = take_notifications();
+    lyrel_ui_base::i18n::set_locale("en");
+    configure_notifications(cx, lyrel_core::core::config::NotifyMode::Never, 0);
+    let baseline = record_count(cx);
+    let pane = window.update(cx, |_, _, cx| cx.entity()).unwrap();
+
+    lyrel_core::daemon::protocol::DaemonMsg::Agent(Some(
+        lyrel_core::core::cli_agent::CLIAgent::OhMyPi,
+    ))
+    .encode(&mut daemon)
+    .unwrap();
+    report_agent_state(
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Working,
+            0,
+            "sid-t395-hooks-closed",
+            None,
+        ),
+        &pane,
+        cx,
+        &mut daemon,
+    );
+    osc_note(11_001, "t395-hook-duplicate-closed")
+        .encode(&mut daemon)
+        .unwrap();
+    for _ in 0..400 {
+        pump_foreground(cx);
+        if !take_notifications().is_empty() || record_count(cx) > baseline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    cx.executor()
+        .advance_clock(lyrel_core::core::osc::NOTE_WINDOW * 2);
+    pump_foreground(cx);
+    take_notifications();
+    assert_eq!(
+        record_count(cx),
+        baseline,
+        "the hook duplicate stays out of the history even with the desktop gate closed"
+    );
+
+    // The hook notice itself is an eligible event: it records even while the
+    // timing mode holds its banner back. Poll with the timing gate closed,
+    // the way `poll_foreground` does under `Never`.
+    report_agent_state(
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Waiting,
+            0,
+            "sid-t395-hooks-closed",
+            Some("Approve it, t395?"),
+        ),
+        &pane,
+        cx,
+        &mut daemon,
+    );
+    cx.update_window((*window).into(), |_, window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.poll_agent_status(false, window, cx);
+        })
+    })
+    .unwrap();
+    assert!(
+        take_notifications().is_empty(),
+        "the Never mode keeps its hard gate on the hook banner too"
+    );
+    let recorded = records_since(cx, baseline);
+    assert_eq!(
+        recorded.len(),
+        1,
+        "exactly one record — the hook notice, no OSC duplicate: {recorded:?}"
+    );
+    assert!(
+        recorded[0].1.contains("Approve it, t395?"),
+        "the single record is the hook notice: {:?}",
+        recorded[0].1
     );
 }

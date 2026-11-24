@@ -310,6 +310,43 @@ fn a_lost_forward_blocks_the_stale_port_and_reconnects_explicitly(cx: &mut TestA
     );
 }
 
+#[gpui_kit::test]
+fn a_direct_address_supersedes_a_pending_host_forward(cx: &mut TestAppContext) {
+    let host = remote_host(cx);
+    let verifier = RecordingVerifier::new(Ok(53124));
+    cx.update(|cx| cx.set_global(BrowserForwardVerifier(verifier.clone())));
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    let first = "https://example.test/start";
+    let next = "https://example.test/next";
+    let tab = app.update_in(&mut vcx, |app, _, cx| {
+        app.open_web_page(first, Some(host), cx);
+        active_web(app).unwrap()
+    });
+    settle(&mut vcx);
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(
+            app.browser_surface_commands(&tab),
+            [
+                BrowserCommand::SetRouteGuard {
+                    guard: super::surface::RouteGuard::DenyLoopback
+                },
+                BrowserCommand::Navigate { url: first.into() },
+            ]
+        );
+    });
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.navigate_web_tab(&tab, "http://localhost:3000/old", cx);
+        app.navigate_web_tab(&tab, next, cx);
+    });
+    settle(&mut vcx);
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(
+            app.browser_surface_commands(&tab).last(),
+            Some(&BrowserCommand::Navigate { url: next.into() })
+        );
+    });
+}
+
 // --- Agent previews and explicit feedback (#393) ---
 
 use std::time::{Duration, Instant};
@@ -797,6 +834,85 @@ fn a_missing_source_pane_refuses_the_share_visibly(cx: &mut TestAppContext) {
         take_inputs(&mut streams[0]).is_empty(),
         "the missing pane receives nothing"
     );
+}
+
+#[gpui_kit::test]
+fn a_same_numbered_pane_on_another_route_never_steals_the_share(cx: &mut TestAppContext) {
+    let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
+    settle(&mut vcx);
+    let scratch = tempfile::tempdir().unwrap();
+    let scratch_path = scratch.path().to_string_lossy().into_owned();
+    let (tab, mut other_stream) = app.update_in(&mut vcx, |app, window, cx| {
+        // A pane from another route reuses the original pane's number and
+        // sits in front of it: the share must still resolve the original.
+        let (other, other_stream) = lyrel_terminal::view::quiet_test_pane(1, window, cx);
+        other.update(cx, |view, _| {
+            view.set_workspace(Some(lyrel_ui_base::route::PaneWorkspace {
+                workspace: WorkspaceId::new(),
+                target: RemoteTarget::Direct {
+                    user: "dev".into(),
+                    host: "elsewhere.test".into(),
+                    port: 22,
+                },
+                spec: None,
+                label: None,
+                resize_echo: false,
+            }));
+        });
+        LyrelApp::watch_terminal(&other, window, cx);
+        app.tabs.insert(
+            0,
+            crate::ui::tab::Tab::new(crate::ui::pane::Pane::leaf(
+                crate::ui::pane::PaneSlot::Ready(other),
+            )),
+        );
+        app.reveal_agent_preview(
+            app.workspace,
+            1,
+            "http://localhost:5173/app",
+            &scratch_path,
+            cx,
+        )
+        .expect("the preview opens");
+        let tab = active_web(app).expect("selected");
+        app.attach_test_browser_surface(&tab, cx);
+        (tab, other_stream)
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.browser_preview_feedback_open(&tab, window, cx);
+        let input = app.right_panel.web_pages[&tab]
+            .feedback
+            .as_ref()
+            .expect("the composer exists")
+            .input
+            .clone();
+        input.update(cx, |state, cx| {
+            state.set_value("make the hero blue", window, cx);
+        });
+        app.browser_preview_feedback_send(&tab, window, cx);
+        assert!(
+            app.browser_surface_commands(&tab)
+                .iter()
+                .any(|command| matches!(command, BrowserCommand::Capture { .. })),
+            "the share captures through the surface command path"
+        );
+    });
+    let inputs = wait_for_inputs(&mut vcx, &mut streams[0], "the share");
+    let prompt = String::from_utf8(inputs.concat()).expect("the prompt is UTF-8");
+    assert!(prompt.contains("make the hero blue"), "{prompt}");
+    settle(&mut vcx);
+    assert!(
+        take_inputs(&mut other_stream).is_empty(),
+        "the same-numbered pane on another route receives nothing"
+    );
+    app.read_with(&vcx, |app, _| {
+        let feedback = app.right_panel.web_pages[&tab]
+            .feedback
+            .as_ref()
+            .expect("the composer stays open");
+        assert!(feedback.error.is_none(), "{:?}", feedback.error);
+        assert!(feedback.notice.is_some(), "the sent state is visible");
+    });
 }
 
 #[gpui_kit::test]

@@ -161,8 +161,9 @@ impl TerminalView {
             .notify_on_command_finish
             .allows(window.is_window_active());
         // Ahead of the exit check: what a program said just before its shell
-        // exited is still shown.
-        self.show_program_notes(notify_allowed, window, cx);
+        // exited is still shown. The hook-duplicate suppression inside is a
+        // property of the rich session itself, not of this timing gate.
+        self.show_program_notes(window, cx);
         if self.terminal.exited {
             return;
         }

@@ -4664,11 +4664,6 @@ impl LyrelApp {
     }
 
     pub(crate) fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.set_surface_cover(
-            crate::ui::surface_coordinator::CoverSource::SearchEverywhere,
-            false,
-            cx,
-        );
         let return_focus = self.search.close(cx);
         // A previewed theme was never persisted: closing the search any way
         // other than confirming the pick puts the old one back.
@@ -4680,6 +4675,11 @@ impl LyrelApp {
         // Nor was a symbol Go to Symbol previewed: the caret goes back, and
         // the keyboard with it to the editor it came from.
         self.editor_symbol_preview_cancel(window, cx);
+        self.set_surface_cover(
+            crate::ui::surface_coordinator::CoverSource::SearchEverywhere,
+            false,
+            cx,
+        );
         cx.notify();
     }
 

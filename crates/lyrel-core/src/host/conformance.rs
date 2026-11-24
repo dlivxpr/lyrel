@@ -950,6 +950,13 @@ pub fn git_blob_reads_one_bounded_revision_side(h: &dyn Host, sb: &dyn Sandbox) 
     assert_eq!(h.git_blob(&repo, ":missing.rs", 1024).unwrap(), None);
     let error = h.git_blob(&repo, ":a.rs", 4).unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::FileTooLarge, "{error}");
+    // The sandbox root is not a repository: a repository-level failure is an
+    // error, never a side Git defines as empty.
+    let error = h.git_blob(sb.path(), "HEAD:a.rs", 1024).unwrap_err();
+    assert!(
+        error.to_string().contains("git could not read"),
+        "a broken repository is named, not drawn as an empty side: {error}"
+    );
 }
 
 pub fn git_stdin_is_null(h: &dyn Host, sb: &dyn Sandbox) {

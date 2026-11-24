@@ -397,8 +397,8 @@ fn titlebar_metrics_track_the_context_host_and_click_opens_monitor(cx: &mut Test
         // Park entry and left of the command group.
         let capsule = window.find("titlebar-metrics").bounds();
         assert!(
-            (capsule.size.width - px(204.)).abs() <= px(1.),
-            "the reviewed capsule is approximately 204 px at the default scale"
+            (capsule.size.width - px(224.)).abs() <= px(1.),
+            "the content-sized three-metric capsule is 224 px at the default scale"
         );
         assert!(window.find("titlebar-metric-readings").visible());
         assert!(window.find("titlebar-metric-trends").visible());
@@ -636,14 +636,14 @@ fn narrow_windows_drop_charts_then_hide_the_capsule(cx: &mut TestAppContext) {
         false,
         controls,
         PARK_ENTRY_W,
-        capsule_strip_w(3, true, rem),
+        capsule_strip_w(true, true, true, true, rem),
     );
     let no_charts_w = titlebar_required_width(
         rem,
         false,
         controls,
         PARK_ENTRY_W,
-        capsule_strip_w(3, false, rem),
+        capsule_strip_w(true, true, true, false, rem),
     );
 
     // Wide: the full two-line capsule sits right of the icon-and-count entry.
@@ -653,8 +653,8 @@ fn narrow_windows_drop_charts_then_hide_the_capsule(cx: &mut TestAppContext) {
         let capsule = window.find("titlebar-metrics").bounds();
         let entry = window.find("titlebar-park").bounds();
         assert!(
-            (capsule.size.width - px(204.)).abs() <= px(1.),
-            "the reviewed capsule is approximately 204 px at the default scale"
+            (capsule.size.width - px(224.)).abs() <= px(1.),
+            "the content-sized three-metric capsule is 224 px at the default scale"
         );
         assert!(window.find("titlebar-metric-readings").visible());
         assert!(window.find("titlebar-metric-trends").visible());
@@ -668,12 +668,12 @@ fn narrow_windows_drop_charts_then_hide_the_capsule(cx: &mut TestAppContext) {
     });
 
     // Microcharts no longer fit: the readings and the same Park entry survive.
-    vcx.simulate_resize(size(px(no_charts_w + 8.), px(720.)));
+    vcx.simulate_resize(size(px((no_charts_w + full_w) / 2.), px(720.)));
     settle(&mut vcx);
     vcx.update(|window, _| {
         let capsule = window.find("titlebar-metrics").bounds();
         assert!(
-            (capsule.size.width - px(168.)).abs() <= px(1.),
+            (capsule.size.width - px(219.)).abs() <= px(1.),
             "readings-only is the fallback the narrowing order buys first"
         );
         assert!(window.try_find("titlebar-metric-trends").is_none());
@@ -719,9 +719,16 @@ fn narrow_windows_drop_charts_then_hide_the_capsule(cx: &mut TestAppContext) {
         false,
         controls,
         PARK_ENTRY_W * (rem / 16.),
-        capsule_strip_w(3, false, rem),
+        capsule_strip_w(true, true, true, false, rem),
     );
-    vcx.simulate_resize(size(px(scaled_compact + 30.), px(720.)));
+    let scaled_full = titlebar_required_width(
+        rem,
+        false,
+        controls,
+        PARK_ENTRY_W * (rem / 16.),
+        capsule_strip_w(true, true, true, true, rem),
+    );
+    vcx.simulate_resize(size(px((scaled_compact + scaled_full) / 2.), px(720.)));
     settle(&mut vcx);
     vcx.update(|window, _| {
         assert!(
@@ -1062,20 +1069,46 @@ fn metrics_completion_uses_daemon_identity_without_replaying_old_link_errors(
     }
 }
 
-/// The capsule width hands the chrome budget: three metrics buy the reviewed
-/// ~204 px two-line capsule (plus its trailing gap), fewer buy proportional
-/// widths, and the readings-only fallback is always narrower than the full
-/// capsule for the same count.
+/// The capsule width hands the chrome budget: every enabled metric sums its
+/// own measured minimum column (RAM's unit-carrying reading is the widest),
+/// a charts capsule never narrows a column below the reviewed sparkline
+/// width, and the readings-only fallback stays below the full capsule for
+/// the same set.
 #[test]
-fn capsule_strip_w_scales_with_the_enabled_count() {
-    assert_eq!(capsule_strip_w(3, true, 16.), 216.);
-    assert_eq!(capsule_strip_w(3, false, 16.), 180.);
-    assert_eq!(capsule_strip_w(3, true, 20.), 270.);
-    assert!(capsule_strip_w(1, true, 16.) < capsule_strip_w(3, true, 16.));
-    assert!(capsule_strip_w(2, true, 16.) < capsule_strip_w(3, true, 16.));
-    assert!(capsule_strip_w(3, false, 16.) < capsule_strip_w(3, true, 16.));
-    assert!(capsule_strip_w(2, false, 16.) < capsule_strip_w(2, true, 16.));
-    assert!(capsule_strip_w(1, false, 16.) < capsule_strip_w(1, true, 16.));
+fn capsule_strip_w_sums_the_enabled_metric_minimums() {
+    // All three metrics: 20 padding + 57/78/57 columns + 12 gaps, plus the
+    // 0.75rem trailing gap; readings-only drops the sparkline minimum.
+    assert_eq!(capsule_strip_w(true, true, true, true, 16.), 236.);
+    assert_eq!(capsule_strip_w(true, true, true, false, 16.), 231.);
+    assert_eq!(capsule_strip_w(true, true, true, true, 20.), 295.);
+    // A lone RAM capsule is sized for its own reading (`RAM 888.8 GB`), not
+    // a third of the three-metric capsule — the clipping this contract
+    // guards against.
+    assert_eq!(capsule_strip_w(false, true, false, false, 16.), 110.);
+    assert_eq!(capsule_strip_w(false, true, false, true, 16.), 110.);
+    // CPU-only and GPU-only capsules fit `CPU 100%` / `GPU 100%`; charts
+    // widen those columns to the sparkline minimum.
+    assert_eq!(capsule_strip_w(true, false, false, false, 16.), 86.);
+    assert_eq!(capsule_strip_w(false, false, true, false, 16.), 87.);
+    assert_eq!(capsule_strip_w(true, false, false, true, 16.), 89.);
+    assert_eq!(capsule_strip_w(false, false, true, true, 16.), 89.);
+    // The fallback is always below the full capsule for the same set.
+    assert!(
+        capsule_strip_w(true, true, true, false, 16.)
+            < capsule_strip_w(true, true, true, true, 16.)
+    );
+    // Enabling RAM adds exactly its own column and one gap whichever other
+    // metrics are on — columns never redistribute between combinations.
+    assert_eq!(
+        capsule_strip_w(true, true, false, false, 16.)
+            - capsule_strip_w(true, false, false, false, 16.),
+        84.
+    );
+    assert_eq!(
+        capsule_strip_w(true, true, true, false, 16.)
+            - capsule_strip_w(true, false, true, false, 16.),
+        84.
+    );
 }
 
 #[test]

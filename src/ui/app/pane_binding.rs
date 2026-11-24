@@ -277,7 +277,7 @@ impl LyrelApp {
             |_app, _view, _: &lyrel_terminal::view::AgentStatusChanged, _window, cx| {
                 crate::ui::caffeine::CaffeineState::agents_changed(cx);
                 // The same transition reshapes the inbox's live Pending rows.
-                crate::ui::notification_history::note_agent_status_changed(cx);
+                crate::ui::notification_history::note_pending_changed(cx);
                 // And the process-wide system badge.
                 crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
             },
@@ -387,6 +387,10 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let reminder_changed = self.observe_program_attention(view, frames, window, cx);
+        // A blocked report arriving or resolving reshapes the inbox's live
+        // Pending rows even when no unread cursor moved (blocked → done keeps
+        // the count), so schedule the re-projection like an agent edge does.
+        crate::ui::notification_history::note_pending_changed(cx);
         let active = self.tabs.active_index();
         #[cfg(test)]
         let mut summary_changed = false;

@@ -8,10 +8,9 @@
 //! `WebContext` does not select a `WKWebsiteDataStore`. Owning the view lets
 //! this host do both:
 //!
-//! - Site data is one identified `WKWebsiteDataStore` per Host, created with
-//!   `dataStoreForIdentifier:` from the same stable key the Windows profile
-//!   directory uses. Two Hosts never share cookies or localStorage, and a
-//!   Host's data survives a restart.
+//! - Site data is one identified `WKWebsiteDataStore` per Host and config
+//!   root. The identifier comes from the same profile path Windows uses, so
+//!   unrelated installations stay separate and a restart finds its store.
 //! - The navigation delegate is the route guard: a Host-bound page may only
 //!   load the loopback origin the panel verified, and a loopback request for
 //!   any other origin is cancelled and reported as `RouteBlocked` before it
@@ -91,7 +90,7 @@ impl Host {
             )?;
 
         let configuration = unsafe { WKWebViewConfiguration::new(mtm) };
-        let identifier = NSUUID::from_bytes(super::super::route::site_data_identifier(&site.key));
+        let identifier = NSUUID::from_bytes(super::super::route::site_data_identifier(&site.dir));
         let data_store = unsafe { WKWebsiteDataStore::dataStoreForIdentifier(&identifier, mtm) };
         unsafe { configuration.setWebsiteDataStore(&data_store) };
 
@@ -117,7 +116,17 @@ impl Host {
             webview.setHidden(false);
         }
         let title = BrowserTitleObserver::new(webview.clone(), shared.clone(), mtm);
-        load(&webview, url)?;
+        // A failed initial load must not orphan the native view: `Host` never
+        // takes ownership on this path, so `Drop` never detaches it from the
+        // window. Undo the attachment exactly like `Drop` does, then report.
+        if let Err(error) = load(&webview, url) {
+            unsafe {
+                webview.setNavigationDelegate(None);
+                webview.setUIDelegate(None);
+                webview.removeFromSuperview();
+            }
+            return Err(error);
+        }
         Ok(Self {
             shared,
             webview,
@@ -356,7 +365,14 @@ define_class!(
                 .try_borrow()
                 .is_ok_and(|state| state.guard.allows(&url));
             if !allowed {
-                emit(&self.ivars().shared, BrowserEvent::RouteBlocked { url });
+                // A blocked subframe must not replace its top-level page.
+                if unsafe {
+                    action
+                        .targetFrame()
+                        .is_some_and(|frame| frame.isMainFrame())
+                } {
+                    emit(&self.ivars().shared, BrowserEvent::RouteBlocked { url });
+                }
                 handler.call((WKNavigationActionPolicy::Cancel,));
                 return;
             }

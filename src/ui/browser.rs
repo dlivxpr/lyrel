@@ -606,9 +606,12 @@ impl LyrelApp {
 
     /// Resolves the remembered source pane to a live view on the preview's
     /// verified Host. Every route check the share depends on is here: window
-    /// workspace, pane ownership, Host route and connection. It does not yet
-    /// claim that this is the same pane incarnation that asked for the page —
-    /// [`Self::preview_target`] compares the live binding for that.
+    /// workspace, pane ownership, Host route and connection. The pane number
+    /// alone is not an identity — the same number can be live on another
+    /// Host or workspace — so the lookup resolves the original pane's route
+    /// as well as its number. It does not yet claim that this is the same
+    /// pane incarnation that asked for the page — [`Self::preview_target`]
+    /// compares the live binding for that.
     fn preview_identity(
         &self,
         tab: &WebTab,
@@ -631,12 +634,36 @@ impl LyrelApp {
             .as_ref()
             .map(|host| host.host_id())
             .unwrap_or(HostId::LOCAL);
-        let view = self
+        // A pane number is only unique inside one Host route: the same
+        // number can be live on another Host or workspace, so the original
+        // pane is resolved by route as well as number. A same-numbered pane
+        // elsewhere is kept as a fallback so the checks below still name the
+        // precise mismatch instead of reporting the pane as gone.
+        let mut same_number = self
             .tabs
             .iter()
             .flat_map(|tab| tab.pane.terminals())
-            .find(|view| view.read(cx).pane_id == source.pane)
-            .ok_or(PreviewTargetError::PaneGone)?;
+            .filter(|view| view.read(cx).pane_id == source.pane);
+        let mut elsewhere = None;
+        let mut original = None;
+        for candidate in &mut same_number {
+            let terminal = candidate.read(cx);
+            let on_the_preview_route = match &tab.host {
+                Some(host) => {
+                    terminal.host_id() == host.host_id()
+                        && terminal.workspace().is_some_and(|workspace| {
+                            workspace.workspace == self.workspace && workspace.target == host.target
+                        })
+                }
+                None => terminal.host_id().is_local(),
+            };
+            if on_the_preview_route {
+                original = Some(candidate);
+                break;
+            }
+            elsewhere.get_or_insert(candidate);
+        }
+        let view = original.or(elsewhere).ok_or(PreviewTargetError::PaneGone)?;
         let terminal = view.read(cx);
         if terminal
             .owner_workspace()
@@ -1221,23 +1248,11 @@ impl LyrelApp {
             page.load_error = None;
             page.display_url = url.to_string();
         }
-        let bound = self.web_tab(tab_id).is_some_and(|tab| tab.host.is_some());
-        if bound && route::is_loopback(url) {
-            self.begin_web_load(
-                tab_id,
-                PageLoad::Navigate {
-                    url: url.to_string(),
-                },
-                cx,
-            );
-            return;
-        }
-        self.deliver_web_load(
+        self.begin_web_load(
             tab_id,
             PageLoad::Navigate {
                 url: url.to_string(),
             },
-            None,
             cx,
         );
     }
@@ -1368,6 +1383,12 @@ impl LyrelApp {
                 .unwrap_or_else(|| tab.address.clone()),
             PageLoad::Navigate { url } | PageLoad::External { url } => url.clone(),
         };
+        let Some(page) = self.right_panel.web_pages.get_mut(tab_id) else {
+            return;
+        };
+        page.route_epoch = page.route_epoch.wrapping_add(1);
+        page.route_pending = false;
+        let epoch = page.route_epoch;
         if tab.host.is_none() || !route::is_loopback(&url) {
             self.deliver_web_load(tab_id, load, None, cx);
             return;
@@ -1389,20 +1410,20 @@ impl LyrelApp {
                 // safe: the previous endpoint may already be a coincident
                 // local service (#392).
                 self.set_page_guard(tab_id, surface::RouteGuard::DenyLoopback);
-                let epoch = {
-                    let Some(page) = self.right_panel.web_pages.get_mut(tab_id) else {
-                        return;
-                    };
+                if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
                     page.route_pending = true;
-                    page.route_epoch = page.route_epoch.wrapping_add(1);
                     page.status = PageStatus::Starting;
-                    page.route_epoch
-                };
+                }
                 let verifier = cx
                     .default_global::<route::BrowserForwardVerifier>()
                     .0
                     .clone();
-                let tab_host = tab.host.clone();
+                let host_id = tab
+                    .host
+                    .as_ref()
+                    .expect("a forwarded page has a Host")
+                    .host_id();
+                let connection = crate::ui::desktop_lookups::HostLinks::get(cx, host_id);
                 let async_tab_id = tab_id.to_string();
                 let verify_host = loopback.forward_host().to_string();
                 let verify_port = loopback.port;
@@ -1419,10 +1440,26 @@ impl LyrelApp {
                             .is_some_and(|page| {
                                 page.route_epoch == epoch
                                     && app.web_tab(&async_tab_id).and_then(|tab| tab.host)
-                                        == tab_host
+                                        == tab.host
                             });
                         if !current {
                             return; // A newer route or tab owns the answer now.
+                        }
+                        let live = crate::ui::desktop_lookups::HostLinks::get(cx, host_id);
+                        let same_connection = match (&connection, &live) {
+                            (Some(before), Some(now)) => {
+                                std::sync::Arc::ptr_eq(before, now) && now.client().is_connected()
+                            }
+                            (None, None) => true,
+                            _ => false,
+                        };
+                        if !same_connection || route::owning_workspace(&tab, cx).is_err() {
+                            app.fail_web_route(
+                                &async_tab_id,
+                                "the browser Host connection changed".into(),
+                                cx,
+                            );
+                            return;
                         }
                         match result {
                             Ok(local_port) => {
@@ -1492,19 +1529,22 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let guard = match &verified {
-            Some(verified) => BrowserCommand::SetRouteGuard {
-                guard: surface::RouteGuard::Origin(verified.approved_origin().to_string()),
-            },
-            None => BrowserCommand::SetRouteGuard {
-                guard: surface::RouteGuard::Open,
-            },
+            Some(verified) => surface::RouteGuard::Origin(verified.approved_origin().to_string()),
+            None if self.web_tab(tab_id).is_some_and(|tab| tab.host.is_some()) => {
+                surface::RouteGuard::DenyLoopback
+            }
+            None => surface::RouteGuard::Open,
         };
         match load {
             PageLoad::External { url } => {
-                let target = verified
-                    .as_ref()
-                    .and_then(|verified| verified.forwarded_url(&url))
-                    .unwrap_or(url);
+                let target = if let Some(route) = &verified {
+                    let Some(target) = route.forwarded_url(&url) else {
+                        return;
+                    };
+                    target
+                } else {
+                    url
+                };
                 if matches!(
                     policy::classify(&target),
                     policy::Route::Blank | policy::Route::Deny
@@ -1514,16 +1554,27 @@ impl LyrelApp {
                 cx.open_url(&target);
             }
             PageLoad::Navigate { url } => {
-                let target = verified
-                    .as_ref()
-                    .and_then(|verified| verified.forwarded_url(&url))
-                    .unwrap_or_else(|| url.clone());
+                let target = if let Some(route) = &verified {
+                    let Some(target) = route.forwarded_url(&url) else {
+                        self.fail_web_route(
+                            tab_id,
+                            "the address changed during forwarding".into(),
+                            cx,
+                        );
+                        return;
+                    };
+                    target
+                } else {
+                    url.clone()
+                };
                 if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
                     page.invalidate_still_frame();
                     page.load_error = None;
                     page.display_url = url;
                     if let Some(surface) = page.surface.as_mut() {
-                        if surface.command(guard).is_ok()
+                        if surface
+                            .command(BrowserCommand::SetRouteGuard { guard })
+                            .is_ok()
                             && surface
                                 .command(BrowserCommand::Navigate {
                                     url: target.clone(),
@@ -1558,26 +1609,20 @@ impl LyrelApp {
                     .filter(|url| !url.is_empty())
                     .or_else(|| self.web_tab(tab_id).map(|tab| tab.address.clone()))
                     .unwrap_or_default();
-                let target = verified
-                    .as_ref()
-                    .and_then(|verified| verified.forwarded_url(&original))
-                    .unwrap_or_else(|| initial_navigate_url(&original));
-                let route_guard = match &verified {
-                    Some(verified) => {
-                        surface::RouteGuard::Origin(verified.approved_origin().to_string())
-                    }
-                    None => surface::RouteGuard::Open,
+                let target = if let Some(route) = &verified {
+                    let Some(target) = route.forwarded_url(&original) else {
+                        self.fail_web_route(
+                            tab_id,
+                            "the address changed during forwarding".into(),
+                            cx,
+                        );
+                        return;
+                    };
+                    target
+                } else {
+                    initial_navigate_url(&original)
                 };
-                self.start_web_surface(
-                    tab_id,
-                    parent,
-                    bounds,
-                    scale,
-                    site,
-                    target,
-                    route_guard,
-                    cx,
-                );
+                self.start_web_surface(tab_id, parent, bounds, scale, site, target, guard, cx);
             }
         }
     }
@@ -1659,6 +1704,10 @@ impl LyrelApp {
 
     fn browser_command(&mut self, tab_id: &str, command: BrowserCommand, cx: &mut Context<Self>) {
         if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+            if page.route_pending {
+                page.route_epoch = page.route_epoch.wrapping_add(1);
+                page.route_pending = false;
+            }
             page.invalidate_still_frame();
             if let Some(surface) = page.surface.as_mut()
                 && let Err(error) = surface.command(command)
@@ -1828,6 +1877,8 @@ impl LyrelApp {
                             last: page.route.last_forward().cloned(),
                         };
                         page.status = PageStatus::RouteUnverified(message);
+                    } else if matches!(page.status, PageStatus::Starting | PageStatus::Ready) {
+                        page.status = PageStatus::Ready;
                     }
                 }
                 if host_bound {
@@ -2051,16 +2102,8 @@ impl LyrelApp {
         }
     }
 
-    /// The global toast stack's right inset while a browser page is front.
-    /// Docked, the page occupies the document column at the former
-    /// terminal-side location, and the stack anchors at the window's
-    /// lower-right: clearing the page takes the column's width plus the
-    /// right panel sitting beside it, so the stack lands left of both. A
-    /// filled document spans the terminal column up to the right panel, and
-    /// a toast with no panel to land on can overlap the native page — the
-    /// page's own cover surfaces handle real covers, a toast is not one, so
-    /// the inset stays ordinary rather than pretending the fill shell's
-    /// GPUI layers cover a native HWND. No cover is raised here either way.
+    /// Docked pages leave the lower-right toast stack on the terminal side.
+    /// Filled pages reserve space at the edge of their viewport while toasts exist.
     pub(crate) fn browser_toast_clearance(&self, window: &Window, cx: &gpui_kit::App) -> Pixels {
         if self.active_browser_detail().is_none() {
             return px(8.);
@@ -2189,6 +2232,13 @@ impl LyrelApp {
         use gpui_kit::component::button::ButtonCustomVariant;
         let tab_id = self.active_browser_detail()?.to_string();
         let tab = self.web_tab(&tab_id)?;
+        let toast_lane = if matches!(chrome, DocumentChrome::Fill)
+            && !gpui_kit::component::WindowExt::notifications(window, cx).is_empty()
+        {
+            cx.theme().notification.width + px(16.)
+        } else {
+            px(0.)
+        };
         let theme = cx.theme();
         let (muted, border, foreground) = (theme.muted_foreground, theme.border, theme.foreground);
         let (can_back, can_forward, status, display_url, load_error, title) = self
@@ -2625,7 +2675,7 @@ impl LyrelApp {
             .child(toolbar)
             .children(source_row)
             .children(feedback_row)
-            .child(viewport.children(overlay));
+            .child(viewport.mr(toast_lane).children(overlay));
 
         let shell = v_flex()
             .id("browser-detail-document")

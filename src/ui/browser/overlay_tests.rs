@@ -236,6 +236,74 @@ fn ordinary_toasts_clear_the_page_without_hiding_it(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn filled_browser_keeps_toasts_outside_its_native_viewport(cx: &mut TestAppContext) {
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.update(|window, cx| crate::ui::theme::apply_theme(Some(window), cx));
+    let tab = open_page(&app, &mut vcx, "https://example.test/table");
+    app.update_in(&mut vcx, |app, _, cx| app.toggle_document_fill(cx));
+    frame(&mut vcx);
+    let previous_right =
+        vcx.update(|window, _| window.find("browser-surface-anchor").bounds().right());
+    vcx.update(|window, cx| window.notify_app(Notification::new().message("Saved"), cx));
+    frame(&mut vcx);
+    vcx.update(|window, cx| {
+        let frame = window.find("browser-surface-anchor").bounds();
+        let settings = &gpui_kit::component::Theme::global(cx).notification;
+        assert!(frame.right() <= previous_right - settings.width - settings.margins.right);
+    });
+    assert_eq!(
+        app.read_with(&vcx, |app, _| visibility(app, &tab)),
+        Some(true)
+    );
+}
+
+#[gpui_kit::test]
+fn closing_browser_detail_restores_the_unsaved_editor(cx: &mut gpui_kit::TestAppContext) {
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.simulate_resize(gpui_kit::size(px(1440.), px(900.)));
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("notes.txt");
+    std::fs::write(&path, "hello").unwrap();
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx);
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let editor = loop {
+        vcx.run_until_parked();
+        if let Some(file) = app.read_with(&vcx, |app, cx| app.editor_active_local_file(cx)) {
+            break file.into_input();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fixture file must load"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    };
+    vcx.update(|window, cx| {
+        window.press("end", cx);
+        window.input("!", cx);
+    });
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.open_web_page("about:blank", None, cx);
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("browser-detail-document").visible());
+        assert!(window.try_find("code-status-bar").is_none());
+        window.click("browser-detail-close", cx);
+        window.render_frame(cx);
+        assert!(window.try_find("browser-detail-document").is_none());
+        assert!(window.find("code-status-bar").visible());
+        window.input("?", cx);
+    });
+    assert_eq!(
+        editor.read_with(&vcx, |input, _| input.value().to_string()),
+        "hello!?"
+    );
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "hello");
+}
+
+#[gpui_kit::test]
 fn a_dialog_cover_conceals_and_releases_the_page(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     let tab = open_page(&app, &mut vcx, "https://example.test/dialog");

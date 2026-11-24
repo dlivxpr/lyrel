@@ -146,7 +146,8 @@ const HEADER: usize = 5;
 /// is additive JSON, but a v18 client would ignore the fields and silently
 /// paint a different size, so mixed builds are rejected instead: the daemon
 /// answers its version and closes, and the client reports the update.
-pub const PROTOCOL_VERSION: u32 = 19;
+/// v20 assigns explicit OSC notices an occurrence ID in the owning daemon.
+pub const PROTOCOL_VERSION: u32 = 20;
 
 pub const FEATURE_PANE_OWNER: &str = "pane-owner";
 /// Spawn remains provisional until its requester attaches on the same connection.
@@ -1484,6 +1485,13 @@ pub enum ProgressKind {
     Error,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProgramNote {
+    pub id: uuid::Uuid,
+    pub title: Option<String>,
+    pub body: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonMsg {
     Spawned {
@@ -1543,6 +1551,8 @@ pub enum DaemonMsg {
     /// Sent only to consumers that opted in with
     /// [`ClientMsg::SubscribeProgramStatus`].
     ProgramStatus(crate::core::program_status::ProgramStatusFrame),
+    /// A live OSC notice. The daemon never sends it during attach replay.
+    ProgramNote(ProgramNote),
     Progress(Option<PaneProgress>),
     Cwd(PathBuf),
     Prompt {
@@ -1680,6 +1690,7 @@ mod kind {
     pub const PROGRESS: u8 = 71;
     /// Daemon -> opted-in consumer: baseline or live program-status frame.
     pub const PROGRAM_STATUS: u8 = 75;
+    pub const PROGRAM_NOTE: u8 = 76;
 }
 
 pub fn write_frame<W: Write>(w: &mut W, kind: u8, payload: &[u8]) -> io::Result<()> {
@@ -2189,6 +2200,7 @@ impl DaemonMsg {
             DaemonMsg::Size(size) => write_frame(w, kind::SIZE, &to_json(size)?),
             DaemonMsg::Snapshot(bytes) => write_frame(w, kind::SNAPSHOT, bytes),
             DaemonMsg::Output(bytes) => write_frame(w, kind::OUTPUT, bytes),
+            DaemonMsg::ProgramNote(note) => write_frame(w, kind::PROGRAM_NOTE, &to_json(note)?),
             DaemonMsg::Graphics(frame) => write_frame(w, kind::GRAPHICS, frame),
             DaemonMsg::Colors(frame) => write_frame(w, kind::COLORS, frame),
             DaemonMsg::GraphicsOffer {
@@ -2274,6 +2286,7 @@ impl DaemonMsg {
             kind::SIZE => DaemonMsg::Size(from_json(&payload)?),
             kind::SNAPSHOT => DaemonMsg::Snapshot(payload),
             kind::OUTPUT => DaemonMsg::Output(payload),
+            kind::PROGRAM_NOTE => DaemonMsg::ProgramNote(from_json(&payload)?),
             kind::GRAPHICS => DaemonMsg::Graphics(payload.into()),
             kind::COLORS => DaemonMsg::Colors(payload),
             kind::GRAPHICS_OFFER => {

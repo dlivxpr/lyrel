@@ -5,14 +5,13 @@ use super::{
     EventProxy, GraphicsViewportReporter, LinkSender, PROGRAM_STATUS_PENDING_LIMIT, PaneEvent,
     ReaderSignals, ShellState, TermSize,
 };
-use std::collections::VecDeque;
 use std::io::Read as _;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use crate::bridge::ParseBridge;
-use lyrel_core::core::osc::Note;
+use lyrel_core::core::osc::MAX_PENDING_NOTES;
 use lyrel_core::core::program_status::ProgramStatusFrame;
 use lyrel_core::core::term_modes::KeyboardStacks;
 use lyrel_core::daemon::protocol::{ClientMsg, DaemonMsg, RemoteKind};
@@ -155,7 +154,6 @@ impl ReaderTask {
 struct FrameReader {
     processor: Processor,
     keyboard: KeyboardStacks,
-    osc: OscNotifyScanner,
     pointer_tok: OscTokenizer,
     mode_tok: OscTokenizer,
     zle_tok: OscTokenizer,
@@ -180,7 +178,6 @@ impl FrameReader {
         Self {
             processor: Processor::default(),
             keyboard: KeyboardStacks::default(),
-            osc: OscNotifyScanner::default(),
             pointer_tok: OscTokenizer::new(&[b"22"]),
             mode_tok: OscTokenizer::new(&[b"133"]),
             zle_tok: OscTokenizer::new(&[b"133"]),
@@ -220,7 +217,6 @@ impl FrameReader {
         let Self {
             mut processor,
             mut keyboard,
-            mut osc,
             mut pointer_tok,
             mut mode_tok,
             mut zle_tok,
@@ -388,9 +384,6 @@ impl FrameReader {
                         }
                         if cursor_at_end && term.lock().synchronized_output() {
                             proxy.parse_state.presentation.lock().unwrap().cursor = None;
-                        }
-                        if let Ok(mut notes) = osc_notes.lock() {
-                            osc.feed(&out_batch, &mut *notes);
                         }
                         mode_tok.feed(&out_batch, |payload| {
                             if let Some(mode) = payload.strip_prefix(b"133;V;") {
@@ -705,6 +698,16 @@ impl FrameReader {
                         {
                             proxy.send(PaneEvent::Wakeup);
                         }
+                    }
+                    DaemonMsg::ProgramNote(note) => {
+                        flush_batch!();
+                        if let Ok(mut notes) = osc_notes.lock() {
+                            if notes.len() == MAX_PENDING_NOTES {
+                                notes.pop_front();
+                            }
+                            notes.push_back(note);
+                        }
+                        proxy.send(PaneEvent::Wakeup);
                     }
                     DaemonMsg::Output(bytes) => {
                         // Live output only ever follows the whole
@@ -1077,52 +1080,6 @@ fn stale_mode_resets(mode: Mode) -> Vec<u8> {
         seq.extend_from_slice(b"\x1b[?1004l");
     }
     seq
-}
-
-/// Notes queued for a view that has not polled: a burst keeps only its
-/// newest few, so it shows as a few rather than a spray.
-const MAX_OSC_NOTES: usize = 3;
-
-struct OscNotifyScanner {
-    tok: OscTokenizer,
-    notes: lyrel_core::core::osc::Notifications,
-}
-
-impl Default for OscNotifyScanner {
-    fn default() -> Self {
-        Self {
-            tok: OscTokenizer::new(&[b"9", b"99", b"777"]),
-            notes: Default::default(),
-        }
-    }
-}
-
-impl OscNotifyScanner {
-    fn feed(&mut self, bytes: &[u8], out: &mut VecDeque<Note>) {
-        let notes = &mut self.notes;
-        self.tok.feed(bytes, |payload| {
-            if let Some(note) = parse_osc_notification(notes, payload) {
-                if out.len() >= MAX_OSC_NOTES {
-                    out.pop_front();
-                }
-                out.push_back(note);
-            }
-        });
-    }
-}
-
-fn parse_osc_notification(
-    notes: &mut lyrel_core::core::osc::Notifications,
-    payload: &[u8],
-) -> Option<Note> {
-    if lyrel_core::core::cli_agent::parse_agent_event(payload).is_some() {
-        return None;
-    }
-    let (title, body) = notes.parse(payload)?;
-    if title.as_deref() == Some(lyrel_core::core::cli_agent::AGENT_EVENT_SENTINEL) {
-        return None;
-    }
-    Some((title, body))
 }
 
 /// A point in a batch of pty output where the reader stops advancing the

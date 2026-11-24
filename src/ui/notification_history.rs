@@ -25,17 +25,30 @@ pub use lyrel_ui_base::notification_history::{
     NotificationSourceResolver, install_notification_source_resolver,
 };
 
+/// Why a pane needs the user right now. Both states are live observations —
+/// an agent's own wait or a program's OSC 7501 `blocked` report — and both
+/// resolve out of the projection the moment the pane reports them settled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PendingState {
+    /// An agent session reported `Waiting`.
+    Waiting,
+    /// A program record reported `blocked`, with its reason when given.
+    Blocked(Option<lyrel_core::core::program_status::BlockedKind>),
+}
+
 /// One pane that needs the user right now, projected from live observation.
 /// Pending is never persisted: stale history can never assert a current
 /// blocker, and a restart starts with an empty Pending list.
 pub(crate) struct PendingItem {
     pub(crate) source: Source,
+    pub(crate) state: PendingState,
     pub(crate) since_ms: Option<u64>,
 }
 
 /// The live Pending rows across every open window: every pane whose agent is
-/// currently Waiting. Records stay in the inbox; this is the other half of
-/// "unresolved attention", read fresh on each render.
+/// currently Waiting or whose program records report `blocked`. Records stay
+/// in the inbox; this is the other half of "unresolved attention", read fresh
+/// on each render.
 pub(crate) fn pending(cx: &App) -> Vec<PendingItem> {
     let mut items = Vec::new();
     for app in crate::ui::windows::WindowRegistry::live_apps(cx) {
@@ -44,8 +57,9 @@ pub(crate) fn pending(cx: &App) -> Vec<PendingItem> {
     items
 }
 
-/// Stable element identity for a Pending row: the Host-scoped tab, pane and
-/// owner it navigates to — never the row's list position.
+/// Stable element identity for a Pending row: the Host, tab, pane and owner
+/// it navigates to — never the row's list position. The Host scopes the id
+/// because tab and pane numbers are only unique within one Host.
 pub(crate) fn pending_element_id(source: &Source) -> String {
     let owner = match source.pane_owner {
         Some(lyrel_core::core::pane_sidecar::PaneOwner::Workspace) => "workspace",
@@ -53,20 +67,23 @@ pub(crate) fn pending_element_id(source: &Source) -> String {
         None => "unknown",
     };
     format!(
-        "notification-pending-{}-{}-{owner}",
+        "notification-pending-{}-{}-{}-{owner}",
+        source.host,
         source.tab.map(|tab| tab.to_string()).unwrap_or_default(),
         source.pane.map(|pane| pane.to_string()).unwrap_or_default(),
     )
 }
 
-/// Bumped on every Working/Waiting/Done transition in any window so open
-/// inbox views re-project Pending. The projection itself is a live read; the
-/// epoch only schedules the re-render, the way Caffeine's signal does.
+/// Bumped on every observed transition that can reshape Pending — an agent's
+/// Working/Waiting/Done edge or a program record's blocked report arriving or
+/// resolving — so open inbox views re-project. The projection itself is a
+/// live read; the epoch only schedules the re-render, the way Caffeine's
+/// signal does.
 #[derive(Default)]
 pub(crate) struct PendingEpoch(pub(crate) u64);
 impl gpui_kit::Global for PendingEpoch {}
 
-pub(crate) fn note_agent_status_changed(cx: &mut App) {
+pub(crate) fn note_pending_changed(cx: &mut App) {
     cx.default_global::<PendingEpoch>().0 += 1;
 }
 
@@ -197,23 +214,42 @@ impl LyrelApp {
         }
     }
 
-    /// Every currently waiting pane in this window — the live Pending half of
-    /// the inbox. Exited terminals and settled states drop out at read time,
-    /// so a row can only exist while its blocker is real.
+    /// Every pane currently waiting on the user in this window — the live
+    /// Pending half of the inbox. An agent's `Waiting` and a program record's
+    /// OSC 7501 `blocked` both qualify; a pane reporting both projects once,
+    /// as the agent's wait. Exited terminals and settled states drop out at
+    /// read time, so a row can only exist while its blocker is real.
     pub(crate) fn collect_pending(&self, items: &mut Vec<PendingItem>, cx: &App) {
         use crate::core::cli_agent::AgentStatus;
+        use lyrel_core::core::program_status::ProgramState;
         for tab in &self.tabs {
             for leaf in tab.pane.terminals() {
                 let view = leaf.read(cx);
                 if view.terminal.exited {
                     continue;
                 }
-                let Some(session) = view.agent_session() else {
-                    continue;
+                let waiting = view
+                    .agent_session()
+                    .filter(|session| session.status == AgentStatus::Waiting);
+                // The same live records the status bar reads: a blocked
+                // program is a wait even when no agent is attached. The most
+                // recently updated blocked record names the reason and age.
+                let blocked = view.with_program_status(|status| {
+                    status
+                        .records()
+                        .filter(|record| record.state() == ProgramState::Blocked)
+                        .max_by_key(|record| record.updated())
+                        .map(|record| (record.kind(), record.updated()))
+                });
+                let (state, since_ms) = match (waiting, blocked) {
+                    (Some(session), _) => (PendingState::Waiting, session.since_ms),
+                    // `updated` is authoritative Unix nanoseconds; Pending
+                    // ages in milliseconds like the agent's `since_ms`.
+                    (None, Some((kind, updated))) => {
+                        (PendingState::Blocked(kind), Some(updated / 1_000_000))
+                    }
+                    (None, None) => continue,
                 };
-                if session.status != AgentStatus::Waiting {
-                    continue;
-                }
                 let Some(pane) =
                     crate::ui::pane_sidecar::scoped_pane(&PaneSlot::Ready(leaf.clone()), cx)
                 else {
@@ -221,7 +257,8 @@ impl LyrelApp {
                 };
                 items.push(PendingItem {
                     source: self.notification_source_for_leaf(tab, pane, cx),
-                    since_ms: session.since_ms,
+                    state,
+                    since_ms,
                 });
             }
         }

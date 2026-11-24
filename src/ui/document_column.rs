@@ -579,7 +579,7 @@ impl LyrelApp {
         let body = self.document_body_px(window, cx);
         let surface = match self.document_front()? {
             OverlayTop::Code => self.render_code_overlay(chrome, window, cx),
-            OverlayTop::Diff => self.render_diff_overlay(chrome, window, cx),
+            OverlayTop::Diff => self.render_diff_overlay(chrome, width, window, cx),
             OverlayTop::Github => self.render_github_detail_document(chrome, window, cx),
             OverlayTop::Browser => self.render_browser_document(chrome, window, cx),
         }?;

@@ -97,13 +97,12 @@ test('permits Markdown only through the opt-in native harness', () => {
   assert.deepEqual(check(input), ['lyrel declares a direct production dependency on lyrel-markdown-editor']);
 });
 
-test('allows the Side Panel engines only on their native targets', () => {
+test('permits Windows browser bindings and keeps wry in the editor', () => {
   const input = graph();
   const root = input.packages.find(pkg => pkg.name === 'lyrel');
   root.dependencies.push({ ...dep('webview2-com'), target: 'cfg(windows)' });
-  root.dependencies.push({ ...dep('wry'), target: 'cfg(target_os = "macos")' });
   assert.deepEqual(check(input), []);
-  root.dependencies.push(dep('wry'));
+  root.dependencies.push({ ...dep('wry'), target: 'cfg(target_os = "macos")' });
   assert.deepEqual(check(input), ['lyrel declares a direct production dependency on wry']);
 });
 
