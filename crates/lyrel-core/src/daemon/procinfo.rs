@@ -1536,12 +1536,6 @@ mod tests {
     /// The bound is the whole point: this probe runs on the daemon thread that
     /// answers `QueryProcs`, and an `lsof` wedged on a dead mount used to own
     /// it forever.
-    ///
-    /// The sleeper is deliberately a wrapper around a second process, which is
-    /// the shape that makes this hard: killing the child does not close the
-    /// pipe its own child inherited, so a `wait_with_output` after the kill
-    /// would sit on that pipe for the full sleep and hand the caller a timeout
-    /// that took as long as no timeout at all.
     #[test]
     fn a_probe_that_never_finishes_is_killed_and_named() {
         let cmd = sleeper_command();
@@ -1663,9 +1657,8 @@ mod tests {
 
     #[cfg(windows)]
     fn sleeper_command() -> std::process::Command {
-        // `ping` is the sleep every Windows image has.
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/c", "ping", "-n", "20", "127.0.0.1"]);
+        let mut c = std::process::Command::new("ping.exe");
+        c.args(["-n", "20", "127.0.0.1"]);
         c
     }
 

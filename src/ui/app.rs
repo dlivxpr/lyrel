@@ -5715,6 +5715,7 @@ pub(crate) mod test_window {
     /// tests (#348) reopen at their simulated relaunch. Callers that simulate
     /// the relaunch itself use [`open_window_on`] so the rest of the app
     /// state — the config above all — survives the "restart".
+    #[cfg(test)]
     pub(crate) fn harness_on_workspace(
         cx: &mut TestAppContext,
         workspace: lyrel_ui_base::session::WorkspaceId,

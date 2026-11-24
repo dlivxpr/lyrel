@@ -290,7 +290,7 @@ impl BrowserSurfaceHost {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub fn test_commands(&self) -> Vec<BrowserCommand> {
         match &self.inner {
             Inner::Test(surface) => surface.commands.borrow().clone(),
@@ -300,7 +300,7 @@ impl BrowserSurfaceHost {
     }
 
     /// The last visibility the panel asked the recording surface for.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub fn test_visibility(&self) -> Option<bool> {
         match &self.inner {
             Inner::Test(surface) => surface.visible.get(),
@@ -310,7 +310,7 @@ impl BrowserSurfaceHost {
     }
 
     /// How many times the panel handed native focus back to the page.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub fn test_focus_requests(&self) -> usize {
         match &self.inner {
             Inner::Test(surface) => surface.focus_requests.get(),
@@ -321,7 +321,7 @@ impl BrowserSurfaceHost {
 
     /// Pretends the user clicked into the page, so a cover can record that the
     /// native surface held focus.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub fn test_take_focus(&self) {
         if let Inner::Test(surface) = &self.inner {
             surface.focused.set(true);

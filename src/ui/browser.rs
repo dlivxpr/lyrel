@@ -1721,7 +1721,7 @@ impl LyrelApp {
     /// The recording-surface seam for automated window tests: attaches the
     /// test host to the page so command and visibility paths run for real
     /// without starting a WebView.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub(crate) fn attach_test_browser_surface(&mut self, tab_id: &str, cx: &mut Context<Self>) {
         let tab_id = tab_id.to_string();
         let page = self
@@ -1737,7 +1737,7 @@ impl LyrelApp {
         cx.notify();
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub(crate) fn browser_surface_commands(&self, tab_id: &str) -> Vec<BrowserCommand> {
         self.right_panel
             .web_pages
