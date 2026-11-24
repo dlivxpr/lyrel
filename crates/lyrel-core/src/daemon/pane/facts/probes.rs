@@ -4,6 +4,8 @@ use std::sync::Mutex;
 use crate::daemon::protocol::RemoteContext;
 use portable_pty::MasterPty;
 
+use super::reader::AgentProbe;
+
 pub(in super::super) fn foreground_command_running(
     master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
     shell_pid: Option<u32>,
@@ -125,7 +127,8 @@ pub(in super::super) fn foreground_remote_context(
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(in super::super) fn foreground_agent(
     master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
-) -> Option<Option<(crate::core::cli_agent::CLIAgent, Vec<String>)>> {
+    _shell_pid: Option<u32>,
+) -> AgentProbe {
     let detect = || {
         let pid = master
             .lock()
@@ -138,14 +141,31 @@ pub(in super::super) fn foreground_agent(
         )?;
         Some((agent, argv))
     };
-    Some(detect())
+    AgentProbe::Foreground(detect())
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+/// A partial process snapshot cannot retire an established agent identity.
+#[cfg(windows)]
 pub(in super::super) fn foreground_agent(
     _master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
-) -> Option<Option<(crate::core::cli_agent::CLIAgent, Vec<String>)>> {
-    None
+    shell_pid: Option<u32>,
+) -> AgentProbe {
+    let Some((pid, processes)) = shell_pid.and_then(|pid| {
+        crate::daemon::winproc::checked_snapshot().map(|processes| (pid, processes))
+    }) else {
+        return AgentProbe::Unavailable;
+    };
+    AgentProbe::AntigravityChild(crate::daemon::winproc::has_antigravity_child(
+        &processes, pid,
+    ))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+pub(in super::super) fn foreground_agent(
+    _master: &Mutex<Option<Box<dyn MasterPty + Send>>>,
+    _shell_pid: Option<u32>,
+) -> AgentProbe {
+    AgentProbe::Unavailable
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]

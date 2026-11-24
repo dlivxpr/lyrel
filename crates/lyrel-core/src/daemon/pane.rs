@@ -975,7 +975,7 @@ impl DaemonPane {
             ForegroundProbes {
                 group: Box::new(|| None),
                 remote: Box::new(|| None),
-                agent: Box::new(|| None),
+                agent: Box::new(|| facts::AgentProbe::Unavailable),
                 cwd: Box::new(|| None),
                 local_group: crate::daemon::procinfo::foreground_group_is_local,
             },
@@ -2350,7 +2350,7 @@ mod tests {
             ForegroundProbes {
                 group: Box::new(|| None),
                 remote: Box::new(|| None),
-                agent: Box::new(|| None),
+                agent: Box::new(|| facts::AgentProbe::Unavailable),
                 cwd: Box::new(|| None),
                 local_group: |_| Some(true),
             },
@@ -2435,7 +2435,7 @@ mod tests {
             ForegroundProbes {
                 group: Box::new(|| None),
                 remote: Box::new(|| None),
-                agent: Box::new(|| None),
+                agent: Box::new(|| facts::AgentProbe::Unavailable),
                 cwd: Box::new(|| None),
                 local_group: |_| Some(true),
             },
@@ -2525,7 +2525,7 @@ mod tests {
                     remote: Box::new(|| None),
                     agent: Box::new(move || {
                         counted.fetch_add(1, Ordering::SeqCst);
-                        None
+                        facts::AgentProbe::Unavailable
                     }),
                     cwd: Box::new(|| None),
                     local_group: |_| Some(true),

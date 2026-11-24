@@ -7,6 +7,7 @@ pub(crate) mod output_marks;
 pub(super) mod probes;
 mod reader;
 use output_marks::{ShellState, SniffSignals};
+pub(super) use reader::AgentProbe;
 pub(super) use reader::{FactReader, ForegroundProbes};
 
 /// Display-only process evidence, discarded after one pane-list request.

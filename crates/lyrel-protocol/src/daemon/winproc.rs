@@ -45,6 +45,30 @@ pub fn foreground_name(procs: &[Proc], shell_pid: u32) -> Option<String> {
         .map(|(_, _, name)| name.to_string())
 }
 
+/// Match Antigravity's launcher or runtime only below this pane's shell.
+/// ConPTY exposes no foreground PGID, and some shells emit no command mark.
+pub fn has_antigravity_child(procs: &[Proc], shell_pid: u32) -> bool {
+    procs.iter().any(|process| {
+        if process.pid == shell_pid
+            || !(process.name.eq_ignore_ascii_case("agy.exe")
+                || process.name.eq_ignore_ascii_case("antigravity-cli.exe"))
+        {
+            return false;
+        }
+        let mut parent = process.parent;
+        for _ in 0..procs.len() {
+            if parent == shell_pid {
+                return true;
+            }
+            let Some(ancestor) = procs.iter().find(|p| p.pid == parent && p.pid != p.parent) else {
+                break;
+            };
+            parent = ancestor.parent;
+        }
+        false
+    })
+}
+
 pub fn snapshot() -> Vec<Proc> {
     checked_snapshot().unwrap_or_default()
 }
@@ -358,6 +382,23 @@ mod tests {
     fn foreground_name_breaks_depth_ties_by_pid() {
         let procs = vec![p(100, 1, "sh"), p(200, 100, "a"), p(201, 100, "b")];
         assert_eq!(foreground_name(&procs, 100).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn antigravity_belongs_only_to_its_own_shell() {
+        let procs = [
+            p(100, 1, "pwsh.exe"),
+            p(200, 1, "pwsh.exe"),
+            p(210, 200, "agy.exe"),
+            p(220, 210, "Antigravity-CLI.exe"),
+        ];
+        assert!(!has_antigravity_child(&procs, 100));
+        assert!(has_antigravity_child(&procs, 200));
+        assert!(has_antigravity_child(
+            &[procs[1].clone(), p(220, 200, "antigravity-cli.exe")],
+            200
+        ));
+        assert!(!has_antigravity_child(&procs[..2], 200));
     }
 
     #[test]

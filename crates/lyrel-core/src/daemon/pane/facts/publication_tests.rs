@@ -85,7 +85,7 @@ fn a_pane_title_reaches_the_machine_tree() {
             ForegroundProbes {
                 group: Box::new(|| None),
                 remote: Box::new(|| None),
-                agent: Box::new(|| Some(None)),
+                agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Foreground(None)),
                 cwd: Box::new(|| None),
                 local_group: |_| Some(true),
             },
@@ -138,7 +138,7 @@ fn output_readiness_cannot_overtake_its_osc_facts_or_wait_for_process_probes() {
         ForegroundProbes {
             group: Box::new(|| None),
             remote: Box::new(|| None),
-            agent: Box::new(|| Some(None)),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Foreground(None)),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },
@@ -233,7 +233,7 @@ fn output_readiness_does_not_wait_for_machine_subscribers() {
         ForegroundProbes {
             group: Box::new(|| None),
             remote: Box::new(|| None),
-            agent: Box::new(|| Some(None)),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Foreground(None)),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },

@@ -298,7 +298,7 @@ impl PaneBackend {
                     }
                 }),
                 remote: Box::new(move || foreground_remote_context(&remote_master)),
-                agent: Box::new(move || foreground_agent(&agent_master)),
+                agent: Box::new(move || foreground_agent(&agent_master, shell_pid)),
                 cwd: Box::new(move || foreground_cwd(&cwd_master, shell_pid)),
                 local_group: crate::daemon::procinfo::foreground_group_is_local,
             },

@@ -25,7 +25,7 @@ fn live_pty_child_argv_detects_the_agent() {
 
     let mut detected = None;
     for _ in 0..200 {
-        if let Some(agent) = foreground_agent(&master).flatten() {
+        if let AgentProbe::Foreground(Some(agent)) = foreground_agent(&master, None) {
             detected = Some(agent);
             break;
         }
@@ -76,6 +76,40 @@ fn resumed_output_marks_do_not_release_the_running_agent() {
     assert!(
         state.facts.agent.is_none(),
         "the actual shell exit releases the agent"
+    );
+}
+
+/// Process-name detection (the only kind a ConPTY pane has for a manually
+/// started agent) carries no argv. Applying it must not stamp an empty argv
+/// over the richer one a shell mark mapped — the probe names the agent; the
+/// launch args stay the mark's, or "set current launch args as default" would
+/// silently degrade to a bare executable name.
+#[test]
+fn name_only_detection_keeps_the_mapped_launch_argv() {
+    use crate::core::cli_agent::CLIAgent;
+
+    let mut state = test_state(true);
+    let mapped: Vec<String> = ["agy", "--effort", "high"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    state.with_facts(|facts, emit| {
+        apply_agent(facts, Some((CLIAgent::Antigravity, mapped.clone())), emit)
+    });
+    assert_eq!(state.facts.agent_argv, Some(mapped.clone()));
+
+    state.with_facts(|facts, emit| {
+        apply_agent(facts, Some((CLIAgent::Antigravity, Vec::new())), emit)
+    });
+    assert_eq!(
+        state.facts.agent,
+        Some(CLIAgent::Antigravity),
+        "the same agent still stands"
+    );
+    assert_eq!(
+        state.facts.agent_argv,
+        Some(mapped),
+        "an empty argv stamps nothing over the mapped one"
     );
 }
 
@@ -200,7 +234,7 @@ fn a_pane_killed_with_its_agent_keeps_the_facts_a_resume_needs() {
             ForegroundProbes {
                 group: Box::new(|| None),
                 remote: Box::new(|| None),
-                agent: Box::new(|| Some(None)),
+                agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Foreground(None)),
                 cwd: Box::new(|| None),
                 local_group: |_| Some(true),
             },
@@ -285,7 +319,7 @@ fn an_explicit_agent_exit_clears_the_live_and_reopened_machine_snapshot() {
             remote: Box::new(|| None),
             // Unsupported or unavailable process probes must not be needed
             // to honor the agent's own explicit shutdown event.
-            agent: Box::new(|| None),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Unavailable),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },
@@ -461,7 +495,7 @@ fn negative_process_probes_preserve_rich_turn_until_the_shell_prompt() {
                     as crate::daemon::procinfo::MediaProcessRoot)
             }),
             remote: Box::new(|| None),
-            agent: Box::new(|| Some(None)),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Foreground(None)),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },

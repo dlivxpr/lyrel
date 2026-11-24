@@ -677,7 +677,25 @@ impl WindowChrome {
         };
         let right = gpui_kit::div().flex_none().w(px(right_width)).child(right);
         let right = if self.park.is_some() {
-            h_flex().flex_1().min_w_0().justify_end().child(right)
+            // The centered Park entry leaves this side's flex reach blank
+            // between the slot and the strip; the band is exactly that empty
+            // reach. It carries the same native caption and move gesture as
+            // the left half's row, and it ends where the strip begins, so the
+            // capsule, the command tiles and the native controls keep their
+            // own hit targets and the strip's own drag handling.
+            let gap = title_bar_row(
+                h_flex()
+                    .id("workbench-right-gap-drag")
+                    .flex_1()
+                    .min_w_0()
+                    .h(rems(3.)),
+                "workbench-right-gap-drag",
+                window_move_locked,
+                window,
+                cx,
+            )
+            .test_support();
+            h_flex().flex_1().min_w_0().child(gap).child(right)
         } else {
             right
         };
@@ -923,7 +941,14 @@ mod gpui_tests {
 
     /// The Park entry sits at the geometric window midpoint whatever the
     /// side panels do, and neither command group nor the capsule ever reach
-    /// over it. The drag band beside it never shrinks away.
+    /// over it. The drag band beside it never shrinks away, and the blank
+    /// reach right of the slot is covered by a native drag band of its own:
+    /// it abuts the slot exactly, ends exactly where the strip begins, and
+    /// spans the bar's height, so no dead region survives beside the entry.
+    /// (gpui keeps the window-control hitboxes crate-private, so the band's
+    /// caption and move gesture are locked on `title_bar_row`'s builder in
+    /// `window_drag_tests`; here the harness asserts the band's consumer
+    /// geometry.)
     #[gpui_kit::test]
     fn park_entry_sits_at_the_window_midpoint_and_clears_both_sides(cx: &mut TestAppContext) {
         let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
@@ -975,6 +1000,30 @@ mod gpui_tests {
                             "width {width}: the right group clears the capsule"
                         );
                     }
+                    let gap = window.find("workbench-right-gap-drag").bounds();
+                    assert!(
+                        (f32::from(gap.left()) - f32::from(entry.right())).abs() <= 1.,
+                        "width {width}: the right gap band starts where the centered slot ends, \
+                         got {gap:?} beside entry {entry:?}"
+                    );
+                    let controls_left = window
+                        .try_find("titlebar-metrics")
+                        .map_or(right_group.left(), |capsule| capsule.bounds().left());
+                    let blank_midpoint = (entry.right() + controls_left) / 2.;
+                    assert!(
+                        blank_midpoint < gap.right() && gap.right() <= controls_left,
+                        "width {width}: the right gap band covers the middle of the blank area \
+                         without reaching into the controls, got {gap:?} before {controls_left:?}"
+                    );
+                    assert!(
+                        gap.size.width > px(0.),
+                        "width {width}: the fit predicate keeps the center slot's breathing room"
+                    );
+                    assert_eq!(
+                        gap.size.height,
+                        window.find("workbench-left-drag").bounds().size.height,
+                        "width {width}: the right gap band spans the bar like the left row"
+                    );
                     for id in [
                         "titlebar-left-panel",
                         "titlebar-search",
