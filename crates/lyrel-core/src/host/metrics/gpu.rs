@@ -641,7 +641,33 @@ pub(crate) use windows::GpuSampler;
 mod macos_gpu_tests {
     use super::*;
 
+    /// Runs on every macOS host including virtualized CI runners that have no
+    /// `IOAccelerator` `PerformanceStatistics`: the sampler must return either
+    /// a bounded percentage or an explicit unavailability reason.
     #[test]
+    fn macos_gpu_sampler_reports_bounded_percent_or_reason() {
+        let mut sampler = GpuSampler::open();
+        match sampler.sample() {
+            GpuReading::Busy(percent) => {
+                assert!(
+                    percent.is_finite() && (0.0..=100.0).contains(&percent),
+                    "macOS GPU utilization out of range: {percent}"
+                );
+            }
+            GpuReading::Unavailable(reason) => {
+                assert!(
+                    !reason.trim().is_empty(),
+                    "unavailable GPU reading must explain why"
+                );
+            }
+        }
+    }
+
+    /// Real-device probe for macOS `IOAccelerator` GPU counters. Not a CI case
+    /// — virtualized macOS CI runners may not expose `PerformanceStatistics` —
+    /// run explicitly on physical macOS hardware with a GPU.
+    #[test]
+    #[ignore = "probes real IOAccelerator GPU counters; run explicitly on physical macOS GPU hardware"]
     fn macos_gpu_sampler_returns_utilization() {
         let mut sampler = GpuSampler::open();
         let reading = sampler.sample();
