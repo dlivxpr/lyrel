@@ -76,6 +76,24 @@ fn page_surface<'a>(app: &'a LyrelApp, tab: &str) -> &'a BrowserSurfaceHost {
 }
 
 #[gpui_kit::test]
+fn closing_the_last_terminal_tab_hides_the_native_page(cx: &mut TestAppContext) {
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    let tab = open_page(&app, &mut vcx, "https://example.test/preview");
+
+    app.update_in(&mut vcx, |app, window, cx| app.close_tab(0, window, cx));
+    frame(&mut vcx);
+
+    vcx.update(|window, _| {
+        assert!(window.try_find("browser-surface-anchor").is_none());
+    });
+    assert_eq!(
+        app.read_with(&vcx, |app, _| visibility(app, &tab)),
+        Some(false),
+        "the native page must leave the empty workspace when the Side Panel unmounts"
+    );
+}
+
+#[gpui_kit::test]
 fn search_everywhere_conceals_the_page_and_restores_it_without_a_reload(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     let tab = open_page(&app, &mut vcx, "https://example.test/form");

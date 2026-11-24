@@ -1584,6 +1584,9 @@ impl LyrelApp {
             self.sftp_close_browser(cx);
         }
         if !panel_open {
+            // Losing the last terminal tab also unmounts the panel, without a
+            // tool layout write or another paint from the native page.
+            self.sync_browser_surfaces(cx);
             self.sftp_panel.panel_was_closed = true;
             return None;
         }

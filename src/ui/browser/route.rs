@@ -217,20 +217,19 @@ pub(crate) fn owning_workspace(
         .host
         .as_ref()
         .ok_or_else(|| RouteFailure::new("this page is not bound to a Host"))?;
-    let workspace = crate::ui::remote_workspace::pane_workspace_for(cx, host.workspace)
+    let client_workspace = lyrel_ui_base::session::WorkspaceStore::all(cx)
+        .views
+        .iter()
+        .find(|view| view.open && view.host.as_ref() == Some(host))
+        .map(|view| view.id);
+    client_workspace
+        .and_then(|id| crate::ui::remote_workspace::pane_workspace_for(cx, id))
         .ok_or_else(|| {
             RouteFailure::new(format!(
                 "{} is no longer open in this window",
                 host.route_label("this Host")
             ))
-        })?;
-    if workspace.target != host.target {
-        return Err(RouteFailure::new(format!(
-            "{} now describes a different Host; reopen the page from its Workspace",
-            host.route_label("this Host")
-        )));
-    }
-    Ok(workspace)
+        })
 }
 
 /// What it takes to load `url` for `tab`, or a failure to show.

@@ -123,11 +123,13 @@ fn remote_host(cx: &mut TestAppContext) -> RemoteRef {
         host: "remote.test".into(),
         port: 22,
     };
-    let workspace = cx.update(|cx| {
+    let host = RemoteRef::new(target, WorkspaceId::new());
+    cx.update(|cx| {
         WorkspaceStore::init(cx);
-        WorkspaceStore::claim_remote(cx, RemoteRef::new(target.clone(), WorkspaceId::new()))
+        let client = WorkspaceStore::claim_remote(cx, host.clone());
+        assert_ne!(client, host.workspace);
     });
-    RemoteRef::new(target, workspace)
+    host
 }
 
 fn settle(vcx: &mut gpui_kit::VisualTestContext) {
@@ -154,6 +156,13 @@ fn a_host_bound_page_verifies_before_load_and_keeps_the_host_address(cx: &mut Te
         layout_active_web(&app.tool_layout()).expect("the page is selected")
     });
     settle(&mut vcx);
+    let viewport = vcx.update(|window, _| window.find("browser-surface-anchor").bounds());
+    assert!(viewport.size.height > gpui_kit::px(100.));
+    assert_eq!(
+        app.read_with(&vcx, |app, _| app.right_panel.web_pages[&tab_id].bounds),
+        Some(viewport),
+        "the native surface fills the browser viewport"
+    );
 
     assert_eq!(
         verifier.calls(),

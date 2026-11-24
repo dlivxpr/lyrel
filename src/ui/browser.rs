@@ -617,8 +617,7 @@ impl LyrelApp {
             Some(host) => {
                 terminal.host_id() == host.host_id()
                     && terminal.workspace().is_some_and(|workspace| {
-                        workspace.workspace == source.workspace
-                            && workspace.target.host_id() == host.host_id()
+                        workspace.workspace == self.workspace && workspace.target == host.target
                     })
             }
             None => terminal.host_id().is_local(),
@@ -1846,6 +1845,9 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.right_panel_open(cx) {
+            return;
+        }
         let Some(layout) = self.right_panel.tool_layouts.get(&self.workspace) else {
             return;
         };
@@ -1873,6 +1875,12 @@ impl LyrelApp {
                 || f32::from(old.size.height - bounds.size.height).abs() > 0.5
         });
         page.bounds = Some(bounds);
+        // A transition can briefly leave no viewport to mount into. Let the
+        // next layout pass start the surface once it has usable bounds.
+        if bounds.size.width <= px(1.) || bounds.size.height <= px(1.) {
+            page.sync_visibility(false, covered);
+            return;
+        }
         if let Some(surface) = page.surface.as_mut() {
             if changed {
                 surface.set_bounds(bounds, scale);
@@ -1924,35 +1932,42 @@ impl LyrelApp {
         );
     }
 
-    /// Watchdog for pages whose paint stopped — tab switch, panel collapse,
-    /// workspace switch, or a covering overlay concealing the area. The
-    /// native child hides once the grace expires; the page itself is never
-    /// touched, so scroll position, an unsubmitted form and focus return all
-    /// survive. Cover state is re-read on every tick, not only when a paint
-    /// happens, so a menu or dialog in another crate still reaches the page.
+    /// Syncs retained native pages after panel, selection, or cover changes.
+    /// A recently painted page can come back after a cover lifts, retaining
+    /// its scroll position, form draft, and focus. An unmounted panel never
+    /// shows a native child, even when its saved layout is still open.
     pub(crate) fn sync_browser_surfaces(&mut self, cx: &mut Context<Self>) {
         const VISIBLE_GRACE: std::time::Duration = std::time::Duration::from_millis(1500);
-        let layout = self.tool_layout();
-        let active_web = layout_active_web(&layout);
-        let panel_open = layout.open;
+        if self.right_panel.web_pages.is_empty() {
+            return;
+        }
+        let panel_open = self.right_panel_open(cx);
+        let active_web = if panel_open {
+            layout_active_web(&self.tool_layout())
+        } else {
+            None
+        };
         let now = std::time::Instant::now();
         // Covers are window-scoped (a dialog in another window must not hide
         // this page); resolve each painted window once per pass.
         let mut covered_by_window: std::collections::HashMap<gpui_kit::WindowId, bool> =
             std::collections::HashMap::new();
-        for page in self.right_panel.web_pages.values() {
-            if let Some(window) = page.window_id {
-                covered_by_window.entry(window).or_insert_with(|| {
-                    self.native_surface_cover_registered(window, cx)
-                        || crate::ui::surface_coordinator::popup_menu_open_for_window(window, cx)
-                });
+        if panel_open {
+            for page in self.right_panel.web_pages.values() {
+                if let Some(window) = page.window_id {
+                    covered_by_window.entry(window).or_insert_with(|| {
+                        self.native_surface_cover_registered(window, cx)
+                            || crate::ui::surface_coordinator::popup_menu_open_for_window(
+                                window, cx,
+                            )
+                    });
+                }
             }
         }
         let mut notify = false;
         for (tab_id, page) in self.right_panel.web_pages.iter_mut() {
             let selected = active_web.as_deref() == Some(tab_id.as_str());
             let painted = selected
-                && panel_open
                 && now.duration_since(page.last_paint) < VISIBLE_GRACE
                 && page.bounds.is_some_and(|bounds| {
                     f32::from(bounds.size.width) > 1. && f32::from(bounds.size.height) > 1.
@@ -1964,8 +1979,7 @@ impl LyrelApp {
             if page.sync_visibility(painted, covered) {
                 notify = true;
             }
-            // A live page keeps repainting so the watchdog can tell "still
-            // shown" from "concealed": while visible, stay in the paint set.
+            // Refresh the anchor while the page is visible.
             if painted && !covered {
                 cx.notify();
             }
@@ -1980,6 +1994,9 @@ impl LyrelApp {
     /// instead of covering it. No cover is raised here — a toast never hides
     /// the page.
     pub(crate) fn browser_toast_clearance(&self, window: &Window, cx: &gpui_kit::App) -> Pixels {
+        if !self.right_panel_open(cx) {
+            return px(8.);
+        }
         let layout = self.tool_layout();
         if layout.open && layout_active_web(&layout).is_some() {
             px(self.right_panel_px(window, cx) + 8.)
@@ -2096,8 +2113,7 @@ pub(crate) fn browser_host_label(tab: &WebTab) -> gpui_kit::SharedString {
     }
 }
 
-/// Renders one web tab's page: the chrome row over the native surface's
-/// paint anchor. `tab` is the layout entry the selection named.
+/// Renders the browser controls above the native surface's paint anchor.
 pub(crate) fn render_browser_page(
     app: &mut LyrelApp,
     tab: &WebTab,
@@ -2211,6 +2227,7 @@ pub(crate) fn render_browser_page(
         Button::new("browser-preview-share")
             .label(t(L10nKey::BrowserPreviewShare))
             .small()
+            .flex_shrink_0()
             .tooltip(t(L10nKey::BrowserPreviewShareTip))
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.browser_preview_feedback_open(&tab_id, window, cx);
@@ -2226,8 +2243,6 @@ pub(crate) fn render_browser_page(
         .gap_1()
         .px_1()
         .py_1()
-        .border_b_1()
-        .border_color(border)
         .child(icon_button(
             "browser-back",
             IconName::ArrowLeft,
@@ -2267,11 +2282,29 @@ pub(crate) fn render_browser_page(
                     ),
                 ),
         )
+        .child(icon_button(
+            "browser-external",
+            IconName::ExternalLink,
+            L10nKey::BrowserOpenExternal,
+            true,
+            |this, tab_id, cx| this.browser_open_external(tab_id, cx),
+        ));
+
+    let host_label = browser_host_label(tab);
+    let identity_row = h_flex()
+        .flex_none()
+        .min_w_0()
+        .w_full()
+        .gap_1()
+        .px_1()
+        .pb_1()
+        .border_b_1()
+        .border_color(border)
         .child(
             div()
                 .id("browser-host")
                 .test_support()
-                .flex_none()
+                .min_w_0()
                 .px_2()
                 .h(px(20.))
                 .flex()
@@ -2280,13 +2313,19 @@ pub(crate) fn render_browser_page(
                 .bg(cx.theme().muted)
                 .text_xs()
                 .text_color(muted)
-                .child(browser_host_label(tab)),
+                .tooltip({
+                    let label = host_label.clone();
+                    move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(label.clone()).build(window, cx)
+                    }
+                })
+                .child(div().min_w_0().truncate().child(host_label)),
         )
         .children(source_label.map(|label| {
             div()
                 .id("browser-preview-source")
                 .test_support()
-                .flex_none()
+                .flex_shrink_0()
                 .px_2()
                 .h(px(20.))
                 .flex()
@@ -2302,17 +2341,10 @@ pub(crate) fn render_browser_page(
                 })
                 .child(label)
         }))
-        .children(share_button)
-        .child(icon_button(
-            "browser-external",
-            IconName::ExternalLink,
-            L10nKey::BrowserOpenExternal,
-            true,
-            |this, tab_id, cx| this.browser_open_external(tab_id, cx),
-        ));
+        .children(share_button);
 
     let tab_id_bounds = tab.id.clone();
-    let anchor = div()
+    let viewport = div()
         .flex_1()
         .min_w_0()
         .min_h_0()
@@ -2331,9 +2363,9 @@ pub(crate) fn render_browser_page(
                 }
             }
         })
-        // `on_children_prepainted` is delivered for child bounds; the empty
-        // child gives the native surface a real paint event to anchor to.
-        .child(div().size_full())
+        // Inset the measured child against the resolved viewport. Percentage
+        // height can resolve to zero inside the surrounding flex column.
+        .child(div().absolute().inset_0())
         .id("browser-surface-anchor")
         .test_support();
 
@@ -2444,16 +2476,9 @@ pub(crate) fn render_browser_page(
         .min_w_0()
         .min_h_0()
         .child(toolbar)
+        .child(identity_row)
         .children(feedback_row)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .min_h_0()
-                .relative()
-                .child(anchor)
-                .children(overlay),
-        )
+        .child(viewport.children(overlay))
         .into_any_element()
 }
 

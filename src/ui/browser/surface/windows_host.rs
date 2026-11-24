@@ -35,6 +35,7 @@ struct Shared {
     webview: Option<ICoreWebView2>,
     initial_url: String,
     visible: bool,
+    pending_captures: usize,
     /// Whether the WebView currently holds keyboard focus, tracked from the
     /// controller's GotFocus/LostFocus pair so a cover can hand it back.
     focused: bool,
@@ -89,6 +90,7 @@ impl Host {
             webview: None,
             initial_url: url.to_string(),
             visible: true,
+            pending_captures: 0,
             focused: false,
             rect,
             closed: false,
@@ -593,17 +595,24 @@ impl Host {
     }
 
     pub fn set_visible(&mut self, visible: bool) {
-        let (host, controller) = {
+        let (host, update_controller) = {
             let mut state = self.shared.borrow_mut();
             if state.closed || state.visible == visible {
                 return;
             }
             state.visible = visible;
-            (state.host, state.controller.clone())
+            (
+                state.host,
+                (visible || state.pending_captures == 0)
+                    .then(|| state.controller.clone())
+                    .flatten(),
+            )
         };
         unsafe {
             let _ = ShowWindow(host, if visible { SW_SHOWNOACTIVATE } else { SW_HIDE });
-            if let Some(controller) = controller {
+            // Hiding the child gives the overlay input and paint precedence.
+            // Turning off WebView2 first would stall CapturePreview's callback.
+            if let Some(controller) = update_controller {
                 let _ = controller.SetIsVisible(visible);
             }
         }
@@ -664,6 +673,7 @@ impl Host {
                     let shared = self.shared.clone();
                     let handler = CapturePreviewCompletedHandler::create(Box::new(
                         move |result: windows::core::Result<()>| {
+                            finish_capture(&shared);
                             let captured = result
                                 .map_err(|error| error.to_string())
                                 .and_then(|()| stream_png(&read_back));
@@ -682,17 +692,33 @@ impl Host {
                             Ok(())
                         },
                     ));
-                    webview
-                        .CapturePreview(
-                            COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
-                            &stream,
-                            &handler,
-                        )
-                        .map_err(|error| BrowserSurfaceError::Platform(error.to_string()))?;
+                    self.shared.borrow_mut().pending_captures += 1;
+                    if let Err(error) = webview.CapturePreview(
+                        COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG,
+                        &stream,
+                        &handler,
+                    ) {
+                        finish_capture(&self.shared);
+                        return Err(BrowserSurfaceError::Platform(error.to_string()));
+                    }
                 }
             }
         }
         Ok(())
+    }
+}
+
+fn finish_capture(shared: &RefCell<Shared>) {
+    let controller = {
+        let mut state = shared.borrow_mut();
+        state.pending_captures -= 1;
+        if state.visible || state.pending_captures != 0 {
+            return;
+        }
+        state.controller.clone()
+    };
+    if let Some(controller) = controller {
+        let _ = unsafe { controller.SetIsVisible(false) };
     }
 }
 
