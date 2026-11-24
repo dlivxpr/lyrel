@@ -149,7 +149,7 @@ impl TerminalView {
         cx.emit(TitleContractUnsupported);
     }
 
-    pub fn poll_foreground(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub fn poll_foreground(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.completion.has_work() {
             let context = self.completion_context();
             if self.completion.observe_context(context) {
@@ -161,8 +161,9 @@ impl TerminalView {
             .notify_on_command_finish
             .allows(window.is_window_active());
         // Ahead of the exit check: what a program said just before its shell
-        // exited is still shown.
-        self.show_program_notes(notify_allowed, window, cx);
+        // exited is still shown. The hook-duplicate suppression inside is a
+        // property of the rich session itself, not of this timing gate.
+        self.show_program_notes(window, cx);
         if self.terminal.exited {
             return;
         }
@@ -201,22 +202,26 @@ impl TerminalView {
                 let title = std::mem::take(&mut self.running_title);
                 let agent = self.running_agent.take();
                 self.running_since = None;
-                if notify_allowed {
-                    match agent {
-                        Some(_) if self.agent_activity.was_rich() => {}
-                        Some(agent) => self.notify_agent_finished(agent, elapsed, cx),
-                        None => {
-                            let threshold = std::time::Duration::from_secs(
-                                cx.global::<Config>().notify_threshold_secs,
+                // Eligibility (threshold, rich hooks) decides what enters the
+                // history; the timing mode only decides the desktop banner.
+                match agent {
+                    Some(_) if self.agent_activity.was_rich() => {}
+                    Some(agent) => {
+                        self.notify_agent_finished(agent, elapsed, notify_allowed, window, cx)
+                    }
+                    None => {
+                        let threshold = std::time::Duration::from_secs(
+                            cx.global::<Config>().notify_threshold_secs,
+                        );
+                        if elapsed >= threshold {
+                            self.notify_command_finished(
+                                &title,
+                                self.terminal.last_exit_code(),
+                                elapsed,
+                                notify_allowed,
+                                window,
+                                cx,
                             );
-                            if elapsed >= threshold {
-                                self.notify_command_finished(
-                                    &title,
-                                    self.terminal.last_exit_code(),
-                                    elapsed,
-                                    cx,
-                                );
-                            }
                         }
                     }
                 }

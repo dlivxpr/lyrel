@@ -27,7 +27,7 @@ chrono = "0.4.45"
 serde.workspace = true
 serde_json.workspace = true
 smol.workspace = true
-uuid = { version = "1.28.0", features = ["v4", "serde"] }
+uuid = { version = "1.28.0", features = ["v4", "v5", "serde"] }
 yaml_serde.workspace = true
 plist = "1"
 parking_lot = { version = "0.13", optional = true }

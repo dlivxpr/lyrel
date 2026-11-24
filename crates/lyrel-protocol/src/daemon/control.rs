@@ -87,7 +87,18 @@ use super::protocol::{MAX_FRAME, read_frame, write_frame};
 /// v21 adds `DirectoryScan` and the `disk-usage-v1` feature. The owning
 /// host scans the directory under a work bound and reports its volume size.
 /// v22 adds the bounded native session `SessionBatch` request/reply pair.
-pub const CONTROL_VERSION: u32 = 22;
+/// v23 adds `GitBlob` and the `git-blob-v1` feature: one revision-addressed
+/// file version read under a byte bound on the owning host, so the
+/// content-aware Diff never transfers an unbounded `git show`. A peer
+/// without the feature is never asked; the view keeps its line fallback and
+/// names the missing capability instead.
+/// v24 adds `PreviewOpen` and its event: the agent-facing entry point that
+/// asks the one control link holding a pane's workspace — and negotiated the
+/// `preview` capability — to show a Side Panel page without taking keyboard
+/// focus. The request is never broadcast: an unclaimed workspace, or one
+/// held by a link that did not ask for previews, has no target. `preview` is
+/// additive on the wire, while the request and event variants are not.
+pub const CONTROL_VERSION: u32 = 24;
 
 const DIALECT_MARKER: &str = "speaks control v";
 
@@ -179,6 +190,12 @@ pub mod feature {
     /// [`crate::host::sqlite::SqliteRequest`]. A peer without it is asked for
     /// nothing, and the caller sees `Unsupported` rather than an empty schema.
     pub const SQLITE_BROWSE: &str = "sqlite-browse-v1";
+    /// The peer answers [`ControlRequest::GitBlob`] on the owning host: one
+    /// revision-addressed file version, bounded before it crosses the wire.
+    /// A peer without it is never asked — a `Git` request would carry the
+    /// whole `git show` output — and the content-aware Diff shows its line
+    /// fallback with the missing-capability reason (#389).
+    pub const GIT_BLOB: &str = "git-blob-v1";
     pub const HOST_METRICS: &str = "host-metrics-v1";
     /// The peer's `HostMetrics` answer may carry `lyrel_usage`: its own
     /// daemon process stamped with the control instance. Appended as an
@@ -218,6 +235,11 @@ pub mod feature {
     pub const CLOSED_TABS: &str = "closed-tabs";
     /// Native session preparation; never send the new request to older peers.
     pub const SESSION_OPERATIONS: &str = "session-operations-v1";
+    /// The peer can resume one exact Antigravity CLI conversation. History is
+    /// read through `sqlite-browse-v1` + `agent-environment`, but the session
+    /// operation itself executes there, so an older peer must be refused
+    /// before the request reaches the wire.
+    pub const ANTIGRAVITY: &str = "antigravity-v1";
     pub const AGENT_ENVIRONMENT: &str = "agent-environment";
     pub const HERMES_HISTORY: &str = "hermes-history-v1";
     /// Optional since_ms in AgentStates; absent means unknown age.
@@ -337,6 +359,15 @@ pub enum ControlRequest {
         cwd: String,
         args: Vec<String>,
     },
+    /// One file version from a git revision expression (`rev:path`, or
+    /// `:path` for the index), bounded by `max_bytes` on the owning host.
+    /// Gated on [`feature::GIT_BLOB`]; the bytes ride as the reply blob and
+    /// `present` distinguishes an empty file from an absent side.
+    GitBlob {
+        cwd: String,
+        spec: String,
+        max_bytes: u64,
+    },
 
     Shells,
 
@@ -393,6 +424,27 @@ pub enum ControlRequest {
         /// wrong one.
         #[serde(default)]
         workspace: Option<WorkspaceId>,
+    },
+
+    /// An agent's request to show one page in the Side Panel of the control
+    /// link that currently holds the requesting pane's workspace and
+    /// negotiated preview delivery (#393).
+    ///
+    /// The owning daemon resolves `pane` to its workspace and Host from its
+    /// own tree — never from a client-supplied workspace — and refuses a
+    /// pane it does not serve. Delivery is targeted, never broadcast: an
+    /// unclaimed workspace, or one held by a link that did not ask for
+    /// previews, answers `false`. The receiving GUI reveals the page without
+    /// taking keyboard focus or activating a window. `scratch` is an
+    /// absolute directory on that pane's Host where the explicit user share
+    /// action may later write a screenshot; the owning daemon accepts an
+    /// absolute path from its caller and otherwise resolves one in its own
+    /// temporary directory, so a client routed through `-m` never guesses
+    /// another machine's paths. A web page never supplies it.
+    PreviewOpen {
+        pane: u64,
+        url: String,
+        scratch: String,
     },
 
     MachineGet,
@@ -702,7 +754,9 @@ impl ControlRequest {
             CreateFileNew { .. } | CreateDir { .. } | Rename { .. } | Remove { .. } => {
                 Duration::from_secs(10)
             }
-            Git { .. } | GitStream { .. } | Search { .. } => Duration::from_secs(20),
+            Git { .. } | GitStream { .. } | GitBlob { .. } | Search { .. } => {
+                Duration::from_secs(20)
+            }
             // Past the host's own time budget (`ContentLimits::max_millis`),
             // so a search that ran long still gets to say what it found.
             SearchContent { .. } => Duration::from_secs(30),
@@ -711,6 +765,7 @@ impl ControlRequest {
             SessionBatch { .. } => Duration::from_secs(180),
             WorkspaceAttach { .. } | WorkspaceDetach { .. } => Duration::from_secs(10),
             GuiOpen { .. } => Duration::from_secs(5),
+            PreviewOpen { .. } => Duration::from_secs(5),
             MachineGet
             | WorkspaceTree { .. }
             | WorkspaceSidecarGet { .. }
@@ -749,7 +804,9 @@ impl ControlRequest {
     pub fn returns_blob(&self) -> bool {
         matches!(
             self,
-            ControlRequest::ReadFile { .. } | ControlRequest::ReadChunk { .. }
+            ControlRequest::ReadFile { .. }
+                | ControlRequest::ReadChunk { .. }
+                | ControlRequest::GitBlob { .. }
         )
     }
 }
@@ -790,6 +847,13 @@ pub enum ReplyOk {
     ReadOpened {
         session: u64,
         meta: Meta,
+    },
+    /// One revision-addressed file version; `present` separates an absent
+    /// side from an empty file, and `len` is the byte count of the blob that
+    /// travels with this reply.
+    GitBlob {
+        present: bool,
+        len: u64,
     },
     Hits(Vec<SearchHit>),
     ContentHits(ContentResults),
@@ -1021,6 +1085,18 @@ pub enum ControlEvent {
         #[serde(default)]
         workspace: Option<WorkspaceId>,
     },
+    /// One preview an agent requested, delivered only to the control link
+    /// that holds the pane's workspace and negotiated preview support
+    /// (#393). `workspace` is the owning machine's workspace id; the
+    /// receiving GUI maps it (for a remote Host, through its own view
+    /// record) and refuses to guess another window. `scratch` is the
+    /// absolute screenshot directory on the pane's Host.
+    PreviewOpen {
+        workspace: String,
+        pane: u64,
+        url: String,
+        scratch: String,
+    },
     Layout {
         workspace: String,
         /// Boxed: a `LayoutDelta` is hundreds of bytes and this event rides
@@ -1059,6 +1135,13 @@ pub struct ControlHello {
     pub client_hostname: String,
     #[serde(default)]
     pub gui: bool,
+    /// This connection accepts agent preview requests for its GUI process
+    /// (#393). Separate from `gui`, which names the app that may be told to
+    /// open a window: a desktop's remote control link must receive previews
+    /// without making a remote `GuiOpen` believe a GUI lives on that Host.
+    /// Additive on the wire — an older daemon ignores it.
+    #[serde(default)]
+    pub preview: bool,
 }
 
 impl ControlHello {
@@ -1069,14 +1152,23 @@ impl ControlHello {
             client_token: client_token.into(),
             client_hostname: client_hostname.into(),
             gui: false,
+            preview: false,
         }
     }
 
     pub fn gui(client_token: impl Into<String>, client_hostname: impl Into<String>) -> Self {
         ControlHello {
             gui: true,
+            preview: true,
             ..Self::host_rpc(client_token, client_hostname)
         }
+    }
+
+    /// Marks a desktop connection that consumes preview requests but is not
+    /// this machine's GUI launcher. Used by the remote workspace link.
+    pub fn with_preview(mut self) -> Self {
+        self.preview = true;
+        self
     }
 }
 
@@ -2177,6 +2269,11 @@ mod tests {
                 cwd: "/home/me/proj".into(),
                 args: vec!["status".into(), "--porcelain".into()],
             },
+            ControlRequest::GitBlob {
+                cwd: "/home/me/proj".into(),
+                spec: ":src/main.rs".into(),
+                max_bytes: 1 << 20,
+            },
             ControlRequest::WatchOpen {
                 dirs: vec!["/home/me/proj".into()],
             },
@@ -2188,6 +2285,11 @@ mod tests {
             ControlRequest::GuiOpen {
                 path: Some("/home/me/proj".into()),
                 workspace: None,
+            },
+            ControlRequest::PreviewOpen {
+                pane: 7,
+                url: "http://localhost:5173/app".into(),
+                scratch: "/tmp/lyrel-preview".into(),
             },
             ControlRequest::AgentStates,
             ControlRequest::PaneProcs { pane_id: 7 },
@@ -2279,6 +2381,14 @@ mod tests {
             ControlReply::Ok(ReplyOk::OptPath(Some("/home/me/proj".into()))),
             ControlReply::Ok(ReplyOk::OptPath(None)),
             ControlReply::Ok(ReplyOk::FileMeta { meta: meta() }),
+            ControlReply::Ok(ReplyOk::GitBlob {
+                present: false,
+                len: 0,
+            }),
+            ControlReply::Ok(ReplyOk::GitBlob {
+                present: true,
+                len: 11,
+            }),
             ControlReply::Ok(ReplyOk::Hits(vec![SearchHit {
                 name: "widget.rs".into(),
                 path: PathBuf::from("/home/me/proj/src/widget.rs"),
@@ -2425,6 +2535,12 @@ mod tests {
                 path: Some("/home/me/proj".into()),
                 workspace: Some(WorkspaceId::new()),
             },
+            ControlEvent::PreviewOpen {
+                workspace: WorkspaceId::new().to_string(),
+                pane: 7,
+                url: "http://localhost:5173/app".into(),
+                scratch: "/tmp/lyrel-preview".into(),
+            },
         ]
     }
 
@@ -2435,6 +2551,7 @@ mod tests {
             client_token: "tok".into(),
             client_hostname: "laptop".into(),
             gui: false,
+            preview: false,
         }
     }
 
@@ -3058,6 +3175,14 @@ mod tests {
                 s(20),
             ),
             (
+                R::GitBlob {
+                    cwd: "/".into(),
+                    spec: ":a.rs".into(),
+                    max_bytes: 1024,
+                },
+                s(20),
+            ),
+            (
                 R::Search {
                     roots: vec![],
                     query: String::new(),
@@ -3111,7 +3236,12 @@ mod tests {
     fn blob_shape_is_known_per_request() {
         for req in every_request() {
             let takes = matches!(req, ControlRequest::WriteFile { .. });
-            let returns = matches!(req, ControlRequest::ReadFile { .. });
+            let returns = matches!(
+                req,
+                ControlRequest::ReadFile { .. }
+                    | ControlRequest::ReadChunk { .. }
+                    | ControlRequest::GitBlob { .. }
+            );
             assert_eq!(req.takes_blob(), takes, "takes_blob for {req:?}");
             assert_eq!(req.returns_blob(), returns, "returns_blob for {req:?}");
         }

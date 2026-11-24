@@ -9,7 +9,7 @@ lyrel 是面向桌面本地开发与桌面远程开发的 Rust 原生终端工�
 
 ## Workspace 分层与程序入口
 
-13 个包分为协议与会话核心、无 GUI 的领域引擎、桌面应用和测试支持四层。GUI 与 headless server 复用 `lyrel-core` 的 daemon 与 Host 执行能力；薄 CLI 与 insights 通过 `lyrel-protocol` 使用协议和 Host，不依赖 core 的执行引擎。
+14 个包分为协议与会话核心、无 GUI 的领域引擎、桌面应用和测试支持四层。GUI 与 headless server 复用 `lyrel-core` 的 daemon 与 Host 执行能力；薄 CLI 与 insights 通过 `lyrel-protocol` 使用协议和 Host，不依赖 core 的执行引擎。
 
 | crate／程序 | 职责 | 不负责 |
 | --- | --- | --- |
@@ -25,11 +25,12 @@ lyrel 是面向桌面本地开发与桌面远程开发的 Rust 原生终端工�
 | `lyrel-markdown-editor` | 独立维护的 Zorite MIT editor／bidi／ratex 派生实现，拥有 `Document` 和原生编辑呈现 | 不拥有文件 I/O、Host/path、dirty/save/close，不导入 GPL 应用 |
 | `lyrel-updater` | Windows／macOS 的独立更新程序与共享库：安装布局标记、验证／安装计划及更新结果；Windows 复用 core 的 ConPTY 清单校验 | 不依赖 GPUI，不负责下载检查、界面或会话 |
 | `lyrel-insights` | 无 GPUI 的 skills、agent 统计和 GitHub 查询；桌面另含用量提供方与显式选择浏览器 profile 的会话导入 | 经 `Host` 执行工作区操作，不进入 CLI 或 server 的生产依赖图，不拥有 GPUI 或系统凭据存储 |
+| `lyrel-content-diff` | 无 GPUI 的内容感知 Diff 引擎：按 tree-sitter 顶层结构项提取 Rust、JavaScript、TypeScript/TSX、Python、Go、JSON、TOML、YAML 的移动／修改／新增／删除块，保守处理歧义匹配并报告格式折叠；格式扩展只增语法依赖与语言表项 | 不依赖 GPUI、`Host` 或任何 Git 读取，不进入 CLI、protocol 或 server 的生产依赖图；仅根包（桌面）消费 |
 | `lyrel-test-support`（仅测试） | 共享 GPUI-free 测试夹具库（真实 PTY／protocol producer、native-SSH 夹具）与轻量 `lyrel-graphics-fixture` daemon／PTY producer 进程 | 不链接 GUI、不属于发行程序，不替代生产终端协议或渲染 |
 
 `src/daemon.rs` 重导出共享 daemon；桌面入口的 `--daemon` 模式在启动 GPUI 前转入共享 daemon，因此后台服务器可以由 `lyrel-app --daemon` 或独立 `lyrel-server --daemon` 承载。桌面基础层只提供共享状态、值和 Host 调度；窗口菜单、托盘、通知来源跳转及工作区连接编排仍由根包接线。
 
-桌面六包仅在 Windows／macOS 构建。Linux headless 明确排除桌面六包，保留另外七包。CI 的 `workspace-graph.cjs` 核对成员、跨目标的直接依赖声明和选定目标的传递生产依赖；桌面四个 Host 消费者（根包、基础层、终端和编辑器）均由 `check-host-boundary.sh` 扫描。
+桌面七包仅在 Windows／macOS 构建。Linux headless 明确排除桌面七包，保留另外七包。CI 的 `workspace-graph.cjs` 核对成员、跨目标的直接依赖声明和选定目标的传递生产依赖；桌面四个 Host 消费者（根包、基础层、终端和编辑器）均由 `check-host-boundary.sh` 扫描。
 终端与文档工作台不相互依赖。CLI 不链接 core 执行引擎，server 的唯一直接生产依赖仍是 `lyrel-core`；工作台不引入安装器专用的 `async_zip`。
 固定版本的 `gpui-kit` 本身传递依赖 `lsp-types`；终端和共享基础层不直接声明它，LSP 客户端只在编辑器中实现。
 
@@ -139,10 +140,10 @@ control 与 pane 分别协商协议；应用版本、control 版本和 pane 版�
 
 | 协议 | 源码常量 | 当前版本 | 承载内容 |
 | --- | --- | ---: | --- |
-| control | `daemon/control.rs` 的 `CONTROL_VERSION` | 22 | Host 操作、机器树、工作区附着、事件、文件／Git 流、主机指标、版本化分段读取、只读 SQLite 浏览、按目录查询会话、批量会话操作、进程终止和目录用量 |
-| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 19 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态、图形回放、当前进度、pane 颜色、XTGETTCAP、Glyph 注册／查询／保留投影与 iTerm2 精确显示像素 |
+| control | `daemon/control.rs` 的 `CONTROL_VERSION` | 24 | Host 操作、机器树、工作区附着、事件、文件／Git 流、主机指标、版本化分段读取、只读 SQLite 浏览、按目录查询会话、批量会话操作、进程终止、目录用量和有界的 Git 版本读取 |
+| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 20 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态、显式 OSC 通知、图形回放、当前进度、pane 颜色、XTGETTCAP、Glyph 注册／查询／保留投影与 iTerm2 精确显示像素 |
 
-本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c22p19`，Windows 加 `.exe`。
+本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c24p20`，Windows 加 `.exe`。
 
 control 的 HELLO 在请求循环前核对版本与 features。增删 wire 消息变体需提升 control 版本，可安全忽略的字段才使用 feature 协商。pane 在实际 endpoint 上先协商版本和有限图形容量，再创建或附着会话；不兼容连接不能先启动 shell 再报告错误。
 

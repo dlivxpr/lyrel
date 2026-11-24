@@ -231,7 +231,7 @@ fn agent_diagnostic_wheel_moves_the_list_without_moving_the_settings_page(cx: &m
         app.open_settings_section(SettingsSection::Agents, window, cx);
         let state = app.active_settings_mut().unwrap();
         // Hook discovery is not under test. Keep its asynchronous result from
-        // replacing the five real agent rows and their normal diagnostics.
+        // replacing the six real agent rows and their normal diagnostics.
         state.agent_hooks_seq += 1;
         state.agent_show_all = true;
         state.agent_hooks_states = AgentHooksView::Ready(
@@ -248,6 +248,9 @@ fn agent_diagnostic_wheel_moves_the_list_without_moving_the_settings_page(cx: &m
                         HookAgent::Kimi => Some(HooksDiagnostic::KimiHistory),
                         HookAgent::Hermes => Some(HooksDiagnostic::HermesObserver {
                             home: std::path::PathBuf::from("/controlled/hermes"),
+                        }),
+                        HookAgent::Antigravity => Some(HooksDiagnostic::AntigravityRegistry {
+                            path: std::path::PathBuf::from("/controlled/.gemini/config/hooks.json"),
                         }),
                     },
                 })
@@ -279,12 +282,13 @@ fn agent_diagnostic_wheel_moves_the_list_without_moving_the_settings_page(cx: &m
         px(-30.),
         "scrolling a long agent diagnostic must not move the page"
     );
+    let last = format!("agent-row-{}", HookAgent::ALL.len() - 1);
     assert_boundary_handoff(
         &mut vcx,
         &outer,
         "agent-hook-list",
         "agent-row-0",
-        "agent-row-4",
+        &last,
         before,
     );
     let filter = app.update_in(&mut vcx, |app, window, cx| {

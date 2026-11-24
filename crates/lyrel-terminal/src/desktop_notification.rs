@@ -56,6 +56,42 @@ pub fn notify_desktop_for_pane(title: Option<&str>, body: &str, pane: Option<Ent
     }
 }
 
+/// The notification sound channel's platform alert.
+///
+/// This is deliberately the OS's notification sound, not the terminal bell:
+/// the bell's own Audible setting keeps meaning "the pane asked for a bell".
+/// On macOS that is `NSBeep`; on Windows the Notification scheme entry,
+/// which honours "None" for users who silenced it — the channel's off switch
+/// lives in the activity matrix, so this never re-asks. Returns immediately;
+/// the sound plays asynchronously.
+pub fn play_activity_sound() {
+    #[cfg(test)]
+    TEST_SOUNDS.with(|count| count.set(count.get() + 1));
+    #[cfg(not(test))]
+    {
+        #[cfg(target_os = "macos")]
+        objc2_app_kit::NSBeep();
+        #[cfg(target_os = "windows")]
+        unsafe {
+            use windows_sys::Win32::System::Diagnostics::Debug::MessageBeep;
+            use windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONASTERISK;
+            MessageBeep(MB_ICONASTERISK);
+        }
+    }
+}
+
+// Each test thread tracks its own requested sounds.
+#[cfg(test)]
+thread_local! {
+    static TEST_SOUNDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The count this test has caused since it last asked.
+#[cfg(test)]
+pub fn take_test_sounds() -> usize {
+    TEST_SOUNDS.with(|count| count.replace(0))
+}
+
 #[cfg(all(not(target_os = "macos"), not(test)))]
 fn show_plain_notification(summary: String, body: String) {
     std::thread::spawn(move || {

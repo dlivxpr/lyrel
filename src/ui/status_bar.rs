@@ -4,7 +4,7 @@ use chrono::Timelike as _;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::ButtonVariants as _;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, button::Button, h_flex};
-use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, rems};
+use gpui_kit::{AnyElement, Context, SharedString, Window, div, prelude::*, px, rems};
 
 use crate::ui::app::LyrelApp;
 use crate::ui::scm::state::RepoKey;
@@ -58,6 +58,10 @@ impl Render for Clock {
             .flex_none()
             .px_2()
             .text_xs()
+            // Tabular figures keep the colon and both digit pairs on one grid
+            // while the time changes under them; the bar's fixed tools stay
+            // visually anchored as the clock ticks.
+            .font_features(crate::ui::theme::tabular_figures())
             .text_color(cx.theme().muted_foreground)
             .child(self.text.clone())
     }
@@ -72,6 +76,30 @@ fn group_line_count(count: u32, sign: char) -> String {
         label.insert(end, ',');
     }
     label
+}
+
+/// The subtle neutral well that groups one piece of variable context — Host,
+/// path, worktree and branch, Git counts, program status. The pill takes the
+/// shrink before the fixed right-side tools do, and its own content
+/// truncates inside it, so a long path or branch never squeezes the clock,
+/// Caffeine, or the bell out of the window. Separators between context
+/// groups are gone: the fill alone carries the grouping.
+fn context_pill(
+    id: &'static str,
+    cx: &gpui_kit::App,
+) -> impl gpui_kit::ParentElement + gpui_kit::IntoElement + gpui_kit::Styled + use<> {
+    div()
+        .id(id)
+        .test_support()
+        .flex_shrink_1()
+        .min_w_0()
+        .h(rems(1.5))
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .px(rems(0.5))
+        .rounded(rems(0.375))
+        .bg(cx.theme().muted)
 }
 
 impl LyrelApp {
@@ -142,7 +170,7 @@ impl LyrelApp {
                 .get(self.tabs.active_index())
                 .and_then(|tab| tab.github_detail.as_ref())
                 .map(|doc| (doc.host_id, doc.cwd.as_path())),
-            None => None,
+            Some(crate::ui::tab::OverlayTop::Browser) | None => None,
         };
         let host = location.map_or_else(
             || self.remote_machine_label(cx),
@@ -202,24 +230,17 @@ impl LyrelApp {
         let checkout = checkout.filter(|_| toolbar.git);
         let path = path.filter(|_| toolbar.path && (document || checkout.is_none()));
         let foreground = cx.theme().foreground;
-        let divider = cx.theme().border;
         let muted = cx.theme().muted_foreground;
         let added_ink = cx.theme().success;
         let removed_ink = cx.theme().danger;
-        let rule = || {
-            div()
-                .flex_none()
-                .w(crate::ui::theme::hairline(window))
-                .h(rems(0.85))
-                .bg(divider)
-        };
         let program = (toolbar.running && !document)
             .then(|| {
                 leaf.as_ref().and_then(|leaf| {
                     leaf.read(cx).with_program_status(|status| {
-                        status
-                            .representative()
-                            .map(|record| crate::ui::program_status::current_status(record, cx))
+                        status.representative().map(|record| {
+                            context_pill("status-program-pill", cx)
+                                .child(crate::ui::program_status::current_status(record, cx))
+                        })
                     })
                 })
             })
@@ -227,45 +248,49 @@ impl LyrelApp {
         let context = h_flex()
             .flex_1()
             .min_w_0()
+            .items_center()
             .gap_1()
             .when(toolbar.host, |row| {
                 row.child(
-                    Button::new("status-host")
-                        .ghost()
-                        .xsmall()
-                        // Button defaults to shrink=0; instance styles are applied
-                        // last, and its native label already owns ellipsis.
-                        .flex_shrink_1()
-                        .min_w(rems(1.5))
-                        .max_w(rems(10.))
-                        .label(host.clone())
-                        .tooltip(host)
-                        .on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(ToggleSwitcher), cx)
-                        }),
+                    context_pill("status-host-pill", cx).max_w(rems(10.)).child(
+                        Button::new("status-host")
+                            .ghost()
+                            .xsmall()
+                            // Button defaults to shrink=0; instance styles
+                            // are applied last, and its native label already
+                            // owns ellipsis.
+                            .flex_shrink_1()
+                            .min_w(rems(1.5))
+                            .label(host.clone())
+                            .tooltip(host)
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(ToggleSwitcher), cx)
+                            }),
+                    ),
                 )
             })
             .when_some(path, |row, path| {
                 let copied = path.clone();
                 row.child(
-                    Button::new("status-path")
-                        .ghost()
-                        .xsmall()
-                        .flex_shrink_1()
-                        .min_w(rems(1.5))
-                        .max_w(rems(26.))
-                        .label(path.clone())
-                        .tooltip(path)
-                        .accessibility_label(t(if document {
-                            L10nKey::FileTreeContextCopyPath
-                        } else {
-                            L10nKey::CmdCopyWorkingDirectory
-                        }))
-                        .on_click(move |_, _, cx| {
-                            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
-                                copied.clone(),
-                            ));
-                        }),
+                    context_pill("status-path-pill", cx).max_w(rems(26.)).child(
+                        Button::new("status-path")
+                            .ghost()
+                            .xsmall()
+                            .flex_shrink_1()
+                            .min_w(rems(1.5))
+                            .label(path.clone())
+                            .tooltip(path)
+                            .accessibility_label(t(if document {
+                                L10nKey::FileTreeContextCopyPath
+                            } else {
+                                L10nKey::CmdCopyWorkingDirectory
+                            }))
+                            .on_click(move |_, _, cx| {
+                                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                    copied.clone(),
+                                ));
+                            }),
+                    ),
                 )
             })
             .when_some(checkout, |row, (repo, git)| {
@@ -285,8 +310,7 @@ impl LyrelApp {
                     .ghost()
                     .xsmall()
                     .flex_shrink_1()
-                    .min_w(rems(2.))
-                    .max_w(rems(22.))
+                    .min_w_0()
                     .icon(Icon::empty().path("icons/folder.svg").text_color(muted))
                     .accessibility_label(label)
                     .tooltip(tooltip)
@@ -299,50 +323,50 @@ impl LyrelApp {
                             .child(div().flex_none().text_color(muted).child("/"))
                             .child(div().min_w_0().truncate().child(branch.clone())),
                     );
-                let row = row.child(self.status_checkout_trigger(
-                    checkout_button,
-                    repo,
-                    branch,
-                    window,
-                    cx,
+                let row = row.child(context_pill("status-git-pill", cx).max_w(rems(22.)).child(
+                    self.status_checkout_trigger(checkout_button, repo, branch, window, cx),
                 ));
                 if git.added == 0 && git.removed == 0 {
                     return row;
                 }
-                // The separate action inspects changes without navigating.
+                // The separate action inspects changes without navigating. It
+                // is its own pill — no hairline separators remain around it.
                 let added = group_line_count(git.added, '+');
                 let removed = group_line_count(git.removed, '−');
-                row.child(rule())
-                    .child(
-                        Button::new("status-git-counts")
-                            .ghost()
-                            .xsmall()
-                            .flex_none()
-                            .accessibility_label(format!("{added} {removed}"))
-                            .tooltip(t(L10nKey::PanelScmTitle))
-                            .child(
-                                h_flex()
-                                    .gap_1()
-                                    .child(div().text_color(added_ink).child(added))
-                                    .child(div().text_color(removed_ink).child(removed)),
-                            )
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.set_right_panel_tab(
-                                    lyrel_core::core::config::RightPanelTab::Scm,
-                                    window,
-                                    cx,
-                                );
-                            })),
-                    )
-                    .child(rule())
+                row.child(
+                    context_pill("status-git-counts-pill", cx)
+                        .flex_none()
+                        .child(
+                            Button::new("status-git-counts")
+                                .ghost()
+                                .xsmall()
+                                .flex_none()
+                                .accessibility_label(format!("{added} {removed}"))
+                                .tooltip(t(L10nKey::PanelScmTitle))
+                                .child(
+                                    h_flex()
+                                        .gap_1()
+                                        .child(div().text_color(added_ink).child(added))
+                                        .child(div().text_color(removed_ink).child(removed)),
+                                )
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.set_right_panel_tab(
+                                        lyrel_core::core::config::RightPanelTab::Scm,
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        ),
+                )
             });
         h_flex()
             .id("workbench-status")
             .test_support()
             .flex_none()
             .w_full()
-            .h(rems(1.625))
-            .px_1()
+            .h(rems(lyrel_ui_base::display::GLOBAL_STATUS_BAR_HEIGHT_REM))
+            .px(rems(0.75))
+            .items_center()
             .gap_1()
             .border_t_1()
             .border_color(cx.theme().border)
@@ -366,11 +390,13 @@ impl LyrelApp {
             .children(program)
             // Document state lives in the editor panel's own bottom bar now;
             // the global bar only carries window context, and host CPU/RAM
-            // moved to the title bar (#373).
+            // moved to the title bar (#373). The fixed tools sit as plain,
+            // separated ghost controls — no permanent pill fills.
             .child(
                 h_flex()
                     .flex_none()
-                    .gap_1()
+                    .items_center()
+                    .gap_2()
                     .when(toolbar.caffeine, |row| {
                         row.child(self.render_caffeine(window, cx))
                     })
@@ -929,11 +955,186 @@ mod tests {
         vcx.update(|window, _| {
             let program = window.find("status-program");
             assert!(program.visible());
-            assert_eq!(program.label(), Some("Program · omp · Working"));
+            // A named program omits the generic Program prefix; the semantic
+            // dot sits beside the text label inside its context pill.
+            assert_eq!(program.label(), Some("omp · Working"));
+            assert!(window.find("status-program-dot").visible());
+            assert!(window.find("status-program-pill").visible());
             assert!(
                 window.try_find("status-agent").is_none(),
                 "status bar must not render a duplicate agent status slot"
             );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn global_bar_is_two_rem_with_twelve_px_insets_and_distinct_local_bar(cx: &mut TestAppContext) {
+        let (app, mut vcx, _stream) = harness_with_pane(cx);
+        for (width, font) in [(1440., 16.), (720., 24.)] {
+            vcx.simulate_resize(size(px(width), px(720.)));
+            app.update_in(&mut vcx, |_, _, cx| {
+                cx.global_mut::<Config>().ui_font_size = font;
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(font));
+                cx.notify();
+            });
+            settle(&mut vcx);
+            vcx.update(|window, _| {
+                let bar = window.find("workbench-status").bounds();
+                assert_eq!(
+                    bar.size.height,
+                    window.rem_size() * 2.,
+                    "the global bar is 2rem at any UI scale"
+                );
+                assert_eq!(
+                    window.rem_size(),
+                    px(font),
+                    "the harness rem tracks the configured UI font size"
+                );
+                // 12 px horizontal insets at default scale, following the rem
+                // as the interface zooms.
+                let inset = window.rem_size() * 0.75;
+                let settings = window.find("status-settings").bounds();
+                let bell = window.find("status-notifications").bounds();
+                assert_eq!(
+                    settings.left() - bar.left(),
+                    inset,
+                    "content starts 12px from the bar's left edge at default scale"
+                );
+                assert_eq!(
+                    bar.right() - bell.right(),
+                    inset,
+                    "content ends 12px from the bar's right edge at default scale"
+                );
+            });
+        }
+
+        // The editor's local status bar stays at 1.625rem, clearly distinct
+        // from and stacked above the global bar.
+        vcx.simulate_resize(size(px(1440.), px(720.)));
+        app.update_in(&mut vcx, |_, _, cx| {
+            cx.global_mut::<Config>().ui_font_size = 16.;
+            gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(16.));
+            cx.notify();
+        });
+        vcx.dispatch_action(EditorNewFile);
+        vcx.dispatch_action(ToggleDocumentFill);
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            let bar = window.find("workbench-status").bounds();
+            let local = window.find("code-status-bar").bounds();
+            assert_eq!(
+                local.size.height,
+                window.rem_size() * 1.625,
+                "the editor-local bar keeps its own 1.625rem height"
+            );
+            assert!(
+                local.bottom() <= bar.top(),
+                "the local bar sits directly above the global bar"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn context_pills_group_git_without_separators(cx: &mut TestAppContext) {
+        use crate::ui::scm::status_cache::{GitStatusCache, RepoSnapshot};
+        use lyrel_ui_base::host_ops::HostId;
+
+        lyrel_ui_base::i18n::set_locale("en");
+        let (app, mut vcx, _stream) = harness_with_pane(cx);
+        let pane = app.read_with(&vcx, |app, _| {
+            app.tabs[0]
+                .pane
+                .first_leaf()
+                .and_then(|slot| slot.terminal().cloned())
+                .expect("test pane")
+        });
+        let root = std::path::PathBuf::from("/repo-left");
+        let cwd = root.join("nested");
+        app.update_in(&mut vcx, |_, _, cx| {
+            pane.update(cx, |view, _| {
+                view.set_git_status_cwd_for_test(Some(cwd.clone()));
+            });
+            cx.default_global::<GitStatusCache>().finish_probe(
+                HostId::LOCAL,
+                &cwd,
+                Some(RepoSnapshot {
+                    root: root.clone(),
+                    home: root.clone(),
+                    branch: "ctx-left".into(),
+                    counts: Some((4, 0)),
+                }),
+            );
+            cx.notify();
+        });
+        settle(&mut vcx);
+
+        vcx.update(|window, _| {
+            let bar = window.find("workbench-status").bounds();
+            // Host, worktree+branch and counts each sit in their own neutral
+            // pill; the counts pill is the last piece of context before the
+            // fixed tools and carries no trailing separator.
+            let host_pill = window.find("status-host-pill").bounds();
+            let git_pill = window.find("status-git-pill").bounds();
+            let counts_pill = window.find("status-git-counts-pill").bounds();
+            let caffeine = window.find("status-caffeine").bounds();
+            for pill in [host_pill, git_pill, counts_pill] {
+                assert!(
+                    pill.top() >= bar.top() && pill.bottom() <= bar.bottom(),
+                    "pills stay vertically inside the 2rem bar"
+                );
+                assert!(
+                    pill.left() >= bar.left() && pill.right() <= bar.right(),
+                    "pills stay horizontally inside the bar"
+                );
+            }
+            assert!(host_pill.right() < git_pill.left());
+            assert!(git_pill.right() < counts_pill.left());
+            assert!(
+                counts_pill.right() < caffeine.left(),
+                "context ends before the fixed tools; nothing trails the counts"
+            );
+            // The counts stay actionable inside their pill.
+            let counts = window.find("status-git-counts");
+            assert!(counts.visible());
+            assert_eq!(counts.label(), Some("+4 −0"));
+            assert!(counts_pill.contains(&counts.bounds().center()));
+            // The branch control still truncates inside its pill, not by
+            // shoving the fixed tools out of the window.
+            let branch = window.find("status-git-branch").bounds();
+            assert!(git_pill.contains(&branch.center()));
+            assert_global_controls_in_bounds(window);
+        });
+    }
+
+    #[gpui_kit::test]
+    fn toolbar_visibility_switches_still_hide_status_bar_items(cx: &mut TestAppContext) {
+        let (app, mut vcx, _stream) = harness_with_pane(cx);
+        app.update_in(&mut vcx, |_, _, cx| {
+            cx.global_mut::<Config>().toolbar.host = false;
+            cx.global_mut::<Config>().toolbar.path = false;
+            cx.global_mut::<Config>().toolbar.caffeine = false;
+            cx.global_mut::<Config>().toolbar.clock = false;
+            cx.global_mut::<Config>().toolbar.notifications = false;
+            cx.notify();
+        });
+        settle(&mut vcx);
+        vcx.update(|window, _| {
+            for id in [
+                "status-host",
+                "status-host-pill",
+                "status-path",
+                "status-path-pill",
+                "status-caffeine",
+                "status-clock",
+                "status-notifications",
+            ] {
+                assert!(
+                    window.try_find(id).is_none(),
+                    "{id} must follow its toolbar visibility switch"
+                );
+            }
+            // Untoggled items stay put.
+            assert!(window.find("status-settings").visible());
         });
     }
 }

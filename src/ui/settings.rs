@@ -53,6 +53,23 @@ pub(crate) mod test_window;
 #[cfg(test)]
 mod scroll_tests;
 
+/// One column of the notification activity matrix, as the settings UI
+/// exposes it. `Badge` is the system-icon count for tabs needing attention.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ActivityChannel {
+    Tab,
+    Desktop,
+    Sound,
+    Badge,
+}
+
+/// The two terminal-event desktop toggles that stay separate by design.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TerminalNotificationChannel {
+    CommandDesktop,
+    OscDesktop,
+}
+
 /// The settings nav, and the page's padding either side of its column.
 const NAV_W: f32 = 220.;
 const PAGE_PAD: f32 = 112.;

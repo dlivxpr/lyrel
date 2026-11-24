@@ -13,7 +13,7 @@ __lyrel_scope_word() {
     base=${__lyrel_scope_token##*/}
     case "$__lyrel_scope_token" in */*) [[ "$__lyrel_scope_token" == /* ]] || return 1 ;; esac
     case "$base" in
-      omp|kimi|pi|opencode|opencode2|hermes) __lyrel_scope_agent=$base ;;
+      omp|kimi|pi|opencode|opencode2|hermes|agy) __lyrel_scope_agent=$base ;;
       *) return 1 ;;
     esac
   fi

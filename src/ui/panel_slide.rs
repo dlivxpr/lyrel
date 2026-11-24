@@ -135,6 +135,10 @@ impl LyrelApp {
                 self.panel_slides.active[boundary.slot()] = None;
             }
         }
+        if self.panel_slides.active.iter().all(Option::is_none) {
+            self.surface_coordinator
+                .uncover(crate::ui::surface_coordinator::CoverSource::SidePanelTransition);
+        }
     }
 
     /// Begin the visual slide for a boundary whose settled state just flipped.
@@ -156,6 +160,13 @@ impl LyrelApp {
             opening,
             generation,
         });
+        // The native browser sits at the settled document bounds while a
+        // sidebar's clip moves over them. Hold the cover across both slides.
+        self.set_surface_cover(
+            crate::ui::surface_coordinator::CoverSource::SidePanelTransition,
+            true,
+            cx,
+        );
         cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(PANEL_SLIDE_MS))
@@ -166,6 +177,13 @@ impl LyrelApp {
                     .is_some_and(|slide| slide.generation == generation)
                 {
                     app.panel_slides.active[slot] = None;
+                    if app.panel_slides.active.iter().all(Option::is_none) {
+                        app.set_surface_cover(
+                            crate::ui::surface_coordinator::CoverSource::SidePanelTransition,
+                            false,
+                            cx,
+                        );
+                    }
                     cx.notify();
                 }
             });

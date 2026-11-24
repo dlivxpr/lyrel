@@ -1,7 +1,7 @@
 use super::*;
 use crate::ui::app::test_window::{harness, harness_with_tabs};
-use gpui_kit::test::TestWindowExt as _;
-use gpui_kit::{AppContext as _, TestAppContext, VisualTestContext};
+use gpui_kit::test::{TestQueryExt as _, TestWindowExt as _};
+use gpui_kit::{AppContext as _, Entity, TestAppContext, VisualTestContext};
 use lyrel_core::core::pane_sidecar::PaneOwner;
 use lyrel_ui_base::i18n::{L10nKey, t};
 use lyrel_ui_base::session::WorkspaceId;
@@ -111,9 +111,18 @@ fn empty_attention_keyboard_result_is_readable_and_copyable_in_history(cx: &mut 
     let id = window.read(|cx| history(cx).read(cx).records().next().unwrap().id());
     window.update(|window, cx| window.click("status-notifications", cx));
     settle(&mut window);
-    assert_eq!(window.read(|cx| history(cx).read(cx).unread_count()), 0);
+    assert_eq!(
+        window.read(|cx| history(cx).read(cx).unread_count()),
+        1,
+        "opening the bell preserves unread state"
+    );
     window.update(|window, cx| window.click(format!("notification-detail-{id}"), cx));
     settle(&mut window);
+    assert_eq!(
+        window.read(|cx| history(cx).read(cx).unread_count()),
+        0,
+        "opening the details acknowledges that record"
+    );
     window.update(|window, cx| {
         assert!(window.find("notification-detail-message").visible());
         window.click("notification-detail-copy", cx);
@@ -149,6 +158,13 @@ fn two_windows_share_workspaces_read_state_clear_and_reopen(cx: &mut TestAppCont
         assert_eq!(sources, [first_workspace, second_workspace]);
     });
     first.update(|window, cx| window.click("status-notifications", cx));
+    settle(&mut first);
+    assert_eq!(
+        second.read(|cx| history(cx).read(cx).unread_count()),
+        2,
+        "opening the bell in one window leaves unread history in both"
+    );
+    first.update(|window, cx| window.click("notification-mark-all-read", cx));
     settle(&mut first);
     assert_eq!(second.read(|cx| history(cx).read(cx).unread_count()), 0);
     restart(&mut second, &dir);
@@ -298,6 +314,13 @@ fn a_fresh_application_restores_received_records_read_state_and_clear(cx: &mut T
         assert_eq!(reopened.read(|cx| history(cx).read(cx).unread_count()), 1);
         settle(&mut reopened);
         reopened.update(|window, cx| window.click("status-notifications", cx));
+        settle(&mut reopened);
+        assert_eq!(
+            reopened.read(|cx| history(cx).read(cx).unread_count()),
+            1,
+            "reopening the bell preserves restored unread state"
+        );
+        reopened.update(|window, cx| window.click("notification-mark-all-read", cx));
         settle(&mut reopened);
         assert_eq!(reopened.read(|cx| history(cx).read(cx).unread_count()), 0);
         reopened.read(|cx| history(cx).read(cx).flush());
@@ -661,5 +684,596 @@ fn long_literal_messages_remain_readable_and_copyable_in_a_small_window(cx: &mut
                 .as_deref(),
             Some(message.as_str())
         );
+    });
+}
+
+fn unread(window: &VisualTestContext) -> usize {
+    window.read(|cx| history(cx).read(cx).unread_count())
+}
+
+fn register_window(app: &Entity<crate::ui::app::LyrelApp>, window: &mut VisualTestContext) {
+    let weak = app.downgrade();
+    app.update_in(window, |app, window, cx| {
+        crate::ui::windows::WindowRegistry::register(
+            cx,
+            app.workspace,
+            window.window_handle(),
+            weak,
+        );
+    });
+}
+
+/// The Pending row's element id for one tab's first pane: Host-scoped, the
+/// way the production projection builds it. Quiet test panes number their
+/// panes from 1 and report as client-local.
+fn pending_row_id(
+    app: &Entity<crate::ui::app::LyrelApp>,
+    window: &VisualTestContext,
+    tab: usize,
+) -> String {
+    let (host, tab_id) = app.read_with(window, |app, cx| {
+        (
+            lyrel_ui_base::session::WorkspaceStore::host_of(cx, app.workspace).0,
+            app.tabs[tab].id(),
+        )
+    });
+    format!("notification-pending-{host}-{tab_id}-{}-local", tab + 1)
+}
+
+/// Drive one pane's program records through its real daemon stream — the
+/// same frames the daemon publishes for OSC 7501 reports — and wait until
+/// the pane's own consumer projection holds them.
+fn report_program(
+    app: &Entity<crate::ui::app::LyrelApp>,
+    window: &mut VisualTestContext,
+    stream: &mut crate::daemon::transport::Stream,
+    tab: usize,
+    frame: lyrel_core::core::program_status::ProgramStatusFrame,
+    ready: impl Fn(&lyrel_core::core::program_status::ProgramStatusClient) -> bool,
+) {
+    use std::time::{Duration, Instant};
+
+    let view = app.read_with(window, |app, _| app.tabs[tab].pane.terminals()[0].clone());
+    crate::daemon::protocol::DaemonMsg::ProgramStatus(frame)
+        .encode(stream)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        window.background_executor.run_until_parked();
+        if view.read_with(window, |view, _| {
+            view.with_program_status(|status| ready(status))
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "program status never reached the production pane"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// Drive one pane's agent state through its real daemon stream, then let the
+/// production foreground poll turn the report into the pane's own status
+/// events — the same seam the caffeine consumer tests use.
+///
+/// The wait is non-rich: Pending projects any observed Waiting pane, while a
+/// rich wait is also an eligible history event. These tests are about live
+/// attention, so they keep the inbox's record count out of the picture; rich
+/// waits and their history entries are covered by the terminal notice
+/// consumers.
+fn report_agent(
+    app: &Entity<crate::ui::app::LyrelApp>,
+    window: &mut VisualTestContext,
+    stream: &mut crate::daemon::transport::Stream,
+    status: crate::core::cli_agent::AgentStatus,
+    tab: usize,
+) {
+    use crate::core::cli_agent::{AgentSessionState, CLIAgent};
+    use std::time::{Duration, Instant};
+
+    let view = app.read_with(window, |app, _| app.tabs[tab].pane.terminals()[0].clone());
+    let state = AgentSessionState {
+        status,
+        since_ms: Some(lyrel_core::core::config::unix_now().saturating_mul(1000)),
+        rich: false,
+        turns: 1,
+        ..Default::default()
+    };
+    crate::daemon::protocol::DaemonMsg::Agent(Some(CLIAgent::OhMyPi))
+        .encode(stream)
+        .unwrap();
+    crate::daemon::protocol::DaemonMsg::AgentStatus(Some(Box::new(state.clone())))
+        .encode(stream)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        window.background_executor.run_until_parked();
+        if view.read_with(window, |view, _| {
+            view.agent_session() == Some(state.clone())
+        }) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "agent report never reached the production pane"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    window.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            view.poll_foreground(window, cx);
+        });
+    });
+}
+
+#[gpui_kit::test]
+fn opening_the_bell_preserves_unread_and_each_acknowledgement_targets_its_record(
+    cx: &mut TestAppContext,
+) {
+    let (app, mut window, _streams) = harness_with_tabs(cx, 1);
+    let _dir = isolated(&mut window);
+    lyrel_ui_base::i18n::set_locale("en");
+    register_window(&app, &mut window);
+    window.update(|window, cx| {
+        window.notify_app(Notification::info("first event"), cx);
+        window.notify_app(Notification::info("second event"), cx);
+    });
+    settle(&mut window);
+    window.update(|window, cx| window.click("status-notifications", cx));
+    settle(&mut window);
+    assert_eq!(
+        unread(&window),
+        2,
+        "opening the bell preserves unread state"
+    );
+    let ids: Vec<_> = window.read(|cx| history(cx).read(cx).records().map(Record::id).collect());
+    window.update(|window, cx| window.click(format!("notification-detail-{}", ids[0]), cx));
+    settle(&mut window);
+    assert_eq!(
+        unread(&window),
+        1,
+        "opening the details acknowledges only that record"
+    );
+    window.update(|window, cx| window.click("notification-detail-back", cx));
+    settle(&mut window);
+    window.update(|window, cx| window.click(format!("notification-source-{}", ids[1]), cx));
+    settle(&mut window);
+    assert_eq!(
+        unread(&window),
+        0,
+        "going to the source acknowledges the navigated record"
+    );
+}
+
+#[gpui_kit::test]
+fn waiting_pane_projects_into_pending_across_filters_and_resolves_live(cx: &mut TestAppContext) {
+    let (app, mut window, mut streams) = harness_with_tabs(cx, 1);
+    let dir = isolated(&mut window);
+    lyrel_ui_base::i18n::set_locale("en");
+    register_window(&app, &mut window);
+    window.update(|window, cx| window.click("status-notifications", cx));
+    settle(&mut window);
+    window.update(|window, _| {
+        assert!(
+            window.try_find("notification-pending").is_none(),
+            "no waiting pane, no Pending section"
+        );
+    });
+    report_agent(
+        &app,
+        &mut window,
+        &mut streams[0],
+        crate::core::cli_agent::AgentStatus::Waiting,
+        0,
+    );
+    settle(&mut window);
+    let pending_id = pending_row_id(&app, &window, 0);
+    let waited = {
+        let age = t(L10nKey::AgeUnderMinute).to_string();
+        lyrel_ui_base::i18n::t_fmt(L10nKey::AgentWaitingFor, &[("age", &age)])
+    };
+    window.update(|window, _| {
+        assert!(window.find("notification-pending").visible());
+        assert!(window.find(pending_id.clone()).visible());
+        assert!(window.find(format!("{pending_id}-source")).visible());
+        assert!(
+            window.try_find_by_label(waited.as_str()).is_some(),
+            "the pending row names how long the pane has been waiting"
+        );
+    });
+    window.update(|window, cx| window.click("notification-filter-unread", cx));
+    settle(&mut window);
+    window.update(|window, _| {
+        assert!(
+            window.find("notification-pending").visible(),
+            "Pending stays visible under the Unread filter"
+        );
+        assert!(window.find("notification-inbox-no-unread").visible());
+    });
+    report_agent(
+        &app,
+        &mut window,
+        &mut streams[0],
+        crate::core::cli_agent::AgentStatus::Working,
+        0,
+    );
+    settle(&mut window);
+    window.update(|window, _| {
+        assert!(
+            window.try_find("notification-pending").is_none(),
+            "a resolved pane leaves Pending at once"
+        );
+    });
+    // Persistence holds event history only: a restart projects an empty
+    // Pending list from a world with no observed waiting panes.
+    restart(&mut window, &dir);
+    assert!(messages(&window).is_empty());
+    assert!(
+        window.read(|cx| super::pending(cx)).is_empty(),
+        "Pending is a live projection, never persisted"
+    );
+}
+
+#[gpui_kit::test]
+fn pending_drops_when_the_waiting_tab_is_no_longer_current(cx: &mut TestAppContext) {
+    let (app, mut window, mut streams) = harness_with_tabs(cx, 2);
+    let _dir = isolated(&mut window);
+    lyrel_ui_base::i18n::set_locale("en");
+    register_window(&app, &mut window);
+    report_agent(
+        &app,
+        &mut window,
+        &mut streams[0],
+        crate::core::cli_agent::AgentStatus::Waiting,
+        0,
+    );
+    settle(&mut window);
+    window.update(|window, cx| window.click("status-notifications", cx));
+    settle(&mut window);
+    window.update(|window, _| assert!(window.find("notification-pending").visible()));
+    app.update_in(&mut window, |app, _, cx| {
+        app.tabs.remove(0);
+        app.tabs.select(0);
+        cx.notify();
+    });
+    settle(&mut window);
+    window.update(|window, _| {
+        assert!(
+            window.try_find("notification-pending").is_none(),
+            "a removed tab takes its Pending row with it"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn pending_source_navigation_focuses_the_waiting_pane_and_previews_parked_panes(
+    cx: &mut TestAppContext,
+) {
+    let (app, mut window, mut streams) = harness_with_tabs(cx, 2);
+    let _dir = isolated(&mut window);
+    lyrel_ui_base::i18n::set_locale("en");
+    register_window(&app, &mut window);
+    report_agent(
+        &app,
+        &mut window,
+        &mut streams[0],
+        crate::core::cli_agent::AgentStatus::Waiting,
+        0,
+    );
+    let pane = app.read_with(&window, |app, _| app.tabs[0].pane.first_leaf().unwrap());
+    let source_button = format!("{}-source", pending_row_id(&app, &window, 0));
+    app.update_in(&mut window, |app, _, cx| {
+        app.tabs.select(1);
+        cx.notify();
+    });
+    settle(&mut window);
+    window.update(|window, cx| window.click("status-notifications", cx));
+    settle(&mut window);
+    window.update(|window, cx| window.click(source_button.clone(), cx));
+    settle(&mut window);
+    app.update_in(&mut window, |app, window, cx| {
+        assert_eq!(app.tabs.active_index(), 0);
+        assert!(
+            pane.contains_focused(window, cx),
+            "pending navigation selects and focuses the waiting pane"
+        );
+    });
+    // A parked waiting pane previews instead of restoring or focusing.
+    window.dispatch_action(lyrel_ui_base::actions::ParkPane);
+    settle(&mut window);
+    app.update_in(&mut window, |app, _, cx| {
+        app.tabs.select(1);
+        cx.notify();
+    });
+    settle(&mut window);
+    window.update(|window, cx| window.click("status-notifications", cx));
+    settle(&mut window);
+    window.update(|window, cx| window.click(source_button, cx));
+    settle(&mut window);
+    app.update_in(&mut window, |app, window, cx| {
+        assert_eq!(app.tabs.active_index(), 0);
+        assert!(app.tabs[0].is_parked_slot(&pane, cx));
+        assert!(
+            !pane.contains_focused(window, cx),
+            "a parked source previews without stealing focus"
+        );
+    });
+    window.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("parked-preview").visible());
+    });
+}
+
+#[gpui_kit::test]
+fn mark_all_as_read_acknowledges_history_without_clearing_pending(cx: &mut TestAppContext) {
+    let (app, mut window, mut streams) = harness_with_tabs(cx, 1);
+    let _dir = isolated(&mut window);
+    lyrel_ui_base::i18n::set_locale("en");
+    register_window(&app, &mut window);
+    report_agent(
+        &app,
+        &mut window,
+        &mut streams[0],
+        crate::core::cli_agent::AgentStatus::Waiting,
+        0,
+    );
+    window.update(|window, cx| {
+        window.notify_app(Notification::info("ordinary result"), cx);
+    });
+    settle(&mut window);
+    assert_eq!(unread(&window), 1);
+    window.update(|window, cx| window.click("status-notifications", cx));
+    settle(&mut window);
+    window.update(|window, cx| window.click("notification-mark-all-read", cx));
+    settle(&mut window);
+    assert_eq!(
+        unread(&window),
+        0,
+        "Mark all as read acknowledges every historical record"
+    );
+    window.update(|window, _| {
+        assert!(
+            window.find("notification-pending").visible(),
+            "an unresolved Pending entry survives Mark all as read"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn keyboard_reaches_pending_actions_in_the_open_bell(cx: &mut TestAppContext) {
+    let (app, mut window, mut streams) = harness_with_tabs(cx, 1);
+    let _dir = isolated(&mut window);
+    lyrel_ui_base::i18n::set_locale("en");
+    register_window(&app, &mut window);
+    report_agent(
+        &app,
+        &mut window,
+        &mut streams[0],
+        crate::core::cli_agent::AgentStatus::Waiting,
+        0,
+    );
+    window.update(|window, cx| window.click("status-notifications", cx));
+    settle(&mut window);
+    let button_id = format!("{}-source", pending_row_id(&app, &window, 0));
+    // Tab through the popover's actions until the pending source button holds
+    // focus, then Enter activates it — no pointer involved.
+    let mut focused = false;
+    for _ in 0..32 {
+        window.update(|window, cx| window.press("tab", cx));
+        settle(&mut window);
+        if window.update(|window, _| window.find(button_id.clone()).focused()) == Some(true) {
+            focused = true;
+            break;
+        }
+    }
+    assert!(focused, "Tab reaches the pending Go to source action");
+    window.update(|window, cx| window.press("enter", cx));
+    settle(&mut window);
+    app.update_in(&mut window, |app, window, cx| {
+        assert!(
+            app.tabs[0]
+                .pane
+                .first_leaf()
+                .unwrap()
+                .contains_focused(window, cx)
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn vanished_source_keeps_full_copyable_text_with_navigation_unavailable(cx: &mut TestAppContext) {
+    let (app, mut window, _streams) = harness_with_tabs(cx, 2);
+    let _dir = isolated(&mut window);
+    lyrel_ui_base::i18n::set_locale("en");
+    register_window(&app, &mut window);
+    app.update_in(&mut window, |app, window, cx| {
+        let source = app.notification_source(window, cx);
+        window.notify_app(
+            Notification::info("vanished source text").source(source),
+            cx,
+        );
+    });
+    settle(&mut window);
+    let id = window.read(|cx| history(cx).read(cx).records().next().unwrap().id());
+    app.update_in(&mut window, |app, _, cx| {
+        app.tabs.remove(0);
+        cx.notify();
+    });
+    settle(&mut window);
+    window.update(|window, cx| window.click("status-notifications", cx));
+    settle(&mut window);
+    window.update(|window, _| {
+        let button = window.find(format!("notification-source-{id}"));
+        assert_eq!(
+            button.disabled(),
+            Some(true),
+            "a vanished source has unavailable navigation"
+        );
+        let label = button.label().unwrap().to_string();
+        assert!(
+            label.contains(t(L10nKey::NotificationSourceUnavailable)),
+            "the row still names the source and says why navigation is off: {label}"
+        );
+    });
+    // The full text survives with copy in the details.
+    window.update(|window, cx| window.click(format!("notification-detail-{id}"), cx));
+    settle(&mut window);
+    window.update(|window, cx| {
+        assert!(window.find("notification-detail-message").visible());
+        window.click("notification-detail-copy", cx);
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some("vanished source text")
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn blocked_program_stays_in_pending_under_unread_and_resolves_without_disturbing_waiting_agents(
+    cx: &mut TestAppContext,
+) {
+    use lyrel_core::core::program_status::{
+        BlockedKind, ProgramDelta, ProgramRecord, ProgramSnapshot, ProgramState, ProgramStatusFrame,
+    };
+
+    let (app, mut window, mut streams) = harness_with_tabs(cx, 2);
+    let _dir = isolated(&mut window);
+    lyrel_ui_base::i18n::set_locale("en");
+    register_window(&app, &mut window);
+    window.update(|window, cx| window.click("status-notifications", cx));
+    settle(&mut window);
+    window.update(|window, _| {
+        assert!(
+            window.try_find("notification-pending").is_none(),
+            "no waiting or blocked pane, no Pending section"
+        );
+    });
+    // An OSC 7501 `blocked` report arrives over the pane's real daemon
+    // stream, the same frames the daemon publishes for the escape sequence.
+    let blocked_row = pending_row_id(&app, &window, 0);
+    let now_nanos = lyrel_core::core::config::unix_now().saturating_mul(1_000_000_000);
+    report_program(
+        &app,
+        &mut window,
+        &mut streams[0],
+        0,
+        ProgramStatusFrame::Baseline(ProgramSnapshot::new(
+            "sess-blocked".into(),
+            1,
+            1,
+            vec![ProgramRecord::new(
+                "build/check".into(),
+                ProgramState::Blocked,
+                Some(BlockedKind::Permission),
+                Some("builder".into()),
+                None,
+                Some("Approve?".into()),
+                None,
+                now_nanos,
+                1,
+                1,
+            )],
+        )),
+        |status| {
+            status
+                .records()
+                .any(|record| record.state() == ProgramState::Blocked)
+        },
+    );
+    settle(&mut window);
+    let projection = window.read(|cx| pending(cx));
+    assert_eq!(
+        projection.len(),
+        1,
+        "the blocked pane projects into Pending"
+    );
+    assert_eq!(
+        projection[0].state,
+        PendingState::Blocked(Some(BlockedKind::Permission))
+    );
+    assert!(projection[0].since_ms.is_some());
+    let detail = {
+        let age = t(L10nKey::AgeUnderMinute).to_string();
+        let waited = lyrel_ui_base::i18n::t_fmt(L10nKey::AgentWaitingFor, &[("age", &age)]);
+        format!("{} · {waited}", t(L10nKey::ProgramPermission))
+    };
+    window.update(|window, _| {
+        assert!(window.find("notification-pending").visible());
+        assert!(window.find(blocked_row.clone()).visible());
+        assert!(window.find(format!("{blocked_row}-source")).visible());
+        assert!(
+            window.try_find_by_label(detail.as_str()).is_some(),
+            "the pending row names why the program is blocked"
+        );
+    });
+    // An unresolved blocker stays visible under the Unread filter.
+    window.update(|window, cx| window.click("notification-filter-unread", cx));
+    settle(&mut window);
+    window.update(|window, _| {
+        assert!(
+            window.find("notification-pending").visible(),
+            "an unresolved blocked program stays visible under Unread"
+        );
+        assert!(window.find(blocked_row.clone()).visible());
+        assert!(window.find("notification-inbox-no-unread").visible());
+    });
+    // A waiting agent joins Pending without disturbing the blocked row.
+    report_agent(
+        &app,
+        &mut window,
+        &mut streams[1],
+        crate::core::cli_agent::AgentStatus::Waiting,
+        1,
+    );
+    settle(&mut window);
+    let waiting_row = pending_row_id(&app, &window, 1);
+    window.update(|window, _| {
+        assert!(window.find(blocked_row.clone()).visible());
+        assert!(window.find(waiting_row.clone()).visible());
+    });
+    // `state=clear` resolves the program: its row disappears while the
+    // waiting agent's row stays.
+    report_program(
+        &app,
+        &mut window,
+        &mut streams[0],
+        0,
+        ProgramStatusFrame::Update(ProgramDelta::new(
+            "sess-blocked".into(),
+            2,
+            2,
+            Vec::new(),
+            vec!["build/check".into()],
+        )),
+        |status| status.records().next().is_none(),
+    );
+    settle(&mut window);
+    window.update(|window, _| {
+        assert!(
+            window.try_find(blocked_row.clone()).is_none(),
+            "a resolved program leaves Pending at once"
+        );
+        assert!(
+            window.find(waiting_row.clone()).visible(),
+            "the waiting agent is undisturbed by the program resolving"
+        );
+    });
+    let projection = window.read(|cx| pending(cx));
+    assert_eq!(projection.len(), 1);
+    assert_eq!(projection[0].state, PendingState::Waiting);
+    // The agent settling empties Pending entirely.
+    report_agent(
+        &app,
+        &mut window,
+        &mut streams[1],
+        crate::core::cli_agent::AgentStatus::Working,
+        1,
+    );
+    settle(&mut window);
+    window.update(|window, _| {
+        assert!(window.try_find("notification-pending").is_none());
     });
 }

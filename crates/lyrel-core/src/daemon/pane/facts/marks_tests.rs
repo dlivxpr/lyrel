@@ -607,6 +607,47 @@ fn opaque_notifications_only_fall_back_when_no_rich_state() {
     );
 }
 
+#[test]
+fn explicit_osc_notes_get_distinct_ids_and_are_live_only() {
+    let mut state = test_state(true);
+    let (tx, rx) = mpsc::channel();
+    let gate = OutputGate::new();
+    attach_subscriber_with_permissions(&mut state, tx, &gate, false, true, false);
+    let mut sniffer = OscSniffer::new();
+    state.with_facts(|facts, emit| {
+        apply_signals(
+            facts,
+            sniffer.feed_parts([
+                &b"\x1b]9;4;1;42\x07\x1b]777;notify;Build;Do"[..],
+                &b"ne\x1b\\\x1b]99;i=1:d=0:p=title;Build\x07\x1b]99;i=1:p=body;Done\x07"[..],
+            ]),
+            emit,
+        );
+    });
+    let notices: Vec<_> = rx
+        .try_iter()
+        .filter_map(|msg| match msg {
+            DaemonMsg::ProgramNote(note) => Some(note),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notices.len(), 2);
+    assert_ne!(notices[0].id, notices[1].id);
+    assert!(
+        notices
+            .iter()
+            .all(|note| note.title.as_deref() == Some("Build") && note.body == "Done")
+    );
+
+    let (tx, replay) = mpsc::channel();
+    attach_subscriber_with_permissions(&mut state, tx, &gate, false, true, false);
+    assert!(
+        !replay
+            .try_iter()
+            .any(|msg| matches!(msg, DaemonMsg::ProgramNote(_)))
+    );
+}
+
 /// Issue #711. A pane whose shell printed its prompt and then handed the
 /// terminal to a full-screen program keeps `at_prompt` set for as long as
 /// that program runs — nothing clears the flag but a `133;C` the program

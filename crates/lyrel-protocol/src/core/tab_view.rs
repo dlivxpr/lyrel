@@ -173,6 +173,17 @@ pub fn same_title_ignoring_status_mark(a: &str, b: &str) -> bool {
 
 pub fn is_shell_program_title(title: &str) -> bool {
     let title = title.trim().trim_matches('"');
+    // conhost titles an elevated console "Administrator: <exepath>". The
+    // prefix names the account that launched the console, not the program:
+    // it must not keep a shell's own title from being recognized as one, or
+    // an agent's row is displaced by the elevated shell's startup title.
+    let title = match title.get(.."administrator:".len()) {
+        Some(head) if head.eq_ignore_ascii_case("administrator:") => {
+            title["administrator:".len()..].trim_start()
+        }
+        _ if title.starts_with("管理员:") => title["管理员:".len()..].trim_start(),
+        _ => title,
+    };
     let lower = title.to_ascii_lowercase();
     if !title.contains(['/', '\\']) && !lower.ends_with(".exe") {
         return false;
@@ -244,6 +255,17 @@ fn is_agent_dir_fallback(agent: CLIAgent, title: &str) -> bool {
     }
 }
 
+/// A directory-fallback title belonging to a *different* agent than the one
+/// in the pane. OMP's `π - dir` is its own signature: no other agent writes
+/// it, so when the pane's agent has moved on (or was detected as something
+/// else) the leftover title is stale and must not outrank the agent rung —
+/// the same reason a placeholder never masks the agent's own label.
+fn is_foreign_dir_fallback(agent: CLIAgent, title: &str) -> bool {
+    CLIAgent::ALL
+        .into_iter()
+        .any(|other| other != agent && is_agent_dir_fallback(other, title))
+}
+
 impl TabView {
     pub fn label(&self) -> TabLabel<'_> {
         if let Some(name) = self
@@ -266,6 +288,7 @@ impl TabView {
                 let cleaned = strip_status_mark(raw_osc);
                 if !cleaned.is_empty()
                     && !is_agent_placeholder_title(agent, cleaned)
+                    && !is_foreign_dir_fallback(agent, cleaned)
                     && !(session_title.is_some() && is_agent_dir_fallback(agent, cleaned))
                 {
                     return TabLabel::Osc(cleaned);
@@ -509,6 +532,53 @@ mod tests {
         assert_eq!(shell.label(), TabLabel::Agent(CLIAgent::OhMyPi));
     }
 
+    /// conhost titles an elevated console "Administrator: <exepath>". The
+    /// prefix names the account, not the program: the title is still a shell
+    /// program title, with or without a path, whatever the prefix's case.
+    #[test]
+    fn an_elevated_console_title_is_still_a_shell_program_title() {
+        for title in [
+            r"Administrator: C:\Program Files\PowerShell\7\pwsh.exe",
+            r"administrator: C:\Program Files\PowerShell\7\pwsh.exe",
+            "Administrator: pwsh.exe",
+            "管理员:pwsh.exe",
+            r"Administrator: C:\Windows\System32\cmd.exe",
+            r"Administrator: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+        ] {
+            assert!(is_shell_program_title(title), "on {title:?}");
+        }
+        // The prefix alone is not a shell, and neither is an arbitrary title
+        // that merely begins with the word. A bare name still has to carry
+        // the path or the `.exe` the existing contract asks for.
+        assert!(!is_shell_program_title(
+            "Administrator: reviewing the parser"
+        ));
+        assert!(!is_shell_program_title("administrator notes"));
+        assert!(!is_shell_program_title("Administrator: pwsh"));
+    }
+
+    /// The acceptance report's row: Antigravity detected from the process
+    /// tree in a pane whose only title is the elevated pwsh's startup title.
+    /// The agent rung of the ladder must win over that title, or the row
+    /// still names the shell.
+    #[test]
+    fn a_detected_agent_wins_over_the_elevated_shell_title() {
+        let elevated = TabView {
+            osc_title: Some(r"管理员:C:\Program Files\PowerShell\7\pwsh.exe".into()),
+            cwd: Some(r"C:\work".into()),
+            agent: Some(CLIAgent::Antigravity),
+            ..view()
+        };
+        assert_eq!(elevated.label(), TabLabel::Agent(CLIAgent::Antigravity));
+
+        let bare = TabView {
+            osc_title: Some("Administrator: pwsh.exe".into()),
+            agent: Some(CLIAgent::Antigravity),
+            ..view()
+        };
+        assert_eq!(bare.label(), TabLabel::Agent(CLIAgent::Antigravity));
+    }
+
     #[test]
     fn a_blank_name_is_no_name_and_a_bare_shell_falls_back_to_its_process() {
         let blank = TabView {
@@ -631,6 +701,49 @@ mod tests {
             with_dir_fallback.label(),
             TabLabel::Osc("UPG: Upgrade gpui-kit"),
             "session title must win over OMP's 'π - dir' fallback title"
+        );
+    }
+
+    /// A pane whose agent moved on from OMP keeps OMP's `π - dir` title
+    /// until something retires it — and with no shell integration nothing
+    /// does. That leftover must not name the tab while another agent runs:
+    /// the agent rung is the live answer. OMP's own row is untouched.
+    #[test]
+    fn another_agents_dir_fallback_title_does_not_name_the_tab() {
+        let moved_on = TabView {
+            osc_title: Some("π - lyrel".into()),
+            agent: Some(CLIAgent::Antigravity),
+            cwd: Some("/work".into()),
+            ..view()
+        };
+        assert_eq!(
+            moved_on.label(),
+            TabLabel::Agent(CLIAgent::Antigravity),
+            "OMP's leftover fallback title must not mask the detected agent"
+        );
+
+        let with_session = TabView {
+            osc_title: Some("π - lyrel".into()),
+            agent: Some(CLIAgent::Antigravity),
+            session_title: Some("Fix the sidebar".into()),
+            ..view()
+        };
+        assert_eq!(
+            with_session.label(),
+            TabLabel::Osc("Fix the sidebar"),
+            "the new agent's own session title still wins"
+        );
+
+        let omp_still_here = TabView {
+            osc_title: Some("π - lyrel".into()),
+            agent: Some(CLIAgent::OhMyPi),
+            cwd: Some("/work".into()),
+            ..view()
+        };
+        assert_eq!(
+            omp_still_here.label(),
+            TabLabel::Osc("π - lyrel"),
+            "OMP's own fallback still names its tab while it runs"
         );
     }
 }

@@ -10,12 +10,39 @@ use super::{PaneFacts, SniffSignals, suppress_relayed_prompt_marks};
 
 const REMOTE_CONTEXT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
+#[derive(Default)]
+pub(in super::super) enum AgentProbe {
+    #[default]
+    Unavailable,
+    #[cfg(any(unix, test))]
+    Foreground(Option<(CLIAgent, Vec<String>)>),
+    #[cfg(windows)]
+    AntigravityChild(AntigravitySighting),
+}
+
+/// Where an agy was found below the pane's shell, which is what decides
+/// whether it may name the pane. ConPTY has no foreground PGID, so the
+/// process tree stands in for it.
+#[cfg(windows)]
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub(in super::super) enum AntigravitySighting {
+    /// No agy below the pane's shell.
+    #[default]
+    Absent,
+    /// agy runs below the shell but under another process — a tool call by
+    /// the agent that still owns the pane, or an explicit wrapper. Present,
+    /// but not the foreground.
+    Nested,
+    /// agy is a direct child of the shell: the pane's foreground.
+    Foreground,
+}
+
 pub(in super::super) struct ForegroundProbes {
     /// Unix foreground PGID, or Windows shell-tree PID (ConPTY has no PGID).
     /// Cheap per-read identity; full probes run only on a hop or interval.
     pub group: Box<dyn Fn() -> Option<MediaProcessRoot> + Send>,
     pub remote: Box<dyn Fn() -> Option<RemoteContext> + Send>,
-    pub agent: Box<dyn Fn() -> Option<Option<(CLIAgent, Vec<String>)>> + Send>,
+    pub agent: Box<dyn Fn() -> AgentProbe + Send>,
     pub cwd: Box<dyn Fn() -> Option<PathBuf> + Send>,
     pub local_group: fn(MediaProcessRoot) -> Option<bool>,
 }
@@ -23,7 +50,7 @@ pub(in super::super) struct ForegroundProbes {
 pub(in super::super) struct OutputObservation {
     signals: SniffSignals,
     remote: Option<Option<RemoteContext>>,
-    agent: Option<Option<(CLIAgent, Vec<String>)>>,
+    agent: AgentProbe,
     cwd: Option<PathBuf>,
 }
 
@@ -41,7 +68,7 @@ impl OutputObservation {
                 ..Default::default()
             },
             remote: None,
-            agent: None,
+            agent: AgentProbe::Unavailable,
             cwd: None,
         })
     }
@@ -50,10 +77,10 @@ impl OutputObservation {
         self.signals.cwd.is_some()
             || self.signals.title.is_some()
             || !self.signals.agent_events.is_empty()
-            || self.signals.notification.is_some()
+            || !self.signals.notifications.is_empty()
             || !self.signals.shell.is_empty()
             || self.remote.is_some()
-            || self.agent.is_some()
+            || !matches!(self.agent, AgentProbe::Unavailable)
             || self.cwd.is_some()
     }
 
@@ -76,7 +103,38 @@ impl OutputObservation {
         }
         // A hop must land before its first integrated remote prompt is latched.
         super::latch_remote_prompt(facts, saw_prompt_mark);
-        if let Some(agent) = self.agent {
+        let agent = match self.agent {
+            AgentProbe::Unavailable => None,
+            #[cfg(any(unix, test))]
+            AgentProbe::Foreground(agent) => Some(agent),
+            #[cfg(windows)]
+            AgentProbe::AntigravityChild(sighting)
+                if facts.remote.is_none()
+                    && match facts.agent {
+                        None => sighting != AntigravitySighting::Absent,
+                        Some(CLIAgent::Antigravity) => {
+                            sighting == AntigravitySighting::Absent && facts.agent_argv.is_none()
+                        }
+                        // Only a foreground agy — a direct child of this
+                        // pane's shell — may replace the agent standing here.
+                        // A nested agy is the established agent's own tool
+                        // call (or a wrapper), so the agent that still owns
+                        // the pane keeps it; its hooks already say so, and
+                        // the probe must not overrule them. A leftover
+                        // identity, by contrast, has no live agy beneath it,
+                        // so a real foreground launch still takes the row.
+                        Some(_) => sighting == AntigravitySighting::Foreground,
+                    } =>
+            {
+                Some(
+                    (sighting != AntigravitySighting::Absent)
+                        .then(|| (CLIAgent::Antigravity, Vec::new())),
+                )
+            }
+            #[cfg(windows)]
+            AgentProbe::AntigravityChild(_) => None,
+        };
+        if let Some(agent) = agent {
             // Process-name recognition can miss wrappers or a just-started
             // agent. Its absence cannot retire a hook-established rich turn
             // before the shell returns; positive detection still can switch
@@ -165,7 +223,7 @@ impl FactReader {
         OutputObservation {
             signals: self.sniffer.feed_parts(bytes),
             remote: None,
-            agent: None,
+            agent: AgentProbe::Unavailable,
             cwd: None,
         }
     }
@@ -198,7 +256,7 @@ impl FactReader {
         OutputObservation {
             signals,
             remote: before.remote,
-            agent: poll_now.then(&self.probes.agent).flatten(),
+            agent: poll_now.then(&self.probes.agent).unwrap_or_default(),
             cwd: poll_now.then(&self.probes.cwd).flatten(),
         }
     }

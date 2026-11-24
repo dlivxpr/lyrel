@@ -2,6 +2,20 @@ use super::*;
 use gpui_kit::TestAppContext;
 use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
 
+/// Where a pane is aimed to enter the top-center parking target: the middle
+/// of the dome hanging under the title-bar Park entry. It is measured from
+/// the window's own midpoint, not the terminal column's — side panels shove
+/// the column sideways, the entry does not move.
+fn park_aim(
+    window: &gpui_kit::Window,
+    content: gpui_kit::Bounds<gpui_kit::Pixels>,
+) -> gpui_kit::Point<gpui_kit::Pixels> {
+    gpui_kit::point(
+        gpui_kit::px(f32::from(window.viewport_size().width) / 2.),
+        content.top() + window.rem_size() * 2.,
+    )
+}
+
 #[gpui_kit::test]
 fn park_last_pane_keeps_tab_session_and_keyboard_recovery(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
@@ -60,6 +74,162 @@ fn park_last_pane_keeps_tab_session_and_keyboard_recovery(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn park_fan_opens_downward_from_the_centered_entry_and_restores_by_keyboard_and_pointer(
+    cx: &mut TestAppContext,
+) {
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
+    vcx.update(|_, cx| cx.set_reduce_motion(true));
+    vcx.simulate_resize(size(px(1200.), px(800.)));
+    let parked = app.update_in(&mut vcx, |app, window, cx| {
+        let current = app.tabs[0].pane.first_leaf().unwrap();
+        let parked = app.tabs.remove(1).pane.first_leaf().unwrap();
+        app.tabs[0]
+            .pane
+            .split_leaf(current.entity_id(), Axis::Horizontal, false, parked.clone());
+        window.focus(&current.focus_handle(cx), cx);
+        app.park_pane(parked.entity_id(), window, cx);
+        parked
+    });
+    vcx.run_until_parked();
+    let card = ("parked-card", parked.entity_id().as_u64() as usize);
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        // At rest the content paints nothing: the entry badge carries the
+        // active tab's count in the title bar.
+        assert!(window.try_find(card).is_none());
+        assert_eq!(
+            window.find("titlebar-park").label().map(str::to_owned),
+            Some(lyrel_ui_base::i18n::t_fmt(
+                L10nKey::ParkedEntryCount,
+                &[("count", "1")]
+            ))
+        );
+        assert!(
+            (f32::from(window.find("titlebar-park").bounds().center().x)
+                - f32::from(window.viewport_size().width) / 2.)
+                .abs()
+                <= 1.
+        );
+        // Hover opens the fan downward from the title-bar center.
+        window.hover("titlebar-park", cx);
+        window.render_frame(cx);
+        let bounds = window.find(card).bounds();
+        let content = window.find("workbench-content").bounds();
+        assert!(
+            bounds.top() >= content.top() - px(1.),
+            "the fan cannot start above the content it hangs into"
+        );
+        assert!(
+            bounds.top() <= content.top() + window.rem_size() * 2.,
+            "the fan opens just below the title bar, not midway down the window"
+        );
+        assert!(
+            (f32::from(bounds.center().x) - f32::from(content.center().x)).abs()
+                <= f32::from(window.rem_size()) * 12.,
+            "the fan stays under the centered entry"
+        );
+    });
+    // Moving away for the content closes the fan again.
+    vcx.update(|window, cx| {
+        window.hover("terminal-surface", cx);
+        window.render_frame(cx);
+        assert!(window.try_find(card).is_none());
+    });
+    // Clicking focuses the deck: Enter previews the active card, Enter again
+    // restores the pane and its focus.
+    vcx.update(|window, cx| {
+        window.click("titlebar-park", cx);
+        window.render_frame(cx);
+        assert!(window.find(card).visible());
+        window.press("enter", cx);
+        window.render_frame(cx);
+        assert!(window.find("parked-preview").visible());
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| window.press("enter", cx));
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(!app.tabs[0].is_parked_slot(&parked, cx));
+        assert!(parked.contains_focused(window, cx));
+    });
+}
+
+#[gpui_kit::test]
+fn restore_out_of_fill_docks_the_document_and_preserves_it(cx: &mut TestAppContext) {
+    use lyrel_ui_base::actions::ToggleDocumentFill;
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = dir.path().join("park-restore-out-of-fill.txt");
+    std::fs::write(&path, "").unwrap();
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
+    vcx.simulate_resize(size(px(1200.), px(800.)));
+    let parked = app.update_in(&mut vcx, |app, window, cx| {
+        let current = app.tabs[0].pane.first_leaf().unwrap();
+        let parked = app.tabs.remove(1).pane.first_leaf().unwrap();
+        app.tabs[0]
+            .pane
+            .split_leaf(current.entity_id(), Axis::Horizontal, false, parked.clone());
+        window.focus(&current.focus_handle(cx), cx);
+        app.park_pane(parked.entity_id(), window, cx);
+        parked
+    });
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&path, window, cx)
+    });
+    // HostOps 的真实线程池不随 GPUI executor 一起排空。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        vcx.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+        vcx.run_until_parked();
+        if app.read_with(&vcx, |app, cx| app.editor_active_local_file(cx).is_some()) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the document did not open"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    vcx.simulate_keystrokes("h");
+    vcx.run_until_parked();
+    let editor = app.read_with(&vcx, |app, cx| {
+        app.editor_active_local_file(cx).unwrap().into_input()
+    });
+    vcx.dispatch_action(ToggleDocumentFill);
+    vcx.run_until_parked();
+    assert!(
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.document_dock_px(window, cx).is_none()
+        }),
+        "a filling document owns the workspace"
+    );
+    // Restoring the parked pane gives Fill way: the document docks, the
+    // terminal comes back, and the document's content is untouched.
+    vcx.dispatch_action(RestoreParkedPane);
+    vcx.update(|window, cx| window.press("enter", cx));
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(!app.tabs[0].is_parked_slot(&parked, cx));
+        assert!(parked.contains_focused(window, cx));
+        assert_eq!(
+            app.document_layout(cx),
+            lyrel_core::core::config::DocumentLayout::Dock
+        );
+    });
+    assert!(
+        app.update_in(&mut vcx, |app, window, cx| {
+            app.document_dock_px(window, cx).is_some()
+        }),
+        "docking reveals the terminal beside the preserved document"
+    );
+    assert_eq!(
+        editor.read_with(&vcx, |editor, _| editor.value().to_string()),
+        "h"
+    );
+}
+
+#[gpui_kit::test]
 fn reduced_motion_settles_a_visible_parked_card_without_animation_frames(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
     let parked = app.update_in(&mut vcx, |app, window, cx| {
@@ -75,6 +245,10 @@ fn reduced_motion_settles_a_visible_parked_card_without_animation_frames(cx: &mu
     vcx.run_until_parked();
     let card = ("parked-card", parked.entity_id().as_u64() as usize);
     vcx.update(|window, cx| {
+        window.render_frame(cx);
+        // The deck rests invisible now; the centered title-bar entry owns
+        // the fan.
+        window.hover("titlebar-park", cx);
         window.render_frame(cx);
         assert!(window.find(card).visible());
         window.hover(card, cx);
@@ -268,6 +442,88 @@ fn parked_output_does_not_cause_continuous_window_repaint(cx: &mut TestAppContex
 }
 
 #[gpui_kit::test]
+fn parked_card_tracks_the_panes_current_task(cx: &mut TestAppContext) {
+    use crate::daemon::protocol::DaemonMsg;
+    use lyrel_core::core::program_status::{
+        ProgramDelta, ProgramRecord, ProgramSnapshot, ProgramState, ProgramStatusFrame,
+    };
+
+    let (app, mut vcx, mut streams) = test_window::harness_with_tabs(cx, 1);
+    vcx.simulate_resize(size(px(1200.), px(800.)));
+    let pane = app.update_in(&mut vcx, |app, window, cx| {
+        cx.set_reduce_motion(true);
+        let pane = app.tabs[0].pane.first_leaf().unwrap();
+        app.park_pane(pane.entity_id(), window, cx);
+        pane
+    });
+    let title = |title: &str, version| {
+        ProgramRecord::new(
+            String::new(),
+            ProgramState::Working,
+            None,
+            Some("fixture".into()),
+            Some(title.into()),
+            None,
+            None,
+            version,
+            version,
+            0,
+        )
+    };
+    let frames = [
+        (
+            "Compile",
+            ProgramStatusFrame::Baseline(ProgramSnapshot::new(
+                "parked-task".into(),
+                1,
+                0,
+                vec![title("Compile", 1)],
+            )),
+        ),
+        (
+            "Run tests",
+            ProgramStatusFrame::Update(ProgramDelta::new(
+                "parked-task".into(),
+                2,
+                0,
+                vec![title("Run tests", 2)],
+                Vec::new(),
+            )),
+        ),
+    ];
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("titlebar-park", cx);
+    });
+    let card = ("parked-card", pane.entity_id().as_u64() as usize);
+    for (expected, frame) in frames {
+        DaemonMsg::ProgramStatus(frame)
+            .encode(&mut streams[0])
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            vcx.run_until_parked();
+            let title_matches = vcx.update(|window, cx| {
+                window.render_frame(cx);
+                window
+                    .find(card)
+                    .label()
+                    .and_then(|label| label.lines().next())
+                    == Some(expected)
+            });
+            if title_matches {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "card should show {expected}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+}
+
+#[gpui_kit::test]
 fn park_menu_uses_its_captured_terminal_not_the_previously_focused_one(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
     vcx.update(|_, cx| cx.set_reduce_motion(true));
@@ -433,7 +689,7 @@ fn handle_drop_parks_the_last_live_pane_and_keyboard_restores_its_identity(
             .bounds()
             .center();
         let content = window.find("pane-presentations").bounds();
-        let aim = point(content.center().x, content.bottom() - window.rem_size());
+        let aim = park_aim(window, content);
         window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
         window.pointer_move(aim, Some(gpui_kit::MouseButton::Left), cx);
         assert!(window.find("park-drop-target").visible());
@@ -467,6 +723,201 @@ fn handle_drop_parks_the_last_live_pane_and_keyboard_restores_its_identity(
 }
 
 #[gpui_kit::test]
+fn a_recognized_pane_drag_reveals_the_top_target_with_nothing_parked(cx: &mut TestAppContext) {
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_reduce_motion(true));
+    let pane = app.update_in(&mut vcx, |app, window, cx| {
+        let pane = app.tabs[0].pane.first_leaf().unwrap();
+        window.focus(&pane.focus_handle(cx), cx);
+        pane
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let start = window
+            .find(("pane-drag-handle", pane.entity_id().as_u64() as usize))
+            .bounds()
+            .center();
+        let content = window.find("pane-presentations").bounds();
+        // Halfway down the content: nowhere near the target, and nothing is
+        // parked yet. The affordance has to be on offer anyway, or a pane
+        // could never be aimed at it.
+        let away = point(content.center().x, content.center().y);
+        window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
+        window.pointer_move(away, Some(gpui_kit::MouseButton::Left), cx);
+        assert!(cx.has_active_drag());
+        assert_eq!(app.read(cx).parked_deck.read(cx).cards().len(), 0);
+        let target = window.find("park-drop-target").bounds();
+        let pill = window.find("park-drop-pill").bounds();
+        let zoom = window.rem_size().as_f32() / 16.;
+        let viewport = window.viewport_size();
+        assert!((target.top() - content.top()).as_f32().abs() <= 1.);
+        assert!((target.center().x - viewport.width / 2.).as_f32().abs() <= 1.);
+        assert!((target.size.height - px(104. * zoom)).as_f32().abs() <= 1.);
+        assert!(pill.top() >= target.top() && pill.bottom() <= target.bottom());
+        // The title bar is covered while the drag owns the pointer: its move
+        // hit region must not take the release that parks the pane below it.
+        let shield = window.find("titlebar-drag-shield").bounds();
+        assert_eq!(shield.origin, point(px(0.), px(0.)));
+        assert!((shield.size.width - viewport.width).as_f32().abs() <= 1.);
+        assert!(shield.contains(&window.find("titlebar-park").bounds().center()));
+        // Release away from the target: the gesture is cancelled, not turned
+        // into a split, and the pane keeps running in place.
+        window.pointer_up(away, gpui_kit::MouseButton::Left, cx);
+        assert!(!cx.has_active_drag());
+        assert!(window.try_find("park-drop-target").is_none());
+        assert!(window.try_find("titlebar-drag-shield").is_none());
+    });
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert_eq!(app.tabs[0].pane.leaves().len(), 1);
+        assert_eq!(
+            app.tabs[0].pane.first_leaf().unwrap().entity_id(),
+            pane.entity_id()
+        );
+        assert!(app.tabs[0].presentation().parked().is_empty());
+        assert!(pane.contains_focused(window, cx));
+        assert!(app.pane_drag.borrow().is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn a_pane_drag_shields_the_title_bar_and_restores_its_entry_when_it_ends(cx: &mut TestAppContext) {
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 2);
+    vcx.update(|_, cx| cx.set_reduce_motion(true));
+    let (pane, parked) = app.update_in(&mut vcx, |app, window, cx| {
+        let pane = app.tabs[0].pane.first_leaf().unwrap();
+        let parked = app.tabs.remove(1).pane.first_leaf().unwrap();
+        app.tabs[0]
+            .pane
+            .split_leaf(pane.entity_id(), Axis::Horizontal, false, parked.clone());
+        app.park_pane(parked.entity_id(), window, cx);
+        window.focus(&pane.focus_handle(cx), cx);
+        cx.notify();
+        (pane, parked.entity_id())
+    });
+    vcx.run_until_parked();
+    let card = ("parked-card", parked.as_u64() as usize);
+    // The entry still owns its hover and its fan outside a drag.
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.hover("titlebar-park", cx);
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find(card).visible());
+        let content = window.find("pane-presentations").bounds();
+        window.pointer_move(point(content.center().x, content.center().y), None, cx);
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(card).is_none());
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let start = window
+            .find(("pane-drag-handle", pane.entity_id().as_u64() as usize))
+            .bounds()
+            .center();
+        let entry = window.find("titlebar-park").bounds().center();
+        window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
+        window.pointer_move(entry, Some(gpui_kit::MouseButton::Left), cx);
+        assert!(cx.has_active_drag());
+        assert!(window.find("titlebar-drag-shield").visible());
+        assert!(window.find("park-drop-target").visible());
+        // The shield takes the pointer: the entry underneath cannot open its
+        // fan, so the drop target is the only thing the drag offers.
+        assert!(window.try_find(card).is_none());
+        // Releasing over the entry is above the target: the pane is neither
+        // parked nor moved, and the running session keeps its identity.
+        window.pointer_up(entry, gpui_kit::MouseButton::Left, cx);
+        assert!(!cx.has_active_drag());
+        assert!(window.try_find("titlebar-drag-shield").is_none());
+        assert!(window.try_find("park-drop-target").is_none());
+    });
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(!app.tabs[0].is_parked_slot(&pane, cx));
+        assert_eq!(
+            app.tabs[0].pane.first_leaf().unwrap().entity_id(),
+            pane.entity_id()
+        );
+        assert_eq!(app.tabs[0].presentation().parked().len(), 1);
+        assert!(pane.contains_focused(window, cx));
+        assert!(app.pane_drag.borrow().is_none());
+    });
+    // And the title bar is a title bar again: the entry reopens its fan.
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.hover("titlebar-park", cx);
+    });
+    vcx.run_until_parked();
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find(card).visible());
+    });
+}
+
+#[gpui_kit::test]
+fn a_zoomed_pane_drag_parks_the_same_pane_and_restores_it_tiled(cx: &mut TestAppContext) {
+    let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| cx.set_reduce_motion(true));
+    let pane = app.update_in(&mut vcx, |app, window, cx| {
+        let pane = app.tabs[0].pane.first_leaf().unwrap();
+        app.maximized = pane.terminal().cloned();
+        window.focus(&pane.focus_handle(cx), cx);
+        cx.notify();
+        pane
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let start = window
+            .find(("pane-drag-handle", pane.entity_id().as_u64() as usize))
+            .bounds()
+            .center();
+        let content = window.find("pane-presentations").bounds();
+        window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
+        window.pointer_move(
+            park_aim(window, content),
+            Some(gpui_kit::MouseButton::Left),
+            cx,
+        );
+        assert!(window.find("park-drop-target").visible());
+        let pill = window.find("park-drop-pill").bounds();
+        window.pointer_move(pill.center(), Some(gpui_kit::MouseButton::Left), cx);
+        window.pointer_up(pill.center(), gpui_kit::MouseButton::Left, cx);
+    });
+    vcx.run_until_parked();
+    app.update_in(&mut vcx, |app, _, cx| {
+        assert!(app.maximized.is_none());
+        assert!(app.tabs[0].is_parked_slot(&pane, cx));
+        assert_eq!(app.tabs[0].pane.leaves().len(), 1);
+        assert_eq!(
+            app.tabs[0].pane.first_leaf().unwrap().entity_id(),
+            pane.entity_id()
+        );
+        assert!(app.pane_drag.borrow().is_none());
+    });
+    vcx.update(|window, _| {
+        assert!(window.find("parked-empty").visible());
+        assert!(window.try_find("park-drop-target").is_none());
+        assert!(window.try_find("titlebar-drag-shield").is_none());
+    });
+    vcx.dispatch_action(RestoreParkedPane);
+    vcx.update(|window, cx| window.press("enter", cx));
+    app.update_in(&mut vcx, |app, window, cx| {
+        assert!(app.tabs[0].presentation().parked().is_empty());
+        assert!(app.tabs[0].presentation().pip().is_none());
+        assert!(pane.contains_focused(window, cx));
+        assert_eq!(
+            app.tabs[0].pane.first_leaf().unwrap().entity_id(),
+            pane.entity_id()
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn escape_cancels_a_valid_parking_drag_without_a_late_drop_or_menu(cx: &mut TestAppContext) {
     let (app, mut vcx, _streams) = test_window::harness_with_tabs(cx, 1);
     let pane = app.update_in(&mut vcx, |app, window, cx| {
@@ -481,7 +932,7 @@ fn escape_cancels_a_valid_parking_drag_without_a_late_drop_or_menu(cx: &mut Test
             .bounds()
             .center();
         let content = window.find("pane-presentations").bounds();
-        let aim = point(content.center().x, content.bottom() - window.rem_size());
+        let aim = park_aim(window, content);
         window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
         window.pointer_move(aim, Some(gpui_kit::MouseButton::Left), cx);
         assert!(window.find("park-drop-target").visible());
@@ -530,7 +981,7 @@ fn cancelled_parking_drag_cannot_rearm_a_split_or_menu_on_late_pointer_events(
                     .bounds()
                     .center();
                 let content = window.find("pane-presentations").bounds();
-                let aim = point(content.center().x, content.bottom() - window.rem_size());
+                let aim = park_aim(window, content);
                 window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
                 window.pointer_move(aim, Some(gpui_kit::MouseButton::Left), cx);
                 assert!(cx.has_active_drag());
@@ -612,13 +1063,15 @@ fn leaving_the_target_and_releasing_over_status_does_not_park_or_detach(cx: &mut
             .bounds()
             .center();
         let content = window.find("pane-presentations").bounds();
-        let aim = point(content.center().x, content.bottom() - window.rem_size());
+        let aim = park_aim(window, content);
         window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
         window.pointer_move(aim, Some(gpui_kit::MouseButton::Left), cx);
         assert!(window.find("park-drop-target").visible());
         let status = window.find("workbench-status").bounds().center();
         window.pointer_move(status, Some(gpui_kit::MouseButton::Left), cx);
-        assert!(window.try_find("park-drop-target").is_none());
+        // The target stays on offer for the whole drag; it is the release
+        // position that decides, and the status bar is outside it.
+        assert!(window.find("park-drop-target").visible());
         window.pointer_up(status, gpui_kit::MouseButton::Left, cx);
         assert!(!cx.has_active_drag());
     });
@@ -653,7 +1106,7 @@ fn dropping_a_nonfocused_handle_parks_only_that_pane_in_its_tab(cx: &mut TestApp
             .bounds()
             .center();
         let content = window.find("pane-presentations").bounds();
-        let aim = point(content.center().x, content.bottom() - window.rem_size());
+        let aim = park_aim(window, content);
         window.drag(start, aim, cx);
     });
     vcx.run_until_parked();
@@ -690,7 +1143,7 @@ fn pip_move_drag_cancels_then_parks_without_committing_geometry_or_replacing_the
             window.render_frame(cx);
             let start = window.find(("pip-move", key)).bounds().center();
             let content = window.find("pane-presentations").bounds();
-            let aim = point(content.center().x, content.bottom() - window.rem_size());
+            let aim = park_aim(window, content);
             window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
             window.pointer_move(aim, Some(gpui_kit::MouseButton::Left), cx);
             assert!(window.find("park-drop-target").visible());
@@ -743,11 +1196,7 @@ fn pip_pane_menu_handle_also_drags_to_the_shared_parking_target(cx: &mut TestApp
             .bounds()
             .center();
         let content = window.find("pane-presentations").bounds();
-        window.drag(
-            start,
-            point(content.center().x, content.bottom() - window.rem_size()),
-            cx,
-        );
+        window.drag(start, park_aim(window, content), cx);
     });
     app.update_in(&mut vcx, |app, _, cx| {
         assert!(app.tabs[0].is_parked_slot(&pane, cx));
@@ -792,19 +1241,35 @@ fn parking_target_matches_painted_ellipse_and_stays_above_status_after_zoom_resi
                 .bounds()
                 .center();
             let content = window.find("pane-presentations").bounds();
-            let aim = point(content.center().x, content.bottom() - window.rem_size());
+            let aim = park_aim(window, content);
             window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
             window.pointer_move(aim, Some(gpui_kit::MouseButton::Left), cx);
             let target = window.find("park-drop-target").bounds();
             let pill = window.find("park-drop-pill").bounds();
             let status = window.find("workbench-status").bounds();
+            let zoom = window.rem_size().as_f32() / 16.;
+            let window_mid = window.viewport_size().width / 2.;
+            // The target hangs from the content's top edge — the line under
+            // the centered entry — and is centred on the window, not on the
+            // terminal column side panels shove sideways. Narrow content
+            // clips the outer arc, so the semantic bounds are the clipped
+            // rectangle of that same geometry.
+            let expected_left = (window_mid - px(180. * zoom)).max(content.left());
+            let expected_right = (window_mid + px(180. * zoom)).min(content.right());
+            assert!((target.top() - content.top()).as_f32().abs() <= 1.);
+            assert!((target.left() - expected_left).as_f32().abs() <= 1.);
+            assert!((target.right() - expected_right).as_f32().abs() <= 1.);
+            assert!((target.size.height - px(104. * zoom)).as_f32().abs() <= 1.);
+            assert!(pill.top() >= target.top() && pill.bottom() <= target.bottom());
+            assert!(pill.left() >= target.left() && pill.right() <= target.right());
             for bounds in [target, pill] {
                 assert!(bounds.left() >= content.left() && bounds.right() <= content.right());
                 assert!(bounds.top() >= content.top() && bounds.bottom() <= content.bottom());
                 assert!(bounds.bottom() <= status.top());
             }
-            // The rectangular semantic envelope's empty top corner is not a drop hit.
-            let corner = target.origin + point(px(1.), px(1.));
+            // The rectangular semantic envelope's empty lower corner is not a
+            // drop hit: the painted dome is widest along the top edge.
+            let corner = point(target.left() + px(1.), target.bottom() - px(1.));
             window.pointer_move(corner, Some(gpui_kit::MouseButton::Left), cx);
             window.pointer_up(corner, gpui_kit::MouseButton::Left, cx);
         });
@@ -819,7 +1284,7 @@ fn parking_target_matches_painted_ellipse_and_stays_above_status_after_zoom_resi
             let content = window.find("pane-presentations").bounds();
             window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
             window.pointer_move(
-                point(content.center().x, content.bottom() - window.rem_size()),
+                park_aim(window, content),
                 Some(gpui_kit::MouseButton::Left),
                 cx,
             );
@@ -877,11 +1342,7 @@ fn drag_park_restore_keeps_output_and_input_on_the_original_daemon_attachment(
             .bounds()
             .center();
         let content = window.find("pane-presentations").bounds();
-        window.drag(
-            start,
-            point(content.center().x, content.bottom() - window.rem_size()),
-            cx,
-        );
+        window.drag(start, park_aim(window, content), cx);
     });
     app.update_in(&mut vcx, |app, _, cx| {
         assert!(app.tabs[0].is_parked_slot(&pane, cx))
@@ -966,6 +1427,10 @@ fn twenty_parked_panes_remain_reachable_by_keyboard_beyond_the_visible_deck(
                 .is_none_or(|card| !card.visible()),
             "the last pane needs the overflow path at this viewport"
         );
+        // At rest the deck is invisible; the entry opens the fan that owns
+        // the overflow control.
+        window.click("titlebar-park", cx);
+        window.render_frame(cx);
         assert!(window.find("parked-more").visible());
         window.click("parked-more", cx);
     });
@@ -1078,7 +1543,7 @@ fn tab_switch_and_lost_pressed_button_cancel_pending_parking(cx: &mut TestAppCon
                 .bounds()
                 .center();
             let content = window.find("pane-presentations").bounds();
-            let aim = point(content.center().x, content.bottom() - window.rem_size());
+            let aim = park_aim(window, content);
             window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
             window.pointer_move(aim, Some(gpui_kit::MouseButton::Left), cx);
             assert!(window.find("park-drop-target").visible());
@@ -1133,11 +1598,14 @@ fn a_parking_target_empty_corner_cannot_become_an_unintended_split_drop(cx: &mut
         let content = window.find("pane-presentations").bounds();
         window.pointer_down(start, gpui_kit::MouseButton::Left, cx);
         window.pointer_move(
-            point(content.center().x, content.bottom() - window.rem_size()),
+            park_aim(window, content),
             Some(gpui_kit::MouseButton::Left),
             cx,
         );
-        let corner = window.find("park-drop-target").bounds().origin + point(px(1.), px(1.));
+        let corner = {
+            let target = window.find("park-drop-target").bounds();
+            point(target.left() + px(1.), target.bottom() - px(1.))
+        };
         window.pointer_move(corner, Some(gpui_kit::MouseButton::Left), cx);
         window.pointer_up(corner, gpui_kit::MouseButton::Left, cx);
     });
@@ -1192,7 +1660,11 @@ fn overflow_uses_content_width_and_zoom_without_shrinking_targets_or_losing_entr
         cx.notify();
     });
     vcx.run_until_parked();
-    vcx.update(|window, cx| window.click("parked-more", cx));
+    vcx.update(|window, cx| {
+        window.click("titlebar-park", cx);
+        window.render_frame(cx);
+        window.click("parked-more", cx);
+    });
     vcx.run_until_parked();
     for step in 0..3 {
         match step {
@@ -1286,7 +1758,11 @@ fn overflow_tabbed_rows_activate_their_own_pane_before_restore(cx: &mut TestAppC
         cx.notify();
     });
     vcx.run_until_parked();
-    vcx.update(|window, cx| window.click("parked-more", cx));
+    vcx.update(|window, cx| {
+        window.click("titlebar-park", cx);
+        window.render_frame(cx);
+        window.click("parked-more", cx);
+    });
     vcx.run_until_parked();
     for (pane, activation) in [(&parked[1], "enter"), (&parked[2], "space")] {
         vcx.update(|window, cx| {
@@ -1365,7 +1841,11 @@ fn overflow_reconciles_remote_parking_and_deleted_preview_without_retargeting_re
         cx.notify();
     });
     vcx.run_until_parked();
-    vcx.update(|window, cx| window.click("parked-more", cx));
+    vcx.update(|window, cx| {
+        window.click("titlebar-park", cx);
+        window.render_frame(cx);
+        window.click("parked-more", cx);
+    });
     vcx.run_until_parked();
     vcx.update(|window, cx| {
         window.press("end", cx);
@@ -1435,6 +1915,8 @@ fn overflow_reconciles_remote_parking_and_deleted_preview_without_retargeting_re
         window.render_frame(cx);
         assert!(window.try_find("parked-preview").is_none());
         assert!(window.try_find("parked-overflow").is_none());
+        window.click("titlebar-park", cx);
+        window.render_frame(cx);
         window.click("parked-more", cx);
     });
     vcx.run_until_parked();

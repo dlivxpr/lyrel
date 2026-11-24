@@ -6,6 +6,11 @@
 //! 本模块只持有可持久化内容和通用 Toast 包装；「来源」的解析在
 //! `NotificationSourceResolver` 后面：工作台在安装时提供查询，本 crate 不
 //! 认识窗口注册表、机器镜像或应用实体。
+//!
+//! 终端与 agent 事件经同一个 Inbox 进入历史（`stable_record_id` 给出进程级
+//! 稳定的事件身份）：相同身份的记录只落一条，跨窗口、跨视图重建和重放都去重；
+//! 桌面横幅只在首次记录时投递一次。终端与 wire 事件的内容有长度上限；应用自己的
+//! Toast 保留完整文本供详情和复制使用。不保存凭据或终端流。
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -19,6 +24,29 @@ use serde::{Deserialize, Serialize};
 use crate::session::WorkspaceId;
 
 const RETENTION: usize = 500;
+
+/// Longest message text kept for one terminal or agent event, in chars.
+/// The ingress content comes off the terminal and the wire (OSC payloads,
+/// command labels, an agent's own words), so it is attacker-shaped; the
+/// desktop boundary clamps what it shows, and event construction clamps what
+/// the inbox keeps — no raw terminal streams, no credentials, only bounded
+/// notice text. Application toasts are app-authored and keep their full text
+/// (the inbox promises complete content and copy in the details).
+const RECORD_MESSAGE_MAX: usize = 1024;
+
+/// The v5 namespace for stable pane-event identities. Any fixed UUID works;
+/// this one exists so `stable_record_id` output is identical in every process.
+const EVENT_ID_NAMESPACE: uuid::Uuid = uuid::Uuid::from_u128(0x39517E1E5A1E48C79A111CE55E1EC7A1);
+
+/// The deterministic record id for one qualified event identity.
+///
+/// The identity string is owned by the ingress adapter (the terminal names
+/// source, session and transition); this crate only hashes it, so the same
+/// event observed by two windows, a rebuilt view, or a replayed attach lands
+/// on the same id and is recorded once.
+pub fn stable_record_id(identity: &str) -> uuid::Uuid {
+    uuid::Uuid::new_v5(&EVENT_ID_NAMESPACE, identity.as_bytes())
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Severity {
@@ -62,6 +90,24 @@ pub struct Record {
 }
 
 impl Record {
+    /// A history record for one qualified pane event: a stable, deduplicating
+    /// id, the moment it was recorded, and content bounded on intake.
+    pub fn event(
+        id: uuid::Uuid,
+        severity: Severity,
+        message: impl Into<String>,
+        source: Option<Source>,
+    ) -> Self {
+        let message = message.into();
+        Self {
+            id,
+            timestamp: chrono::Utc::now().timestamp(),
+            severity,
+            message: bounded_message(&message),
+            source,
+            unread: true,
+        }
+    }
     pub fn id(&self) -> uuid::Uuid {
         self.id
     }
@@ -224,6 +270,27 @@ impl NotificationSourceResolver {
     ) -> Self {
         Self { resolve }
     }
+
+    /// Run the shell-installed query for a record's source. Terminal-side
+    /// ingress calls this at the emitting pane so the app — not the terminal —
+    /// owns the stable workspace/Host/pane identity a record navigates by.
+    pub fn resolve(
+        &self,
+        origin: Option<(WorkspaceId, ScopedPane)>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<Source> {
+        (self.resolve)(origin, window, cx)
+    }
+
+    /// The stored callback itself: callers that need the function without
+    /// holding the `&App` borrow the global was read through can lift it
+    /// out, then invoke it with `&mut App`.
+    pub fn resolver(
+        &self,
+    ) -> fn(Option<(WorkspaceId, ScopedPane)>, &mut Window, &mut App) -> Option<Source> {
+        self.resolve
+    }
 }
 
 impl Global for NotificationSourceResolver {}
@@ -292,6 +359,19 @@ pub fn history(cx: &App) -> &Entity<Inbox> {
     &cx.global::<InboxGlobal>().0
 }
 
+/// Attach a resolved source to a record that was already appended.
+///
+/// Terminal ingress appends the record while its own pane is still inside an
+/// update, so it resolves the source after that update returns and lands it
+/// here — reading the pane again from inside its update would re-enter it. A
+/// record cleared or trimmed in between is simply not found.
+pub fn attach_source(cx: &mut App, id: uuid::Uuid, source: Source) {
+    history(cx).clone().update(cx, |inbox, cx| {
+        inbox.attach_source(id, source);
+        cx.notify();
+    });
+}
+
 pub fn ensure(cx: &mut App) {
     if cx.has_global::<InboxGlobal>() {
         return;
@@ -343,6 +423,11 @@ impl Snapshot {
                 .records
                 .iter_mut()
                 .for_each(|record| record.unread = false),
+            Operation::ReadOne(id) => {
+                if let Some(record) = self.records.iter_mut().find(|record| record.id == id) {
+                    record.unread = false;
+                }
+            }
             Operation::Source(id, source) => {
                 if let Some(record) = self.records.iter_mut().find(|record| record.id == id) {
                     record.source = Some(source);
@@ -356,6 +441,7 @@ enum Operation {
     Append(Record),
     Clear,
     Read,
+    ReadOne(uuid::Uuid),
     Source(uuid::Uuid, Source),
 }
 enum Write {
@@ -457,9 +543,21 @@ impl Inbox {
             log::error!("notification history writer stopped");
         }
     }
-    pub fn append(&mut self, record: Record) {
+    /// Append a record unless its id is already present — one qualified event
+    /// is recorded once process-wide, no matter how many viewers observed it
+    /// or how often a status is replayed. Returns whether the record landed.
+    pub fn append(&mut self, record: Record) -> bool {
+        if self
+            .snapshot
+            .records
+            .iter()
+            .any(|existing| existing.id == record.id)
+        {
+            return false;
+        }
         self.send(Operation::Append(record.clone()));
         self.snapshot.append(record);
+        true
     }
     fn attach_source(&mut self, id: uuid::Uuid, source: Source) {
         if let Some(record) = self
@@ -486,6 +584,22 @@ impl Inbox {
             .for_each(|record| record.unread = false);
         self.send(Operation::Read);
     }
+    /// Acknowledge one record — its details were opened or its source was
+    /// navigated to. Unresolved live attention (Pending) is not a record and
+    /// is never touched here.
+    pub fn acknowledge(&mut self, id: uuid::Uuid) {
+        if let Some(record) = self
+            .snapshot
+            .records
+            .iter_mut()
+            .find(|record| record.id == id)
+        {
+            if record.unread {
+                record.unread = false;
+                self.send(Operation::ReadOne(id));
+            }
+        }
+    }
     #[cfg(feature = "test-guards")]
     pub fn flush(&self) {
         let (done, pending) = mpsc::channel();
@@ -509,7 +623,129 @@ impl Drop for Inbox {
     }
 }
 
+fn bounded_message(message: &str) -> String {
+    if message.chars().count() <= RECORD_MESSAGE_MAX {
+        return message.to_string();
+    }
+    message.chars().take(RECORD_MESSAGE_MAX).collect()
+}
+
 fn save(path: &std::path::Path, snapshot: &Snapshot) -> std::io::Result<()> {
     let bytes = serde_json::to_vec(snapshot).map_err(std::io::Error::other)?;
     lyrel_protocol::core::config::write_atomic_private(path, &bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(id: uuid::Uuid, message: &str) -> Record {
+        Record::event(id, Severity::Info, message, None)
+    }
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "lyrel-notification-history-{name}-{}.json",
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    #[test]
+    fn the_same_event_identity_records_once() {
+        let mut inbox = Inbox::open(temp_path("dedup"));
+        let id = stable_record_id("v1|command|0|1|local|0|Failed(7)|build");
+        assert!(
+            inbox.append(record(id, "failed")),
+            "first observation records"
+        );
+        assert!(
+            !inbox.append(record(id, "failed")),
+            "a replay of the same event is a no-op, not a second record"
+        );
+        assert_eq!(inbox.records().count(), 1);
+        assert_eq!(inbox.unread_count(), 1);
+    }
+
+    #[test]
+    fn distinct_identities_record_distinct_events() {
+        let mut inbox = Inbox::open(temp_path("distinct"));
+        assert!(inbox.append(record(stable_record_id("a"), "one")));
+        assert!(inbox.append(record(stable_record_id("b"), "two")));
+        assert_eq!(inbox.records().count(), 2);
+    }
+
+    #[test]
+    fn stable_record_id_is_deterministic_across_calls() {
+        let id = stable_record_id("v1|osc|0|1|local|None|Build done");
+        assert_eq!(id, stable_record_id("v1|osc|0|1|local|None|Build done"));
+        assert_ne!(id, stable_record_id("v1|osc|0|1|local|None|Build done!"));
+    }
+
+    #[test]
+    fn restart_reloads_records_and_keeps_deduplicating() {
+        let path = temp_path("restart");
+        let mut inbox = Inbox::open(path.clone());
+        let id = stable_record_id("v1|agent-done|0|9|workspace|sid-1");
+        inbox.append(record(id, "done"));
+        // Dropping the inbox drains the writer thread, persisting the record
+        // the way process shutdown does.
+        drop(inbox);
+
+        let mut reloaded = Inbox::open(path);
+        assert_eq!(
+            reloaded.records().count(),
+            1,
+            "the record survives a restart"
+        );
+        assert!(
+            !reloaded.append(record(id, "done")),
+            "a replayed event after restart must not recreate the record"
+        );
+        assert_eq!(reloaded.records().count(), 1);
+    }
+
+    #[test]
+    fn retention_bounds_the_history() {
+        let mut inbox = Inbox::open(temp_path("retention"));
+        for index in 0..600 {
+            inbox.append(record(stable_record_id(&format!("event-{index}")), "note"));
+        }
+        assert_eq!(inbox.records().count(), RETENTION);
+        assert!(
+            inbox.records().all(|existing| existing.message() == "note"),
+            "retention trims the oldest, never rewriting what remains"
+        );
+    }
+
+    #[test]
+    fn terminal_event_content_is_bounded() {
+        let mut inbox = Inbox::open(temp_path("bounded"));
+        let long = "x".repeat(RECORD_MESSAGE_MAX * 2);
+        inbox.append(record(stable_record_id("long"), &long));
+        let stored = inbox.records().next().expect("the record landed");
+        assert_eq!(stored.message().chars().count(), RECORD_MESSAGE_MAX);
+        assert!(
+            long.starts_with(stored.message()),
+            "the bound keeps a prefix, never mangles the middle"
+        );
+    }
+
+    #[test]
+    fn application_toasts_keep_their_full_text_for_copy() {
+        let mut inbox = Inbox::open(temp_path("full-app"));
+        // Application toasts are app-authored, not terminal ingress: the
+        // details view promises the complete content and copy, so the inbox
+        // must not clamp them the way it clamps a wire event.
+        let long = "SSH failure: permission denied\n".repeat(RECORD_MESSAGE_MAX);
+        inbox.append(Record {
+            id: stable_record_id("app-toast"),
+            timestamp: chrono::Utc::now().timestamp(),
+            severity: Severity::Error,
+            message: long.clone(),
+            source: None,
+            unread: true,
+        });
+        let stored = inbox.records().next().expect("the toast landed");
+        assert_eq!(stored.message(), long.as_str());
+    }
 }

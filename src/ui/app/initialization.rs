@@ -202,6 +202,10 @@ impl LyrelApp {
         // config selection is deliberately not projected onto it (#345).
         let tool_layout = Self::persisted_tool_layout(workspace, cx);
         let right_panel_visible = tool_layout.open;
+        // The mirror is the layout's tool selection: Browser is a tool
+        // identity since #382, so a restored page selection comes back as
+        // the Browser tool showing its list; which page was raised is
+        // live-only state and is not revived.
         let right_panel_tab = tool_layout.active;
         let scm_graph_expanded = cx.global::<Config>().scm_graph_expanded;
         let sidebar_collapsed = cx.global::<Config>().sidebar_collapsed;
@@ -210,6 +214,11 @@ impl LyrelApp {
         });
         cx.default_global::<crate::ui::scm::status_cache::GitStatusCache>();
         crate::ui::scm_snapshot::install_scm_snapshot_source(cx);
+        // Window-level native surfaces (the browser's WebView) give way to
+        // menus and dialogs; both signals are installed once per App and
+        // shared by every window (#403).
+        crate::ui::surface_coordinator::install_popup_menu_presence(cx);
+        crate::ui::surface_coordinator::install_native_surface_cover_hooks(cx);
         let git_status_watch =
             cx.observe_global::<crate::ui::scm::status_cache::GitStatusCache>(|this, cx| {
                 this.on_diff_status_changed(cx);
@@ -345,6 +354,18 @@ impl LyrelApp {
                         this.focus_active(window, cx);
                     }
                 }
+                crate::ui::parked_deck::ParkedDeckEvent::CoverageChanged { fan, drop_target } => {
+                    this.set_surface_cover(
+                        crate::ui::surface_coordinator::CoverSource::ParkFan,
+                        *fan,
+                        cx,
+                    );
+                    this.set_surface_cover(
+                        crate::ui::surface_coordinator::CoverSource::ParkDropTarget,
+                        *drop_target,
+                        cx,
+                    );
+                }
             },
         );
         let file_search = cx.new(|cx| {
@@ -360,6 +381,19 @@ impl LyrelApp {
         let panel_search =
             crate::ui::panel_search::PanelSearchState::new(file_search.clone(), window, cx);
         let monitor = crate::ui::panel_monitor::MonitorState::new(window, cx);
+        let notification_bell = cx.new(crate::ui::notification_history::NotificationBell::new);
+        let notification_bell_sub = cx.subscribe(
+            &notification_bell,
+            |this, _, event: &crate::ui::notification_history::NotificationBellEvent, cx| {
+                let crate::ui::notification_history::NotificationBellEvent::OpenChanged(open) =
+                    event;
+                this.set_surface_cover(
+                    crate::ui::surface_coordinator::CoverSource::InboxPopover,
+                    *open,
+                    cx,
+                );
+            },
+        );
         let mut app = Self {
             tabs: TabSet::new(tabs, active),
             pending_notification_source: None,
@@ -405,6 +439,7 @@ impl LyrelApp {
             scm: crate::ui::scm::ScmPanelState::new(scm_graph_expanded),
             github: crate::ui::github::GitHubPanelState::new(cx),
             diff_probes: Default::default(),
+            content_fetches: Default::default(),
             file_tree,
             _file_tree_events: file_tree_events,
             _file_tree_observer: file_tree_observer,
@@ -422,6 +457,8 @@ impl LyrelApp {
             document_dragging: Rc::new(Cell::new(false)),
             right_panel_visible,
             right_panel_tab,
+            browser_chrome: None,
+            surface_coordinator: crate::ui::surface_coordinator::SurfaceCoordinator::new(),
             right_panel_nav_focus: cx.focus_handle(),
             right_panel_nav_return: None,
             right_panel_nav_wait: Cell::new(0),
@@ -461,7 +498,8 @@ impl LyrelApp {
             metric_view: None,
             lyrel_usage_view: None,
             disk_view: None,
-            notification_bell: cx.new(crate::ui::notification_history::NotificationBell::new),
+            notification_bell,
+            _notification_bell_sub: notification_bell_sub,
             program_attention: Default::default(),
             status_document_focus: None,
             connect: Default::default(),
@@ -469,10 +507,14 @@ impl LyrelApp {
             host_snapshots: std::collections::HashMap::new(),
             remote_host_errors: std::collections::HashMap::new(),
             parked_dismissed: std::collections::HashSet::new(),
+            exact_resumes: Vec::new(),
             startup_error,
         };
         if !cfg!(test) && crate::ui::windows::WindowRegistry::count(cx) == 0 {
             crate::ui::tray::init(cx);
+        }
+        if !cfg!(test) {
+            crate::ui::system_badge::SystemBadgeState::init(cx);
         }
         app.refresh_shells(cx);
         // Backstop for every other way a window goes away (a workspace
@@ -492,6 +534,8 @@ impl LyrelApp {
             // with none Working, automatic mode releases the request even
             // when the app itself stays alive behind the tray icon.
             crate::ui::caffeine::CaffeineState::agents_changed(cx);
+            // The system badge is the same kind of process-wide aggregate.
+            crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
         })
         .detach();
         cx.on_app_quit(|app, cx| {

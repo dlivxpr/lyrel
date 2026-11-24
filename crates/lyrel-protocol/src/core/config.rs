@@ -374,9 +374,29 @@ pub struct Config {
     /// either way.
     #[serde(default = "default_true")]
     pub sidebar_auto_grouping: bool,
+    /// Shared delivery timing for every desktop and sound channel —
+    /// Never / When unfocused / Always. The activity rows
+    /// ([`program_activity`]) and terminal events
+    /// ([`terminal_notifications`]) open a channel; this decides whether it
+    /// may interrupt right now. Kept key-for-key from before the matrix, so
+    /// an existing preference carries over untouched.
     #[serde(default, deserialize_with = "de_lenient")]
     pub notify_on_command_finish: NotifyMode,
     pub check_for_updates: bool,
+    /// The activity matrix: tab, desktop, sound and badge channels for
+    /// Running, Waiting, Ended and Failed — see [`ProgramActivity`].
+    #[serde(default)]
+    pub program_activity: ProgramActivity,
+    /// One-time migration marker for the system-badge column (#397). The
+    /// activity matrix (#396) wrote `badge: false` for every row before the
+    /// column existed; a config without this marker gets the approved
+    /// Waiting/Failed badge defaults once, then the key is saved as true.
+    #[serde(default)]
+    pub badge_defaults_applied: bool,
+    /// Separate desktop delivery for ordinary command results and explicit
+    /// OSC notices — see [`TerminalNotifications`].
+    #[serde(default)]
+    pub terminal_notifications: TerminalNotifications,
     /// Whether a found update is fetched and verified before the user asks for
     /// it. On by default: it turns "spend five minutes downloading" into "press
     /// restart", which is the whole difference between an update people apply
@@ -734,6 +754,171 @@ impl NotifyMode {
     }
 }
 
+/// One row of the notification activity matrix: the structured program
+/// states a pane reports (OSC 7501 program records, coding-agent session
+/// status). `Running` is a state, not a result; `Ended` and `Failed` are
+/// mutually exclusive for any single result — a result enters exactly one
+/// of the two, never both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivityState {
+    Running,
+    Waiting,
+    Ended,
+    Failed,
+}
+
+impl ActivityState {
+    /// The matrix row a retained program record belongs to. `Idle` has no
+    /// row — it reports the absence of activity rather than an activity.
+    pub fn of_program(state: crate::core::program_status::ProgramState) -> Option<Self> {
+        use crate::core::program_status::ProgramState;
+        match state {
+            ProgramState::Idle => None,
+            ProgramState::Working => Some(Self::Running),
+            ProgramState::Blocked => Some(Self::Waiting),
+            ProgramState::Done => Some(Self::Ended),
+            ProgramState::Error => Some(Self::Failed),
+        }
+    }
+
+    /// The matrix row an agent session status belongs to. A settled turn's
+    /// authoritative outcome decides between `Ended` and `Failed`; a turn
+    /// that ended without a reported failure ended.
+    pub fn of_agent(
+        status: crate::core::cli_agent::AgentStatus,
+        outcome: Option<crate::core::cli_agent::AgentOutcome>,
+    ) -> Option<Self> {
+        use crate::core::cli_agent::{AgentOutcome, AgentStatus};
+        match status {
+            AgentStatus::Idle => None,
+            AgentStatus::Working => Some(Self::Running),
+            AgentStatus::Waiting => Some(Self::Waiting),
+            AgentStatus::Done => Some(match outcome {
+                Some(AgentOutcome::Failed | AgentOutcome::Rejected) => Self::Failed,
+                _ => Self::Ended,
+            }),
+        }
+    }
+}
+
+/// What one activity row may do. `tab` drives the tab strip's own marks,
+/// `desktop` the OS banner, `sound` the alert sound and `badge` the platform
+/// count on the app's own icon: the number of distinct terminal tabs whose
+/// panes currently qualify for that row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ActivityChannels {
+    #[serde(default = "default_true")]
+    pub tab: bool,
+    #[serde(default = "default_true")]
+    pub desktop: bool,
+    pub sound: bool,
+    /// Whether a tab with this activity counts once toward the app icon's
+    /// system badge. Waiting and Failed default on, Ended stays off, and
+    /// Running has no badge channel. Rows that omit this field are off
+    /// unless the legacy config migration applies the new defaults.
+    #[serde(default)]
+    pub badge: bool,
+}
+
+impl Default for ActivityChannels {
+    fn default() -> Self {
+        Self {
+            tab: true,
+            desktop: true,
+            sound: false,
+            badge: false,
+        }
+    }
+}
+
+/// The `Running` row's channels. Running is never a result, so only the
+/// tab's own activity mark applies to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct RunningChannels {
+    #[serde(default = "default_true")]
+    pub tab: bool,
+}
+
+impl Default for RunningChannels {
+    fn default() -> Self {
+        Self { tab: true }
+    }
+}
+
+/// The notification channel matrix by structured program activity. A field
+/// missing from an old config file fills with the row's approved default, so
+/// an existing install gains the matrix without losing its other settings.
+///
+/// `notify_on_command_finish` stays the shared delivery *timing* (never /
+/// when unfocused / always) for the desktop and sound channels; these rows
+/// decide whether a channel is open at all, and closing one only spares the
+/// interruption — the event's history record is already written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ProgramActivity {
+    pub running: RunningChannels,
+    #[serde(default = "default_activity_waiting")]
+    pub waiting: ActivityChannels,
+    pub ended: ActivityChannels,
+    #[serde(default = "default_activity_failed")]
+    pub failed: ActivityChannels,
+}
+
+impl Default for ProgramActivity {
+    /// A fresh install gets the approved badge defaults even without a
+    /// `config.json`: Waiting and Failed badge, Ended does not.
+    fn default() -> Self {
+        Self {
+            running: RunningChannels::default(),
+            waiting: default_activity_waiting(),
+            ended: ActivityChannels::default(),
+            failed: default_activity_failed(),
+        }
+    }
+}
+
+impl ProgramActivity {
+    /// The channels configured for one matrix row.
+    pub fn channels(&self, activity: ActivityState) -> ActivityChannels {
+        match activity {
+            ActivityState::Running => ActivityChannels {
+                tab: self.running.tab,
+                desktop: false,
+                ..ActivityChannels::default()
+            },
+            ActivityState::Waiting => self.waiting,
+            ActivityState::Ended => self.ended,
+            ActivityState::Failed => self.failed,
+        }
+    }
+}
+
+/// Desktop delivery toggles for the terminal's own events, held separate
+/// from the activity matrix as agreed: an ordinary command result that met
+/// the duration threshold and an explicit program notification (OSC 9, 99,
+/// 777) are different kinds of event with their own controls. Both honour
+/// the shared delivery timing; both default on, the delivery every earlier
+/// version performed. Eligible history is unaffected by either flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TerminalNotifications {
+    #[serde(default = "default_true")]
+    pub command_desktop: bool,
+    #[serde(default = "default_true")]
+    pub osc_desktop: bool,
+}
+
+impl Default for TerminalNotifications {
+    fn default() -> Self {
+        Self {
+            command_desktop: true,
+            osc_desktop: true,
+        }
+    }
+}
+
 /// The modifier that makes the mouse wheel resize the font.
 ///
 /// `Platform` is ⌘ on macOS and Ctrl elsewhere, stored rather than the
@@ -894,6 +1079,9 @@ impl Default for Config {
             editor_git_gutter: true,
             sidebar_auto_grouping: true,
             notify_on_command_finish: NotifyMode::Unfocused,
+            program_activity: ProgramActivity::default(),
+            badge_defaults_applied: true,
+            terminal_notifications: TerminalNotifications::default(),
             check_for_updates: true,
             auto_download_updates: true,
             install_cli_on_path: true,
@@ -1219,6 +1407,16 @@ impl Config {
             && command.trim().is_empty()
         {
             self.link_file_command = None;
+        }
+        // The system-badge column arrived after the activity matrix had
+        // already saved `badge: false` for every row. Before the column
+        // existed no user could have chosen that value, so a config without
+        // the marker gets the approved Waiting/Failed defaults once. A later
+        // explicit off carries the marker and is preserved.
+        if !self.badge_defaults_applied {
+            self.program_activity.waiting.badge = true;
+            self.program_activity.failed.badge = true;
+            self.badge_defaults_applied = true;
         }
         // Absent means a config written before file links could open in the
         // built-in editor. Anyone who had already pointed `link_file_command`
@@ -1594,6 +1792,22 @@ pub fn extra_env() -> HashMap<String, String> {
     Config::load().env
 }
 
+/// Waiting (blocked, needs the reader) badges on by default.
+fn default_activity_waiting() -> ActivityChannels {
+    ActivityChannels {
+        badge: true,
+        ..ActivityChannels::default()
+    }
+}
+
+/// Failed (errored result) badges on by default; ended stays off.
+fn default_activity_failed() -> ActivityChannels {
+    ActivityChannels {
+        badge: true,
+        ..ActivityChannels::default()
+    }
+}
+
 /// Every wrapper name the daemon should read as an agent: `agent_commands`,
 /// plus the programs `agent_launch` entries run (see
 /// [`crate::core::cli_agent::launch_aliases`]). An explicit `agent_commands`
@@ -1689,6 +1903,14 @@ pub enum RightPanelTab {
     /// `Search`: a build without it folds the stored choice back to `Info`.
     #[serde(rename = "monitor")]
     Monitor,
+    /// The Browser tool — the workspace's web pages under one strip tab: the
+    /// strip shows the single Browser tab, the pages live in the tool's own
+    /// list (#382). Same rollback cost as `Search`: a build without it does
+    /// not know `"browser"`, falls through `de_lenient` to `Info`, and opens
+    /// there. Nothing else is lost — a newer build keeps the pages in the
+    /// workspace's layout record regardless.
+    #[serde(rename = "browser")]
+    Browser,
 }
 
 /// What opens when a file link in the grid is clicked.
@@ -1713,6 +1935,12 @@ pub enum DiffViewMode {
     #[default]
     Split,
     Unified,
+    /// Structural view: moves, modifications, additions and deletions by
+    /// content, with original-side positions. A build without it folds an
+    /// unknown `"content"` back to the default through `de_lenient`, and the
+    /// view falls back to the line layout with an explanation when a file
+    /// cannot be compared structurally.
+    Content,
 }
 
 /// The detail panel's resting width: the v4 design's 280px column, which is
@@ -1867,6 +2095,50 @@ mod tests {
             assert!(NotifyMode::Always.allows(watched));
             assert_eq!(NotifyMode::Unfocused.allows(watched), !watched);
         }
+    }
+
+    #[test]
+    fn activity_matrix_defaults_badge_waiting_and_failed_only() {
+        let cfg = ProgramActivity::default();
+        assert!(cfg.waiting.badge);
+        assert!(cfg.failed.badge);
+        assert!(!cfg.ended.badge);
+        assert!(!cfg.channels(ActivityState::Running).badge);
+        assert!(cfg.channels(ActivityState::Waiting).badge);
+        assert!(cfg.channels(ActivityState::Failed).badge);
+
+        // A config written before the matrix gains the approved badge
+        // defaults without touching its other keys.
+        let old: Config = serde_json::from_str(r#"{"font_size": 17.0}"#).unwrap();
+        assert!(old.program_activity.waiting.badge);
+        assert!(old.program_activity.failed.badge);
+        assert!(!old.program_activity.ended.badge);
+
+        // A row that was written without the badge key keeps the row's own
+        // struct default; only a whole missing row takes the approved one.
+        let partial: Config =
+            serde_json::from_str(r#"{"program_activity":{"waiting":{"tab":false}}}"#).unwrap();
+        assert!(!partial.program_activity.waiting.tab);
+        assert!(!partial.program_activity.waiting.badge);
+
+        // A config written before the badge column existed has the marker
+        // absent and gets the approved defaults once...
+        let mut legacy: Config = serde_json::from_str(
+            r#"{"program_activity":{"waiting":{"badge":false},"failed":{"badge":false}}}"#,
+        )
+        .unwrap();
+        legacy.sanitize();
+        assert!(legacy.program_activity.waiting.badge);
+        assert!(legacy.program_activity.failed.badge);
+        assert!(legacy.badge_defaults_applied);
+
+        // ...while a later explicit choice carries the marker and survives.
+        let mut chosen: Config = serde_json::from_str(
+            r#"{"badge_defaults_applied":true,"program_activity":{"waiting":{"badge":false}}}"#,
+        )
+        .unwrap();
+        chosen.sanitize();
+        assert!(!chosen.program_activity.waiting.badge);
     }
 
     #[test]

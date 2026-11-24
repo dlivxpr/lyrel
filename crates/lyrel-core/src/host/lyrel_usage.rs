@@ -220,21 +220,23 @@ mod tests {
     use std::process::{Command, Stdio};
     use std::time::Duration;
 
-    /// The sampler measures exactly the process it armed for: a busy child
-    /// of this test process is never part of the reading, which is the
-    /// Lyrel-total guarantee for shells and agents under the daemon.
+    /// The sampler measures exactly the process it armed for: a live child
+    /// of this test process is never part of the reading.
     #[test]
     fn the_sampler_never_includes_child_workloads() {
-        let mut child = Command::new(std::env::var("COMSPEC").unwrap_or_else(|_| "sh".into()))
-            .arg(if cfg!(windows) { "/c" } else { "-c" })
-            .arg(if cfg!(windows) {
-                "ping -t 127.0.0.1 > nul"
-            } else {
-                "while :; do :; done"
-            })
-            .stdout(Stdio::null())
-            .spawn()
-            .unwrap();
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = Command::new("ping.exe");
+            command.args(["-n", "30", "127.0.0.1"]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut command = Command::new("sh");
+            command.args(["-c", "while :; do :; done"]);
+            command
+        };
+        let mut child = command.stdout(Stdio::null()).spawn().unwrap();
         // Arm while the child exists so a whole-table walk could see it —
         // the sampler must still answer with this process alone.
         let mut sampler = Sampler::for_pid(std::process::id()).unwrap();
@@ -249,12 +251,12 @@ mod tests {
             .sample()
             .unwrap()
             .expect("the second refresh measures against the baseline");
+        child.kill().unwrap();
+        child.wait().unwrap();
         assert_eq!(component.pid(), std::process::id());
         assert_eq!(component.started_secs(), sampler.started_secs());
         assert!(component.memory_used_bytes() > 0);
         assert!(component.cpu_percent().is_finite());
-        child.kill().unwrap();
-        let _ = child.wait();
     }
 
     #[test]

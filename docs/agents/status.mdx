@@ -16,6 +16,7 @@ description: "安装钩子、识别智能体与一般程序状态，以及在需
 |---|---|
 | omp · Kimi Code · pi · OpenCode 2.x | 已有集成管理入口，完整状态语义按正式版本实跑验收 |
 | Hermes | 同一 opt-in plain CLI observer 提供身份、请求与有判决字段的轮次结果；历史经 Host 原生协议查询，完整运行验收仍未通过 |
+| Antigravity | 全局 `hooks.json` 注册表中的 lyrel 具名条目，报告会话身份、Working 与确定结束的 Done；普通工具调用从不显示为 Waiting，真实轮次语义仍待实跑验收 |
 
 安装会将钩子写入该智能体自己的配置目录。安装后，该行会新增一个
 **卸载**按钮，原来的按钮则变为**重新安装**；当 lyrel 提供更新版本的钩子时，
@@ -156,6 +157,33 @@ lyrel 不写 `plugins.enabled`、shell-hook allowlist，不添加 `--accept-hook
 后台进程完成队列与插件 observer 没有同一完整最终态契约，尚未证明覆盖全部后台／系统任务。
 未提交首轮、`/resume`／`/branch` 切换后下一条命令或 turn 前的即时身份仍缺正式事件。
 这些情况保留原状态或明确诊断，不使用内部 breadcrumb、数据库轮询或屏幕猜测补造事实；该协议缺口仍未关闭。
+
+### Antigravity（agy）全局 hooks.json observer
+
+安装只在所选 Host 的 `~/.gemini/config/hooks.json` 中写入或移除一个名为 `lyrel` 的具名条目；
+其他具名条目、条目内的用户 `enabled` 偏好和 `~/.gemini/settings.json` 状态栏配置完全保留。
+具名条目按事件使用上游定义的形状：工具事件（`PostToolUse`）为分组 `matcher`/`hooks`，
+`SessionStart`／`PreInvocation`／`PostInvocation`／`Stop` 为直接处理器列表（上游
+google-antigravity/antigravity-cli#925：非工具事件不接受分组形式）。
+
+`PreInvocation` 与 `PostInvocation` 报告 Working；`Stop` 仅在 `fullyIdle: true` 时报告
+确定结束的 Done，`fullyIdle` 缺失或为 `false` 时保持 Working，绝不从静默或缺失事件推断完成。
+`terminationReason` 只在 `ERROR`／`USER_CANCELED` 时分别携带 `failed`／`interrupted` 及原因；
+`NO_TOOL_CALL`、`MAX_INVOCATIONS` 等仅表示循环终止的原因，不冒充成功或失败结论。
+`PostToolUse` 只计入活动，不打开 Waiting；lyrel 不安装 `PreToolUse`，普通工具调用从不显示为
+Waiting，也不会获得 `Waiting` 诊断。所有事件的 `conversationId` 是权威会话身份，`cwd`、`modelName`
+与 `transcriptPath` 用于会话作用域；`lastUserInput` 不进入报告。
+
+每个处理器都以 `decision: allow`（`PreToolUse`/`Stop`）或 `{}` 应答 `agy` 的标准输出，
+委托给下一个钩子或默认策略：observer 不裁决工具调用、不阻止停止，即使状态投递失败也
+不改变 `agy` 的退出码。钩子以 `agent-hook antigravity <上游事件名>` 直接调用 lyrel，
+不写额外桥接文件；用户移动 lyrel 处理器到其它事件时，报告以载荷 `hookEventName` 为准。
+
+**已知待验**：目标 `agy` 版本的钩子形状、`fullyIdle`／continuation 语义、会话身份在恢复与
+切换时的一致性，以及 `lyrel agents`／自动 Caffeine 的消费路径仍待真实轮次验收；
+无事件不推断 Working、Waiting 或 Done。OSC 7501 一般程序状态继续走既有程序路由，
+与 rich hooks 分属不同记录。
+
 
 <Note>
   这些钩子仅在 lyrel 内生效。在其他终端中运行同一个智能体不会受到影响。

@@ -277,6 +277,10 @@ pub struct LyrelApp {
     /// spawn, what coalesces, what landing is allowed to install — so the app
     /// only supplies the registry lookup and the spawn itself.
     pub(crate) diff_probes: crate::ui::diff_probe::DiffProbeTracker,
+    /// In-flight structural reads for the Content-aware diff view, keyed by
+    /// `(host, cwd, source, path, epoch)`. Same policy split as the probes:
+    /// the tracker decides, the app supplies the registry and the spawn.
+    pub(crate) content_fetches: crate::ui::content_diff::ContentFetchTracker,
     pub(crate) file_tree: Entity<crate::ui::file_tree::FileTree>,
     _file_tree_events: Subscription,
     _file_tree_observer: Subscription,
@@ -301,6 +305,11 @@ pub struct LyrelApp {
     pub(crate) document_dragging: Rc<Cell<bool>>,
     pub(crate) right_panel_visible: bool,
     pub(crate) right_panel_tab: RightPanelTab,
+    /// The browser's one address field and the row it lives in (#391).
+    pub(crate) browser_chrome: Option<crate::ui::browser::BrowserChrome>,
+    /// Window-level coordination between covering overlays and native child
+    /// surfaces (#391; #403 extends the cover sources).
+    pub(crate) surface_coordinator: crate::ui::surface_coordinator::SurfaceCoordinator,
     pub(crate) right_panel_nav_focus: gpui_kit::FocusHandle,
     pub(crate) right_panel_nav_return: Option<gpui_kit::FocusHandle>,
     pub(crate) right_panel_nav_wait: Cell<u8>,
@@ -400,6 +409,7 @@ pub struct LyrelApp {
     pub(crate) lyrel_usage_view: Option<Entity<crate::ui::lyrel_usage::LyrelUsageView>>,
     pub(crate) disk_view: Option<Entity<crate::ui::host_disk::HostDiskView>>,
     pub(crate) notification_bell: Entity<crate::ui::notification_history::NotificationBell>,
+    _notification_bell_sub: Subscription,
     pub(crate) program_attention: crate::ui::program_attention::ProgramAttention,
     pub(crate) status_document_focus: Option<(TabId, bool)>,
     pub(crate) connect: crate::ui::remote_workspace::connection::WindowConnection,
@@ -414,6 +424,10 @@ pub struct LyrelApp {
     /// Parked switcher groups (#485) whose notice the user dismissed by key —
     /// the entries stay, only the "will not reconnect" block is hidden.
     pub(crate) parked_dismissed: std::collections::HashSet<String>,
+    /// Launched exact Antigravity resumes whose native conversation identity
+    /// has not been observed yet (#385). A different reported id is a failed
+    /// exact resume; the pane itself is left alone.
+    pub(crate) exact_resumes: Vec<crate::ui::agent_launch::ExactResumeExpectation>,
     /// Why the window opened with no terminal in it. Shown on the home screen,
     /// which is otherwise indistinguishable from having closed everything.
     pub(crate) startup_error: Option<gpui_kit::SharedString>,
@@ -2277,6 +2291,12 @@ impl LyrelApp {
             return;
         };
         self.maximized = None;
+        // A restore out of a filling document must reveal the pane: dock the
+        // document instead. The document stays open with its content,
+        // undo history and selection untouched.
+        if self.document_layout(cx) == lyrel_core::core::config::DocumentLayout::Fill {
+            self.set_document_layout(lyrel_core::core::config::DocumentLayout::Dock, cx);
+        }
         self.sync_parked_deck(window, cx);
         self.focus_leaf(&slot, window, cx);
         self.save_session(cx);
@@ -2308,6 +2328,71 @@ impl LyrelApp {
         });
     }
 
+    fn parked_pane_title(view: &TerminalView, cwd: &str) -> String {
+        use lyrel_core::core::program_status::plain_program_text;
+        use lyrel_core::core::tab_view::{
+            is_shell_program_title, strip_host_prefix, strip_status_mark,
+        };
+
+        if let Some(title) = view
+            .agent_session()
+            .and_then(|session| session.readout.session_title)
+            .map(|title| plain_program_text(&title))
+            .filter(|title| !title.trim().is_empty())
+        {
+            return title;
+        }
+        if let Some(title) = view.with_program_status(|status| {
+            let record = status.representative()?;
+            [record.title(), record.app()]
+                .into_iter()
+                .flatten()
+                .map(plain_program_text)
+                .find(|text| !text.trim().is_empty())
+        }) {
+            return title;
+        }
+        if let Some(agent) = view.agent() {
+            return crate::ui::tab_strip::agent_tab_label(agent).to_owned();
+        }
+
+        let directory = cwd
+            .trim_end_matches(['/', '\\'])
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or(cwd);
+        if let Some(title) = view.stated_title().filter(|t| !is_shell_program_title(t)) {
+            let title = strip_host_prefix(strip_status_mark(title)).trim();
+            // An integrated shell's prompt title is a path, even after the
+            // next command starts. Use its basename as the idle fallback.
+            if !title.is_empty()
+                && (directory.is_empty()
+                    || title
+                        .trim_end_matches(['/', '\\'])
+                        .rsplit(['/', '\\'])
+                        .next()
+                        != Some(directory))
+            {
+                return plain_program_text(title);
+            }
+        }
+        let command = view.terminal.running_command();
+        if !command.is_empty()
+            && let Ok(line) = percent_encoding::percent_decode_str(&command).decode_utf8()
+            && let Some(program) = lyrel_core::core::cli_agent::launch_program(&line)
+            && let Some(name) = program.rsplit(['/', '\\']).next().filter(|n| !n.is_empty())
+        {
+            // Shell arguments can contain credentials or prompt bodies.
+            return plain_program_text(name);
+        }
+        if directory.is_empty() {
+            lyrel_terminal::view::DEFAULT_TITLE.to_owned()
+        } else {
+            plain_program_text(directory)
+        }
+    }
+
     fn sync_parked_deck(&self, window: &mut Window, cx: &mut App) {
         use crate::ui::parked_deck::{ParkedCard, ParkedDeckLabels};
         let tab = self.tabs.get(self.tabs.active_index());
@@ -2317,12 +2402,15 @@ impl LyrelApp {
             .map(|slot| match &slot {
                 PaneSlot::Ready(view) => {
                     let view = view.read(cx);
+                    let cwd = view
+                        .cwd()
+                        .map(|path| path.display().to_string())
+                        .unwrap_or_default();
+                    let title = Self::parked_pane_title(view, &cwd);
                     let card = ParkedCard::new(
                         slot.entity_id().as_u64(),
-                        view.title.clone(),
-                        view.cwd()
-                            .map(|path| path.display().to_string())
-                            .unwrap_or_default(),
+                        title,
+                        cwd,
                         !view.terminal.exited,
                     );
                     if view.ssh_disconnected() && !view.terminal.exited {
@@ -2632,6 +2720,7 @@ impl LyrelApp {
                 }
                 // A split pane went away with its agents; re-evaluate the hold.
                 crate::ui::caffeine::CaffeineState::agents_changed(cx);
+                crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
                 self.focus_active(window, cx);
                 self.save_session(cx);
                 cx.notify();
@@ -2679,6 +2768,7 @@ impl LyrelApp {
             CloseOutcome::Collapsed => {
                 self.program_attention
                     .forget(view.read(cx).program_source());
+                crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
                 Self::kill_pane_off_thread(view.read(cx).pane_route(), view.read(cx).pane_id, cx);
                 if index == self.tabs.active_index() {
                     self.maximized = None;
@@ -2789,18 +2879,24 @@ impl LyrelApp {
                         let Some(source) = app.dragged_parking_pane(cx) else {
                             return;
                         };
-                        if app
-                            .parked_deck
-                            .read(cx)
-                            .drop_target_contains(event.position)
-                        {
+                        // The painted ellipse parks; its clipped envelope's
+                        // empty corners cancel; anywhere else the gesture
+                        // keeps whatever landing it was over.
+                        let (in_target, in_envelope) = {
+                            let deck = app.parked_deck.read(cx);
+                            (
+                                deck.drop_target_contains(event.position),
+                                deck.drop_target_covers(event.position),
+                            )
+                        };
+                        if in_target {
                             if let Some(tab) = app.tabs.get(app.tabs.active_index()) {
                                 tab.pip_interaction.cancel();
                             }
                             app.park_pane(source, window, cx);
                             cx.stop_active_drag(window);
                             cx.stop_propagation();
-                        } else if app.parked_deck.read(cx).is_drop_target_visible() {
+                        } else if in_envelope {
                             // Empty corners of the parking affordance must not unexpectedly split a pane.
                             app.cancel_pane_drag(window, cx);
                             cx.stop_propagation();
@@ -2921,11 +3017,17 @@ impl LyrelApp {
         let from = pane_drag::lifted(&self.pane_drag)?;
         let area = self.pane_area.get()?;
         let tab = self.tabs.get(self.tabs.active_index())?;
+        // The parking target is on screen for the whole drag, so only the
+        // pointer actually inside its envelope displaces the split preview:
+        // outside it, a pane drag still reads as the rearrangement it is.
         if self.maximized.is_some()
             || tab
                 .pip_slot(cx)
                 .is_some_and(|slot| slot.entity_id() == from)
-            || self.parked_deck.read(cx).is_drop_target_visible()
+            || self
+                .parked_deck
+                .read(cx)
+                .drop_target_covers(window.mouse_position())
         {
             return None;
         }
@@ -3565,6 +3667,7 @@ impl LyrelApp {
         // The closed tab's Working agents went with it; automatic mode
         // re-evaluates once this update unwinds.
         crate::ui::caffeine::CaffeineState::agents_changed(cx);
+        crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
         if navigation_on_closing {
             self.sidebar_nav_target = navigation_successor;
             self.sidebar_nav_settle(cx);
@@ -3922,6 +4025,16 @@ impl LyrelApp {
             window.notify_app(t(L10nKey::AppPaneNoCodingAgent), cx);
             return;
         };
+        if agent.fork_label().is_none() {
+            window.notify_app(
+                t_fmt(
+                    L10nKey::AppForkIndependentUnavailable,
+                    &[("name", agent.display_name())],
+                ),
+                cx,
+            );
+            return;
+        }
         let session = view.agent_session().unwrap_or_default();
         let source_id = if agent == crate::core::cli_agent::CLIAgent::OpenCode {
             session
@@ -4477,6 +4590,13 @@ impl LyrelApp {
             view.update(cx, |view, cx| view.set_editor_tabs(tabs, cx));
         }
         self.refresh_file_index(window, cx);
+        // Search Everywhere paints over the whole work area: native child
+        // surfaces give way for as long as it is up (#391's first seam).
+        self.set_surface_cover(
+            crate::ui::surface_coordinator::CoverSource::SearchEverywhere,
+            true,
+            cx,
+        );
         cx.notify();
     }
 
@@ -4555,6 +4675,11 @@ impl LyrelApp {
         // Nor was a symbol Go to Symbol previewed: the caret goes back, and
         // the keyboard with it to the editor it came from.
         self.editor_symbol_preview_cancel(window, cx);
+        self.set_surface_cover(
+            crate::ui::surface_coordinator::CoverSource::SearchEverywhere,
+            false,
+            cx,
+        );
         cx.notify();
     }
 
@@ -5590,6 +5715,7 @@ pub(crate) mod test_window {
     /// tests (#348) reopen at their simulated relaunch. Callers that simulate
     /// the relaunch itself use [`open_window_on`] so the rest of the app
     /// state — the config above all — survives the "restart".
+    #[cfg(test)]
     pub(crate) fn harness_on_workspace(
         cx: &mut TestAppContext,
         workspace: lyrel_ui_base::session::WorkspaceId,
@@ -5606,6 +5732,7 @@ pub(crate) mod test_window {
             gpui_kit::component::init(cx);
             #[cfg(test)]
             lyrel_workbench_editor::code_editor::drawio_document::test_support::mark_automated(cx);
+            crate::ui::browser::test_support::mark_automated(cx);
             cx.set_global(Config::default());
             lyrel_ui_base::host_registry::HostRegistry::insert(
                 cx,

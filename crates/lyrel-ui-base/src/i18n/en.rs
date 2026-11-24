@@ -13,7 +13,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::NotificationInbox => "Notifications",
         L10nKey::NotificationClearHistory => "Clear notification history",
         L10nKey::NotificationScope => {
-            "App toasts on this computer: success, information, warnings and errors · latest 500. Excludes system notifications, terminal output and events while the GUI is closed."
+            "App toasts, agent waits and results, and terminal events on this computer · latest 500. Excludes system notifications and events while the GUI is closed."
         }
         L10nKey::NotificationDetails => "Full message",
         L10nKey::NotificationBack => "Back to notifications",
@@ -27,6 +27,11 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::NotificationInfo => "Information",
         L10nKey::NotificationWarning => "Warning",
         L10nKey::NotificationError => "Error",
+        L10nKey::NotificationPending => "Pending",
+        L10nKey::NotificationFilterAll => "All",
+        L10nKey::NotificationMarkAllRead => "Mark all as read",
+        L10nKey::NotificationGoToSource => "Go to source",
+        L10nKey::NotificationNoUnread => "No unread notifications.",
         L10nKey::SettingsNavSkills => "Skills",
         L10nKey::SkillsPageDescription => {
             "Browse omp, Kimi Code, pi, OpenCode 2.x and Hermes skills on the selected machine and project. Discover GitHub sources or skills.sh; review shared installation, check updates, preserve local changes and remove exact associated links."
@@ -399,6 +404,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::IntegrationHermesObserver => {
             "Hermes observer home: {home}. Installation does not grant authorization. In this home/profile, run hermes plugins enable lyrel, then hermes plugins list. HERMES_SAFE_MODE or disabled plugins prevent reports. on_session_end carries finalized outcomes; on_session_finalize is not a turn result. Missing events never imply Idle/Done. Native history and operations use the selected installation's runtime, not the system Python. lyrel does not change plugin consent."
         }
+        L10nKey::IntegrationAntigravityRegistry => {
+            "Antigravity registry: {path}. lyrel owns only its named entry in the global hooks.json and never touches sibling hooks or status-line preferences. Its observer reports Working and settled Done; ordinary tool calls are never Waiting. Real-turn verification of the hook contract for your agy version is still outstanding."
+        }
         L10nKey::IntegrationScopeUnavailable => {
             "Integration scope is unavailable: {error}. No files were changed."
         }
@@ -575,6 +583,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::AppSessionDirectoryGone => "The session's directory no longer exists: {path}",
         L10nKey::AppSessionOpenUnconfirmed => {
             "A pane already runs session {id}, but its store could not be confirmed from here. Resume it in that pane instead of starting a second writer."
+        }
+        L10nKey::AppSessionResumeOpenedDifferent => {
+            "Asked to resume conversation {expected}, but Antigravity opened {actual}. This is not an exact resume."
         }
         L10nKey::SearchSessionActions => "Choose what to do with this session…",
         L10nKey::SessionActionsHint => "actions",
@@ -1426,14 +1437,41 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::DocumentDock => "Dock beside terminal",
         L10nKey::DocumentFill => "Fill window",
         L10nKey::SettingsNotifications => "Notifications",
-        L10nKey::SettingsNotifyOnCommandFinish => "Notify on command finish",
+        L10nKey::SettingsNotifyOnCommandFinish => "Notification timing",
         L10nKey::SettingsNotifyOnCommandFinishDesc => {
-            "Alert when a long foreground command finishes."
+            "When enabled channels may interrupt. Eligible events still reach the notification history."
         }
         L10nKey::SettingsNotifyThreshold => "Minimum command duration",
         L10nKey::SettingsNotifyThresholdDesc => {
             "Notify only when a command runs for at least this long."
         }
+        L10nKey::SettingsCommandDesktop => "Command results",
+        L10nKey::SettingsCommandDesktopDesc => {
+            "Desktop notification when a foreground command finishes after the minimum duration."
+        }
+        L10nKey::SettingsOscDesktop => "Program notifications (OSC)",
+        L10nKey::SettingsOscDesktopDesc => {
+            "Desktop notification a program explicitly asks for (OSC 9, 99, 777)."
+        }
+        L10nKey::SettingsProgramActivity => "Program activity",
+        L10nKey::SettingsProgramActivityDesc => {
+            "Tab, desktop and sound channels by the activity a program reports. One result ends or fails, never both."
+        }
+        L10nKey::ActivityRowRunning => "Running",
+        L10nKey::ActivityRowRunningDesc => {
+            "A program or agent is still working. Only the tab indicator applies."
+        }
+        L10nKey::ActivityRowWaiting => "Waiting",
+        L10nKey::ActivityRowWaitingDesc => "A program or agent is waiting for your input.",
+        L10nKey::ActivityRowEnded => "Ended",
+        L10nKey::ActivityRowEndedDesc => "A program or agent finished its task successfully.",
+        L10nKey::ActivityRowFailed => "Failed",
+        L10nKey::ActivityRowFailedDesc => "A program or agent ended with an error.",
+        L10nKey::ActivityChannelTab => "Tab",
+        L10nKey::ActivityChannelDesktop => "Desktop",
+        L10nKey::ActivityChannelSound => "Sound",
+        L10nKey::ActivityChannelBadge => "Badge",
+        L10nKey::SystemBadgeTabsNeedAttention => "Tabs needing attention: {count}",
         L10nKey::SettingsWindow => "Startup & restore",
         L10nKey::NotifyModeNever => "Never",
         L10nKey::NotifyModeUnfocused => "When unfocused",
@@ -1638,6 +1676,27 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SettingsSearchNotifyThresholdKeywords => {
             "notification alert seconds duration long command delay"
         }
+        L10nKey::SettingsSearchProgramActivityKeywords => {
+            "program activity matrix channels tab desktop sound badge notification"
+        }
+        L10nKey::SettingsSearchActivityRunningKeywords => {
+            "running working busy program agent progress activity tab"
+        }
+        L10nKey::SettingsSearchActivityWaitingKeywords => {
+            "waiting blocked permission question input needs attention program agent"
+        }
+        L10nKey::SettingsSearchActivityEndedKeywords => {
+            "ended finished done completed success program agent result"
+        }
+        L10nKey::SettingsSearchActivityFailedKeywords => {
+            "failed error rejected crashed program agent result"
+        }
+        L10nKey::SettingsSearchCommandDesktopKeywords => {
+            "command finished result notification desktop threshold duration"
+        }
+        L10nKey::SettingsSearchOscDesktopKeywords => {
+            "osc notification desktop program escape sequence 9 99 777 explicit"
+        }
         L10nKey::SettingsSearchOpacityKeywords => {
             "transparency translucent see through window alpha"
         }
@@ -1731,6 +1790,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::SftpMenuNewFile => "New File",
         L10nKey::SftpMenuUploadFiles => "Upload files",
         L10nKey::SftpMenuUploadFolders => "Upload folders",
+        L10nKey::SftpMenuGotoPath => "Go to Path",
         L10nKey::SftpMenuGotoShellCwd => "Go to Shell Directory",
         L10nKey::SftpMenuHideTransferHistory => "Hide Transfer History",
         L10nKey::SftpMenuTransferHistory => "Transfer History",
@@ -2721,6 +2781,73 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::MonitorDiskPartialDetail => "{dir} · at least {used} / {total} ({reason})",
         L10nKey::ToolHostAdd => "Add Tool",
         L10nKey::ToolHostClose => "Close {tool}",
+        L10nKey::ToolHostCloseWeb => "Close {page}",
+        L10nKey::PanelBrowserTitle => "Browser",
+        L10nKey::BrowserListNew => "New Page",
+        L10nKey::BrowserListEmpty => "No pages yet",
+        L10nKey::BrowserListEmptyHint => {
+            "Open one with New Page above, a link, or an agent preview."
+        }
+        L10nKey::BrowserBack => "Back",
+        L10nKey::BrowserForward => "Forward",
+        L10nKey::BrowserReload => "Reload",
+        L10nKey::BrowserOpenExternal => "Open in System Browser",
+        L10nKey::BrowserReconnect => "Reconnect",
+        L10nKey::BrowserHostLocal => "This machine",
+        L10nKey::BrowserHostRemote => "{host}",
+        L10nKey::BrowserStarting => "Loading page",
+        L10nKey::BrowserConcealedHint => {
+            "Hidden while an overlay is open. The page keeps its content, scroll position and draft."
+        }
+        L10nKey::BrowserSurfaceAutomated => "the browser surface is not started by automated tests",
+        L10nKey::BrowserSurfaceNoDataDir => "the browser has no data directory for this Host",
+        L10nKey::BrowserPreviewShare => "Share",
+        L10nKey::BrowserPreviewShareTip => {
+            "Send a screenshot and feedback to the agent pane that asked for this preview"
+        }
+        L10nKey::BrowserPreviewSource => "{pane}",
+        L10nKey::BrowserPreviewSourceMissing => "{pane} (closed)",
+        L10nKey::BrowserPreviewSourceStale => "{pane} (not linked)",
+        L10nKey::BrowserPreviewSourceTip => "Agent preview requested by pane {pane}",
+        L10nKey::BrowserPreviewFeedbackPlaceholder => "Tell the agent what to change…",
+        L10nKey::BrowserPreviewSend => "Send to {pane}",
+        L10nKey::BrowserPreviewCancel => "Cancel",
+        L10nKey::BrowserPreviewSending => "Sending…",
+        L10nKey::BrowserPreviewSent => "Sent to {pane}",
+        L10nKey::BrowserPreviewNoSource => "This page was not opened by an agent.",
+        L10nKey::BrowserPreviewPaneGone => "Pane {pane} is gone; the feedback was not sent.",
+        L10nKey::BrowserPreviewPaneElsewhere => {
+            "Pane {pane} belongs to another workspace now; the feedback was not sent."
+        }
+        L10nKey::BrowserPreviewWorkspaceChanged => {
+            "The preview's workspace has changed; the feedback was not sent."
+        }
+        L10nKey::BrowserPreviewHostMismatch => {
+            "The pane is no longer on the preview's Host; the feedback was not sent."
+        }
+        L10nKey::BrowserPreviewHostDisconnected => {
+            "The preview's Host is not connected; the feedback was not sent."
+        }
+        L10nKey::BrowserPreviewPaneExited => "Pane {pane} has exited; the feedback was not sent.",
+        L10nKey::BrowserPreviewPaneLocked => {
+            "Another client is driving pane {pane}; the feedback was not sent."
+        }
+        L10nKey::BrowserPreviewSourceUnverified => {
+            "This preview is not linked to its live requesting pane; ask the agent to request it again."
+        }
+        L10nKey::BrowserPreviewScratchInvalid => {
+            "The preview has no absolute screenshot directory on its Host."
+        }
+        L10nKey::BrowserPreviewCaptureUnavailable => {
+            "The page cannot be captured right now: {error}"
+        }
+        L10nKey::BrowserPreviewCaptureFailed => "Could not capture the page: {error}",
+        L10nKey::BrowserPreviewWriteFailed => {
+            "Could not save the screenshot on the pane's Host: {error}"
+        }
+        L10nKey::BrowserPreviewSavedUnsent => {
+            "Screenshot saved at {path}, but it was not sent: {reason}"
+        }
         L10nKey::PanelNoSession => "No active session.",
         L10nKey::PanelNoSessionHint => {
             "Open a tab to see its shell, directory, and processes here."
@@ -2911,7 +3038,56 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::DiffUntrackedSummary => "{count} untracked",
         L10nKey::DiffViewSplit => "Side by Side",
         L10nKey::DiffViewUnified => "Unified",
+        L10nKey::DiffViewContent => "Content-Aware",
         L10nKey::DiffCopySelection => "Copy Selected Lines",
+        L10nKey::DiffContentReading => "Reading file…",
+        L10nKey::DiffContentPatchOnly => {
+            "The content-aware view doesn't apply to a patch-only comparison; showing the line diff."
+        }
+        L10nKey::DiffContentUnsupported => {
+            "The content-aware view doesn't support this file type; showing the line diff."
+        }
+        L10nKey::DiffContentOverBudget => {
+            "This file is too large for the content-aware view; showing the line diff."
+        }
+        L10nKey::DiffContentParseFailed => {
+            "This file couldn't be parsed for the content-aware view; showing the line diff."
+        }
+        L10nKey::DiffContentReadFailed => {
+            "Couldn't read this file's two versions; showing the line diff."
+        }
+        L10nKey::DiffContentRemoteUnsupported => {
+            "This remote Host can't send file versions for the content-aware view; update lyrel-server there, or keep using the line diff."
+        }
+        L10nKey::DiffContentJumpSource => "Jump to original position",
+        L10nKey::DiffContentJumpBlock => "Jump to the moved block",
+        L10nKey::DiffContentMoved => "Moved",
+        L10nKey::DiffContentModified => "Modified",
+        L10nKey::DiffContentAdded => "Added",
+        L10nKey::DiffContentDeleted => "Deleted",
+        L10nKey::DiffContentFromLine => "from line {line}",
+        L10nKey::DiffContentToLine => "moved to line {line}",
+        L10nKey::DiffContentFormatting => "Formatting only",
+        L10nKey::DiffContentElided => "{count} unchanged lines",
+        L10nKey::DiffContentItemFunction => "function",
+        L10nKey::DiffContentItemMethod => "method",
+        L10nKey::DiffContentItemClass => "class",
+        L10nKey::DiffContentItemModule => "module",
+        L10nKey::DiffContentItemStruct => "struct",
+        L10nKey::DiffContentItemEnum => "enum",
+        L10nKey::DiffContentItemTrait => "trait",
+        L10nKey::DiffContentItemImpl => "impl",
+        L10nKey::DiffContentItemType => "type",
+        L10nKey::DiffContentItemConstant => "constant",
+        L10nKey::DiffContentItemMacro => "macro",
+        L10nKey::DiffContentItemKey => "key",
+        L10nKey::DiffContentItemSection => "section",
+        L10nKey::DiffContentItemImport => "import",
+        L10nKey::DiffContentItemVariable => "variable",
+        L10nKey::DiffContentItemArray => "array",
+        L10nKey::DiffContentItemSequence => "sequence",
+        L10nKey::DiffContentItemItem => "item",
+        L10nKey::DiffContentItemComment => "comment",
         L10nKey::PendingConnecting => "Connecting to {machine}…",
         L10nKey::PendingUnreachable => "Could not reach {machine}",
         L10nKey::WorktreePromptNeedsName => "The worktree needs a name",
@@ -2986,6 +3162,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::StatusCaffeineFooterHolding => "Keeping this computer awake",
         L10nKey::StatusCaffeineFooterWaiting => "Waiting for an agent to start working",
         L10nKey::StatusCaffeineFooterError => "Couldn't keep the computer awake: {error}",
+        L10nKey::StatusCaffeineAccessName => "{title}, {mode}: {state}",
         L10nKey::HomeTimeJustNow => "just now",
         L10nKey::HomeTimeMinutesAgo => "{count} min ago",
         L10nKey::HomeTimeHourAgo => "1 hour ago",
@@ -3286,11 +3463,12 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::CmdRightPanelGitHub => "Right Panel: GitHub",
         L10nKey::CmdRightPanelSessions => "Right Panel: Session History",
         L10nKey::CmdRightPanelMonitor => "Right Panel: Activity Monitor",
+        L10nKey::CmdRightPanelBrowser => "Right Panel: Browser",
         L10nKey::CmdFocusRightPanelNavigation => "Focus Right Panel Navigation",
         L10nKey::CmdChangeTheme => "Change Theme",
         L10nKey::CmdResetFontSize => "Reset Font Size",
         L10nKey::CmdEnterFullScreen => "Enter Full Screen",
-        L10nKey::CmdToggleDiffViewMode => "Toggle Unified / Side-by-Side Diff",
+        L10nKey::CmdToggleDiffViewMode => "Cycle Diff View (Content, Unified, Side by Side)",
         L10nKey::CmdDocumentDock => "Document: Dock Beside Terminal",
         L10nKey::CmdDocumentFill => "Document: Fill Window",
         L10nKey::CmdToggleDocumentFill => "Toggle Document Fill / Dock",
@@ -3431,6 +3609,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::PanePark => "Park pane",
         L10nKey::PaneRestoreParked => "Restore parked pane",
         L10nKey::ParkedDeckTitle => "Parked panes",
+        L10nKey::ParkedEntryCount => "Parked panes: {count}",
         L10nKey::ParkedRestore => "Restore",
         L10nKey::ParkedAlive => "Running",
         L10nKey::ParkedExited => "Exited",
@@ -3477,6 +3656,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         }
         L10nKey::AppPaneNoCodingAgent => "This pane isn't running a coding agent",
         L10nKey::AppForkNoCommand => "lyrel has no fork command for {name}",
+        L10nKey::AppForkIndependentUnavailable => {
+            "lyrel can't fork {name} into an independent session yet"
+        }
         L10nKey::AppForkLocalOnly => {
             "{name} sessions can't be forked from inside an SSH or WSL session"
         }
@@ -3545,6 +3727,9 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::AppAgentHooksNoLyrelHooks => "No lyrel hooks found; nothing to remove",
         L10nKey::AppAgentHooksInstallFailed => "Could not install hooks: {error}",
         L10nKey::AppAgentHooksRemoveFailed => "Could not remove hooks: {error}",
+        L10nKey::AppAgentHooksAntigravityUpdateServer => {
+            "This remote Host's lyrel-server is too old for Antigravity hooks; update lyrel-server there, then install again."
+        }
         L10nKey::AppKeybindingDisplacedNote => {
             "{action} took the shortcut from {previous}, which is now unset."
         }

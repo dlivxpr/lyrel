@@ -612,6 +612,70 @@ impl Host for LocalHost {
         git::git_output_with_env(cwd, args, &no_prompt_env())
     }
 
+    fn git_blob(&self, cwd: &Path, spec: &str, max_bytes: u64) -> io::Result<Option<Vec<u8>>> {
+        guard_off_ui();
+        // `cat-file blob`, not `show`: no commit or tag decoration, and the
+        // stream stops at the budget instead of buffering whatever the object
+        // happens to be. Bytes are accumulated only up to `max_bytes`; one
+        // extra chunk is never kept.
+        let mut bytes = Vec::new();
+        let mut over_budget = false;
+        let status = git::git_stream(cwd, &["cat-file", "blob", spec], |chunk| {
+            if bytes.len() as u64 + chunk.len() as u64 > max_bytes {
+                over_budget = true;
+                return false;
+            }
+            bytes.extend_from_slice(chunk);
+            true
+        })?;
+        if over_budget {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                format!("{spec} is over the {max_bytes}-byte limit"),
+            ));
+        }
+        if status == Some(0) {
+            return Ok(Some(bytes));
+        }
+        // A failed `cat-file` is usually git's own "this side does not
+        // exist": an added, deleted, initial-commit or non-blob entry. The
+        // exit code alone cannot say that, though — a repository-level
+        // failure (not a git repository, an unreadable object store) fails
+        // the same way, and calling that "missing" would draw the side as
+        // empty. `rev-parse --verify --quiet` answers 1 for a name that
+        // does not resolve and fails only when the repository itself
+        // cannot be read — no localized stderr parsing.
+        let read_error = |status: Option<i32>, stderr: &[u8]| {
+            let detail = String::from_utf8_lossy(stderr);
+            let detail = detail.trim();
+            io::Error::other(if detail.is_empty() {
+                format!("git could not read {spec} (exit {status:?})")
+            } else {
+                format!("git could not read {spec}: {detail}")
+            })
+        };
+        let probe = self.git(
+            cwd,
+            &["rev-parse", "--verify", "--quiet", "--end-of-options", spec],
+        )?;
+        match probe.status {
+            Some(1) => return Ok(None),
+            Some(0) => {}
+            other => return Err(read_error(other, &probe.stderr)),
+        }
+        // The name resolves, so the failed read was of the object itself.
+        // Only a non-blob is a side Git defines as absent; a blob that
+        // cannot be read is corrupt, not empty.
+        let kind = self.git(cwd, &["cat-file", "-t", spec])?;
+        match kind.status {
+            Some(0) if String::from_utf8_lossy(&kind.stdout).trim() == "blob" => Err(
+                io::Error::other(format!("git could not read the blob {spec}")),
+            ),
+            Some(0) => Ok(None),
+            other => Err(read_error(other, &kind.stderr)),
+        }
+    }
+
     fn repo_head(&self, cwd: &Path) -> Option<Option<git::head::RepoHead>> {
         guard_off_ui();
         Some(git::head::read_head(cwd))
@@ -1435,6 +1499,77 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
         assert_eq!(fs::read(&f).unwrap(), b"keep");
         assert_eq!(names_in(tmp.path()), vec!["locked.txt"]);
+    }
+
+    #[test]
+    fn git_blob_reads_one_bounded_version_from_gits_own_side() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path();
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(root)
+                .output()
+                .expect("git runs");
+            assert!(
+                out.status.success(),
+                "git {args:?} failed: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "--quiet", "-b", "main"]);
+        git(&["config", "user.name", "Host Test"]);
+        git(&["config", "user.email", "host-test@example.invalid"]);
+        git(&["config", "core.autocrlf", "false"]);
+
+        fs::write(root.join("a.rs"), b"fn v1() {}\n").unwrap();
+        git(&["add", "a.rs"]);
+        // The index keeps v1 after the worktree moves on; this is exactly
+        // the staged-then-edited comparison's old side.
+        fs::write(root.join("a.rs"), b"fn v3() {}\n").unwrap();
+
+        let host = LocalHost::new();
+        assert_eq!(
+            host.git_blob(root, ":a.rs", 1024).unwrap().unwrap(),
+            b"fn v1() {}\n"
+        );
+        assert_eq!(
+            host.git_blob(root, "HEAD:a.rs", 1024).unwrap(),
+            None,
+            "a side that no revision carries is empty, not a failed read"
+        );
+
+        git(&["commit", "--quiet", "-m", "base"]);
+        assert_eq!(
+            host.git_blob(root, "HEAD:a.rs", 1024).unwrap().unwrap(),
+            b"fn v1() {}\n"
+        );
+        assert_eq!(host.git_blob(root, "HEAD:missing.rs", 1024).unwrap(), None);
+        // A spec that resolves to a non-blob is a side Git defines as
+        // absent, exactly like a missing path.
+        assert_eq!(host.git_blob(root, "HEAD", 1024).unwrap(), None);
+
+        let error = host.git_blob(root, ":a.rs", 4).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::FileTooLarge, "{error}");
+        assert_eq!(
+            host.read_file(&root.join("a.rs"), 1024).unwrap(),
+            b"fn v3() {}\n",
+            "the worktree side keeps the edited bytes"
+        );
+    }
+
+    #[test]
+    fn git_blob_reports_a_broken_repository_instead_of_a_missing_side() {
+        // No `.git` anywhere above this directory: `cat-file` fails, and the
+        // failure must surface as an error — reading it as "the side does
+        // not exist" would draw a repository problem as an empty file.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let host = LocalHost::new();
+        let error = host.git_blob(tmp.path(), "HEAD:a.rs", 1024).unwrap_err();
+        assert!(
+            error.to_string().contains("git could not read"),
+            "the repository failure is named: {error}"
+        );
     }
 
     #[cfg(unix)]

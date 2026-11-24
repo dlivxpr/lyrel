@@ -1642,7 +1642,9 @@ impl LyrelApp {
                 let ssh_dot = self.tab_ssh_dot(tab, cx);
                 let asleep = tab.is_asleep();
                 let agent = tab.agent(cx).or_else(|| tab.asleep_agent());
-                let agent_status = tab.agent_status(cx);
+                // The indicator is what the activity matrix's tab channel
+                // shows: agent_status stays the truth for menus and logic.
+                let agent_status = tab.agent_indicator_status(cx);
                 let agent_unread = tab.agent_unread_count(cx);
                 let git_cwd = git_click(tab, window, cx);
                 let badge_extra = if badges_mounted && badge_pos < 9 {

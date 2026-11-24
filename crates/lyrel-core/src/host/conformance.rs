@@ -68,6 +68,7 @@ macro_rules! for_each_host_case {
             git_that_cannot_run_is_err,
             git_optional_locks_env_is_set,
             git_terminal_prompt_is_disabled,
+            git_blob_reads_one_bounded_revision_side,
             git_stdin_is_null,
             git_output_preserves_nul_bytes,
             git_args_survive_pathspec_magic,
@@ -919,6 +920,42 @@ pub fn git_terminal_prompt_is_disabled(h: &dyn Host, sb: &dyn Sandbox) {
     assert!(
         text.contains("REQUIRE=[never]"),
         "SSH_ASKPASS_REQUIRE must reach git: {text:?}"
+    );
+}
+
+pub fn git_blob_reads_one_bounded_revision_side(h: &dyn Host, sb: &dyn Sandbox) {
+    let repo = h.join(sb.path(), "blob-repo");
+    mkdir(h, &repo);
+    let Some(()) = git_repo(h, &repo) else { return };
+    let out = h.git(&repo, &["config", "core.autocrlf", "false"]).unwrap();
+    assert!(out.success(), "config exited {:?}", out.status);
+
+    let index_body = b"fn v1() {}\n";
+    put(h, &h.join(&repo, "a.rs"), index_body);
+    let out = h.git(&repo, &["add", "a.rs"]).unwrap();
+    assert!(out.success(), "add exited {:?}", out.status);
+    // The worktree moves on while the index keeps v1: the old side of a
+    // staged-then-edited comparison reads the index, never this file.
+    put(h, &h.join(&repo, "a.rs"), b"fn v3() {}\n");
+    assert_eq!(
+        h.git_blob(&repo, ":a.rs", 1024).unwrap().unwrap(),
+        index_body,
+        "the index side keeps the staged version whatever the worktree does"
+    );
+    assert_eq!(
+        h.git_blob(&repo, "HEAD:a.rs", 1024).unwrap(),
+        None,
+        "an unborn revision has no side, which Git defines as empty"
+    );
+    assert_eq!(h.git_blob(&repo, ":missing.rs", 1024).unwrap(), None);
+    let error = h.git_blob(&repo, ":a.rs", 4).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::FileTooLarge, "{error}");
+    // The sandbox root is not a repository: a repository-level failure is an
+    // error, never a side Git defines as empty.
+    let error = h.git_blob(sb.path(), "HEAD:a.rs", 1024).unwrap_err();
+    assert!(
+        error.to_string().contains("git could not read"),
+        "a broken repository is named, not drawn as an empty side: {error}"
     );
 }
 

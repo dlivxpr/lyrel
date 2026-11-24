@@ -186,6 +186,24 @@ pub(crate) fn glyph_unified(ink: gpui_kit::Hsla) -> gpui_kit::AnyElement {
     glyph_two_panes(ink, false)
 }
 
+/// Content-aware: blocks of structure — a wide, a short and a wide bar. Bars
+/// rather than panes, because this view is about what the file is made of
+/// rather than which side of it a line sits on.
+pub(crate) fn glyph_content(ink: gpui_kit::Hsla) -> gpui_kit::AnyElement {
+    let bar = |width: f32| div().w(px(width)).h(px(1.5)).rounded(px(0.75)).bg(ink);
+    div()
+        .flex()
+        .flex_col()
+        .justify_center()
+        .gap(px(2.))
+        .w(px(SWITCH_FRAME_W))
+        .h(px(SWITCH_FRAME_H))
+        .child(bar(SWITCH_FRAME_W))
+        .child(bar(SWITCH_FRAME_W * 0.55))
+        .child(bar(SWITCH_FRAME_W * 0.8))
+        .into_any_element()
+}
+
 /// The sunken track the two cells sit on.
 pub(crate) fn switch_track(
     id: &'static str,
@@ -375,6 +393,49 @@ impl LyrelApp {
         self.tabs.get(self.tabs.active_index())?.document_front()
     }
 
+    pub(crate) fn active_browser_detail(&self) -> Option<&str> {
+        self.tabs.get(self.tabs.active_index())?.browser_detail()
+    }
+
+    pub(crate) fn reveal_browser_detail(&mut self, id: String, cx: &mut Context<Self>) {
+        if let Some(tab) = self.tabs.active_mut() {
+            tab.reveal_browser_detail(id);
+            self.hide_inactive_browser_surfaces(cx);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn close_browser_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .tabs
+            .active_mut()
+            .is_some_and(|tab| tab.dismiss_browser_detail())
+        {
+            self.hide_inactive_browser_surfaces(cx);
+            self.focus_content(self.document_front(), window, cx);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn remove_browser_detail(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was_visible = self.active_browser_detail() == Some(id);
+        for tab in self.tabs.iter_mut() {
+            if tab.browser_detail() == Some(id) {
+                tab.dismiss_browser_detail();
+            }
+        }
+        if was_visible {
+            self.hide_inactive_browser_surfaces(cx);
+            self.focus_content(self.document_front(), window, cx);
+        }
+        cx.notify();
+    }
+
     /// What the document column has reserved, from a side panel's point of
     /// view.
     ///
@@ -518,8 +579,9 @@ impl LyrelApp {
         let body = self.document_body_px(window, cx);
         let surface = match self.document_front()? {
             OverlayTop::Code => self.render_code_overlay(chrome, window, cx),
-            OverlayTop::Diff => self.render_diff_overlay(chrome, window, cx),
+            OverlayTop::Diff => self.render_diff_overlay(chrome, width, window, cx),
             OverlayTop::Github => self.render_github_detail_document(chrome, window, cx),
+            OverlayTop::Browser => self.render_browser_document(chrome, window, cx),
         }?;
         let (backing, handle) = self.document_resize(body, cx);
         Some(

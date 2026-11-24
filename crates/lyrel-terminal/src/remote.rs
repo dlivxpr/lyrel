@@ -18,7 +18,7 @@ use std::collections::VecDeque;
 
 use lyrel_core::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
 use lyrel_core::core::config::CursorStyle as ConfigCursorStyle;
-use lyrel_core::core::osc::{Note, NoteBudget};
+use lyrel_core::core::osc::NoteBudget;
 use lyrel_core::core::program_status::{ProgramStatusClient, ProgramStatusFrame};
 use lyrel_core::daemon::protocol::{
     AuthPromptKind, AuthResponse, ClientMsg, DaemonMsg, DaemonVersion, LoopbackForward,
@@ -1163,7 +1163,7 @@ impl RemoteTerminal {
 
     /// Desktop notifications the program wrote (OSC 9, 99, 777), oldest
     /// first; the view decides whether each is shown.
-    pub fn take_osc_notes(&self) -> Vec<Note> {
+    pub fn take_osc_notes(&self) -> Vec<lyrel_core::daemon::protocol::ProgramNote> {
         self.osc_notes
             .lock()
             .map(|mut notes| notes.drain(..).collect())
@@ -1171,18 +1171,21 @@ impl RemoteTerminal {
     }
 
     /// Of `notes` about to be shown, the ones this pane's [`NoteBudget`] lets
-    /// through, and whether notes it dropped earlier are due to be said.
+    /// through, and whether any were dropped — either now, so the view can say
+    /// the rest were not shown while the flood is still arriving, or earlier
+    /// and due to be said once the window turns over.
     pub fn pace_osc_notes(
         &self,
-        mut notes: Vec<Note>,
+        mut notes: Vec<lyrel_core::daemon::protocol::ProgramNote>,
         now: std::time::Instant,
-    ) -> (Vec<Note>, bool) {
+    ) -> (Vec<lyrel_core::daemon::protocol::ProgramNote>, bool) {
         let Ok(mut budget) = self.note_budget.lock() else {
             return (notes, false);
         };
-        let (show, dropped) = budget.admit(now, notes.len());
+        let wanted = notes.len();
+        let (show, due) = budget.admit(now, wanted);
         notes.truncate(show);
-        (notes, dropped)
+        (notes, due || show < wanted)
     }
 
     pub fn pop_clipboard_write(&self) -> Option<lyrel_core::core::clipboard::ClipboardWrite> {
@@ -1505,7 +1508,7 @@ impl Drop for RemoteTerminal {
     }
 }
 
-type OscNotes = Arc<Mutex<VecDeque<Note>>>;
+type OscNotes = Arc<Mutex<VecDeque<lyrel_core::daemon::protocol::ProgramNote>>>;
 
 /// Builds the pane's emulator from the user's config.
 ///

@@ -644,6 +644,52 @@ impl Host for RemoteHost {
         }
     }
 
+    fn git_blob(&self, cwd: &Path, spec: &str, max_bytes: u64) -> io::Result<Option<Vec<u8>>> {
+        guard_off_ui();
+        // A peer that never announced the request would take the link down
+        // decoding it. Asking `git show` instead would transfer an unbounded
+        // object, so the missing capability is the answer: the content-aware
+        // Diff keeps its line fallback and names the reason.
+        if !self
+            .peer()
+            .has_feature(crate::daemon::control::feature::GIT_BLOB)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "the lyrel-server on this host (build {}) cannot send one revision-addressed file version; update lyrel-server",
+                    self.peer().build
+                ),
+            ));
+        }
+        let got = self.client.call_full(
+            ControlRequest::GitBlob {
+                cwd: wire_path(cwd),
+                spec: spec.to_string(),
+                max_bytes,
+            },
+            &[],
+        )?;
+        match got.reply {
+            ReplyOk::GitBlob { present, len } => match present {
+                false => Ok(None),
+                true => {
+                    if len > max_bytes || got.blob.len() as u64 != len {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "control peer sent {} bytes for a {len}-byte file version (limit {max_bytes})",
+                                got.blob.len()
+                            ),
+                        ));
+                    }
+                    Ok(Some(got.blob))
+                }
+            },
+            other => Err(wrong_shape("one file version", &other)),
+        }
+    }
+
     fn git_with_deadline(
         &self,
         cwd: &Path,
@@ -756,6 +802,25 @@ impl Host for RemoteHost {
             return Err(error(
                 SessionErrorKind::Connection,
                 "session host is disconnected".into(),
+            ));
+        }
+        // The resume selector, the store check and the launched argv are
+        // Antigravity-specific. A peer without the capability would either
+        // not know the operation or not perform it, so answer here instead of
+        // risking a control link that cannot decode or honour the request.
+        // This leaf gate comes first: an older peer lacks both features, and
+        // the operator needs the capability that actually closes the gap.
+        if request.agent == crate::core::cli_agent::CLIAgent::Antigravity
+            && !self
+                .peer()
+                .has_feature(crate::daemon::control::feature::ANTIGRAVITY)
+        {
+            return Err(error(
+                SessionErrorKind::Unsupported,
+                format!(
+                    "update lyrel-server: antigravity-v1 is required to resume {} conversations on this host",
+                    request.agent.display_name()
+                ),
             ));
         }
         if !self
@@ -2624,6 +2689,95 @@ mod tests {
     }
 
     #[test]
+    fn a_bounded_git_blob_is_one_request_and_one_blob_reply() {
+        use crate::daemon::control::feature::GIT_BLOB;
+        let body = b"fn v1() {}\n".to_vec();
+        let served = body.clone();
+        let (host, seen) = host_with_peer_announcing('/', &[GIT_BLOB], move |req| match req {
+            ControlRequest::GitBlob {
+                cwd,
+                spec,
+                max_bytes,
+            } => {
+                assert_eq!(cwd, "/repo");
+                assert_eq!(spec, ":src/a.rs");
+                assert_eq!(*max_bytes, 4096);
+                Some((
+                    ControlReply::Ok(ReplyOk::GitBlob {
+                        present: true,
+                        len: served.len() as u64,
+                    }),
+                    served.clone(),
+                ))
+            }
+            other => panic!("unexpected request {other:?}"),
+        });
+
+        let bytes = host
+            .git_blob(Path::new("/repo"), ":src/a.rs", 4096)
+            .unwrap()
+            .expect("the version exists");
+        assert_eq!(bytes, body);
+        assert!(matches!(
+            seen.recv().unwrap(),
+            ControlRequest::GitBlob { .. }
+        ));
+    }
+
+    #[test]
+    fn an_absent_git_blob_side_is_none_not_an_error() {
+        use crate::daemon::control::feature::GIT_BLOB;
+        let (host, _seen) = host_with_peer_announcing('/', &[GIT_BLOB], |req| match req {
+            ControlRequest::GitBlob { .. } => Some((
+                ControlReply::Ok(ReplyOk::GitBlob {
+                    present: false,
+                    len: 0,
+                }),
+                vec![],
+            )),
+            other => panic!("unexpected request {other:?}"),
+        });
+        assert_eq!(
+            host.git_blob(Path::new("/repo"), "HEAD:missing.rs", 4096)
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn a_peer_without_git_blob_is_never_asked() {
+        let (host, seen) = host_with_peer('/', |_| None);
+        let error = host
+            .git_blob(Path::new("/repo"), ":a.rs", 4096)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported, "{error}");
+        assert!(error.to_string().contains("update lyrel-server"), "{error}");
+        assert!(
+            seen.try_recv().is_err(),
+            "a request an older peer cannot decode must never be sent"
+        );
+    }
+
+    #[test]
+    fn a_git_blob_reply_that_breaks_its_own_bound_is_refused() {
+        use crate::daemon::control::feature::GIT_BLOB;
+        let (host, _seen) = host_with_peer_announcing('/', &[GIT_BLOB], |req| match req {
+            ControlRequest::GitBlob { .. } => Some((
+                ControlReply::Ok(ReplyOk::GitBlob {
+                    present: true,
+                    len: 99,
+                }),
+                b"short".to_vec(),
+            )),
+            other => panic!("unexpected request {other:?}"),
+        });
+        let error = host
+            .git_blob(Path::new("/repo"), ":a.rs", 4096)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
+    }
+
+    #[test]
     fn a_nonzero_git_exit_is_ok_not_err() {
         let (host, _seen) = host_with_peer('/', |_| {
             Some((
@@ -2945,6 +3099,246 @@ mod tests {
             "the remote server executes on its own local host, not the GUI's local host"
         );
         assert_eq!(request.cwd, PathBuf::from("/remote/project"));
+    }
+
+    #[test]
+    fn antigravity_session_operations_refuse_old_peers_before_the_wire() {
+        let (host, seen) = host_with_peer('/', |request| panic!("old peer received {request:?}"));
+        let mut request = session_request(host.id());
+        request.agent = crate::core::cli_agent::CLIAgent::Antigravity;
+        request.kind = crate::host::session_operations::SessionOperationKind::Resume;
+        let error = host.session_operation(&request).unwrap_err();
+        assert_eq!(
+            error.kind,
+            crate::host::session_operations::SessionErrorKind::Unsupported
+        );
+        assert!(
+            error.message.contains("antigravity-v1"),
+            "the missing capability is named: {}",
+            error.message
+        );
+        assert!(seen.recv_timeout(Duration::from_millis(200)).is_err());
+        assert!(host.is_connected());
+    }
+
+    #[test]
+    fn antigravity_session_operation_travels_with_its_own_capability() {
+        use crate::host::session_operations::*;
+        let (host, seen) = host_with_peer_announcing(
+            '/',
+            &[
+                crate::daemon::control::feature::SESSION_OPERATIONS,
+                crate::daemon::control::feature::ANTIGRAVITY,
+            ],
+            |request| {
+                let ControlRequest::SessionOperation { request } = request else {
+                    panic!("unexpected request");
+                };
+                assert_eq!(request.agent, crate::core::cli_agent::CLIAgent::Antigravity);
+                assert_eq!(request.expected_host, 0);
+                let prepared = PreparedSession {
+                    host_id: 0,
+                    agent: request.agent,
+                    source_id: request.source_id.clone(),
+                    target_id: Some(request.source_id.clone()),
+                    session_file: Some(PathBuf::from(
+                        "/home/me/.gemini/antigravity-cli/brain/remote-conversation/.system_generated/logs/transcript.jsonl",
+                    )),
+                    title: Some("Remote Antigravity".into()),
+                    cwd: request.cwd.clone(),
+                    scope: request.scope.clone(),
+                    launch_argv: vec!["agy".into()],
+                    command: Some(format!("agy --conversation {}", request.source_id)),
+                    created: false,
+                };
+                Some((
+                    ControlReply::Ok(ReplyOk::SessionOperation(Box::new(Ok(prepared)))),
+                    vec![],
+                ))
+            },
+        );
+        let mut request = session_request(host.id());
+        request.agent = crate::core::cli_agent::CLIAgent::Antigravity;
+        request.kind = SessionOperationKind::Resume;
+        request.source_id = "remote-conversation".into();
+        let prepared = host.session_operation(&request).unwrap();
+        assert_eq!(prepared.host_id, host.id().0);
+        assert_eq!(prepared.target_id.as_deref(), Some("remote-conversation"));
+        let ControlRequest::SessionOperation { request } = seen.recv().unwrap() else {
+            panic!("wrong request");
+        };
+        assert_eq!(request.expected_host, 0);
+        assert_eq!(request.source_id, "remote-conversation");
+    }
+
+    #[test]
+    fn antigravity_history_refuses_an_older_peer_without_the_read_only_browser() {
+        let (host, seen) = host_with_peer('/', |request| panic!("old peer received {request:?}"));
+        let mut request = session_request(host.id());
+        request.agent = crate::core::cli_agent::CLIAgent::Antigravity;
+        request
+            .scope
+            .environment
+            .insert("HOME".into(), "/home/me".into());
+        let error = crate::host::session_operations::antigravity::sessions(&*host, None, &request)
+            .unwrap_err();
+        assert_eq!(
+            error.kind,
+            crate::host::session_operations::SessionErrorKind::Unsupported
+        );
+        assert!(
+            error.message.contains("update lyrel-server"),
+            "the older endpoint is told to update: {}",
+            error.message
+        );
+        assert!(
+            seen.try_recv().is_err(),
+            "history must not send a request the peer cannot browse"
+        );
+        assert!(host.is_connected());
+    }
+
+    #[test]
+    fn antigravity_history_reads_the_peer_index_through_the_read_only_browser() {
+        use crate::host::sqlite::{
+            SqliteColumns, SqliteObject, SqliteObjectKind, SqliteOpened, SqlitePage, SqliteReply,
+            SqliteRequest, SqliteValue,
+        };
+        fn text(value: &str) -> SqliteValue {
+            SqliteValue::Text {
+                preview: value.as_bytes().to_vec(),
+                total: value.len() as u64,
+            }
+        }
+        let (host, seen) = host_with_peer_announcing(
+            '/',
+            &[
+                crate::daemon::control::feature::SQLITE_BROWSE,
+                crate::daemon::control::feature::AGENT_ENVIRONMENT,
+            ],
+            |request| {
+                let ControlRequest::Sqlite { request } = request else {
+                    panic!("unexpected request {request:?}");
+                };
+                let reply = match &**request {
+                    SqliteRequest::Open { path } => {
+                        assert_eq!(
+                            path,
+                            "/home/me/.gemini/antigravity-cli/conversation_summaries.db"
+                        );
+                        SqliteReply::Opened(SqliteOpened {
+                            view: 7,
+                            objects: vec![
+                                SqliteObject {
+                                    name: "conversation_summaries".into(),
+                                    kind: SqliteObjectKind::Table,
+                                    sql: String::new(),
+                                },
+                                SqliteObject {
+                                    name: "search_schema_version".into(),
+                                    kind: SqliteObjectKind::Table,
+                                    sql: String::new(),
+                                },
+                            ],
+                            journal_mode: "wal".into(),
+                            idle_millis: 30_000,
+                            max_age_millis: 180_000,
+                        })
+                    }
+                    SqliteRequest::Columns { table, .. }
+                        if table.as_str() == "search_schema_version" =>
+                    {
+                        SqliteReply::Columns(SqliteColumns {
+                            names: vec!["version".into()],
+                            order: vec!["version".into()],
+                        })
+                    }
+                    SqliteRequest::Columns { table, .. }
+                        if table.as_str() == "conversation_summaries" =>
+                    {
+                        SqliteReply::Columns(SqliteColumns {
+                            names: vec![
+                                "conversation_id".into(),
+                                "title".into(),
+                                "preview".into(),
+                                "last_modified_time".into(),
+                                "workspace_uris".into(),
+                                "parent_conversation_id".into(),
+                                "nesting_depth".into(),
+                                "app_data_dir".into(),
+                            ],
+                            order: vec!["conversation_id".into()],
+                        })
+                    }
+                    SqliteRequest::Page { query, .. } if query.table == "search_schema_version" => {
+                        SqliteReply::Page(SqlitePage {
+                            page: 0,
+                            start_column: 0,
+                            rows: vec![vec![SqliteValue::Integer { value: 3 }]],
+                            more: false,
+                        })
+                    }
+                    SqliteRequest::Page { query, .. }
+                        if query.table == "conversation_summaries" =>
+                    {
+                        assert_eq!(query.sort, Some((3, true)));
+                        assert!(query.search.is_empty());
+                        SqliteReply::Page(SqlitePage {
+                            page: 0,
+                            start_column: 0,
+                            rows: vec![vec![
+                                text("remote-conversation"),
+                                text("Remote Antigravity"),
+                                text("first prompt"),
+                                text("2026-11-18 09:32:12.5207842+00:00"),
+                                text("[\"file:///home/me/repo\"]"),
+                                text(""),
+                                SqliteValue::Integer { value: 0 },
+                                text("antigravity-cli"),
+                            ]],
+                            more: false,
+                        })
+                    }
+                    SqliteRequest::Close { .. } => SqliteReply::Closed,
+                    other => panic!("unexpected sqlite request {other:?}"),
+                };
+                Some((ControlReply::Ok(ReplyOk::Sqlite(Box::new(reply))), vec![]))
+            },
+        );
+        let mut request = session_request(host.id());
+        request.agent = crate::core::cli_agent::CLIAgent::Antigravity;
+        request
+            .scope
+            .environment
+            .insert("HOME".into(), "/home/me".into());
+        let found = crate::host::session_operations::antigravity::sessions(
+            &*host,
+            Some(Path::new("/home/me/repo")),
+            &request,
+        )
+        .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, "remote-conversation");
+        assert_eq!(found[0].title, "Remote Antigravity");
+        assert_eq!(found[0].cwd.as_deref(), Some(Path::new("/home/me/repo")));
+        assert_eq!(
+            found[0]
+                .scope
+                .as_ref()
+                .and_then(|scope| scope.session_file.as_deref()),
+            Some(Path::new(
+                "/home/me/.gemini/antigravity-cli/brain/remote-conversation/.system_generated/logs/transcript.jsonl"
+            ))
+        );
+        let mut opened = false;
+        while let Ok(request) = seen.try_recv() {
+            if let ControlRequest::Sqlite { request } = request
+                && matches!(request.as_ref(), SqliteRequest::Open { .. })
+            {
+                opened = true;
+            }
+        }
+        assert!(opened, "the index was opened read-only on its owning peer");
     }
 
     #[test]

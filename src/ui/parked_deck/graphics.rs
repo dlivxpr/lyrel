@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use super::{ParkedCard, ParkedDeckLabels};
+use super::{MORE_OFFSET, MORE_SLOT, ParkedCard, ParkedDeckLabels};
 use lyrel_ui_base::presets::{Interactions, Parking};
 
 // 批准的原生闸门几何，以 rem=16 为设计坐标；矩阵和逆命中共享同一比例。
@@ -363,6 +363,17 @@ impl Tokens {
     }
 }
 
+/// The warm parking target's design box. It hangs from the content's top
+/// edge — the line directly under the centered title-bar Park entry — and
+/// reaches about 104 design pixels down into the pane area, so a pane can be
+/// parked without aiming for the window's edge.
+const PARK_TARGET_W: f32 = 360.;
+const PARK_TARGET_H: f32 = 104.;
+
+/// The label capsule's design box inside the target: the same 80×24 pill,
+/// just below the entry that owns the window centre.
+const PARK_PILL: [f32; 4] = [140., 12., 80., 24.];
+
 #[derive(Clone, Debug)]
 struct CardFrame {
     model: ParkedCard,
@@ -377,8 +388,16 @@ struct CardFrame {
 #[derive(Clone, Default, Debug)]
 pub(super) struct Frame {
     bounds: Bounds<Pixels>,
-    deck_bounds: Bounds<Pixels>,
     viewport: Bounds<Pixels>,
+    /// The window's horizontal centre, in window coordinates. The deck
+    /// overlay may sit inside a terminal column that side panels shove
+    /// sideways; the fan still opens under the title-bar entry, which is
+    /// anchored to the window itself.
+    center_x: Pixels,
+    /// The window's horizontal centre without the fan's `+N` reserve shift.
+    /// The parking target hangs from the entry's line, so it follows this
+    /// one even while the overflow control moves the fan band aside.
+    window_center_x: Pixels,
     cards: Vec<CardFrame>,
     zoom: f32,
     fan: f32,
@@ -399,8 +418,16 @@ pub(super) fn park_label(label: &str, font: &str) -> Sprite {
     sprite(
         Layer::Ink,
         None,
-        [0., 0., 360., 170.],
-        &text(label, font, 180., 28., 11., 80., true),
+        [0., 0., PARK_TARGET_W, PARK_TARGET_H],
+        &text(
+            label,
+            font,
+            PARK_TARGET_W / 2.,
+            PARK_PILL[1] + PARK_PILL[3] / 2. + 4.,
+            11.,
+            PARK_PILL[2],
+            true,
+        ),
     )
 }
 
@@ -408,7 +435,11 @@ pub(super) fn park_label(label: &str, font: &str) -> Sprite {
 pub(super) struct FrameInput {
     pub bounds: Bounds<Pixels>,
     pub viewport: Bounds<Pixels>,
-    pub deck_bounds: Bounds<Pixels>,
+    /// The window centre the fan hangs from — the title-bar Park entry's
+    /// line, independent of which side panels are open.
+    pub center_x: Pixels,
+    /// The unshifted window centre, which the parking target hangs from.
+    pub window_center_x: Pixels,
     pub zoom: f32,
     pub cards: Vec<FrameCard>,
     pub fan: f32,
@@ -421,7 +452,8 @@ impl Frame {
         let FrameInput {
             bounds,
             viewport,
-            deck_bounds,
+            center_x,
+            window_center_x,
             zoom,
             cards,
             fan,
@@ -430,8 +462,9 @@ impl Frame {
         } = input;
         let mut result = Self {
             bounds,
-            deck_bounds,
             viewport,
+            center_x,
+            window_center_x,
             cards: Vec::with_capacity(cards.len()),
             zoom,
             fan,
@@ -455,18 +488,26 @@ impl Frame {
                 radians.sin() * pose.scale * zoom,
                 radians.cos() * pose.scale * zoom,
             );
-            let mut anchor_x = f32::from(deck_bounds.center().x) + (pose.x - shift) * zoom;
-            let mut anchor_y = f32::from(bounds.bottom()) + pose.y * zoom;
+            let mut anchor_x = f32::from(center_x) + (pose.x - shift) * zoom;
+            // The fan hangs from the content's top edge — the line directly
+            // under the centered Park entry. The anchor is the card's centre,
+            // so the closed card straddles that line and the fan's lower half
+            // is what emerges into the pane area; a pose's negative lift then
+            // carries the card down from it. Keeping the line as the card's
+            // bottom instead put every resting card above the deck's content
+            // mask, where it clipped to nothing and could neither paint nor be
+            // queried.
+            let mut anchor_y = f32::from(bounds.top()) - pose.y * zoom;
             if card.selected {
-                // 不把恢复操作放到 content 顶边外；极小区域仍由共同 viewport 裁切。
+                // 不把恢复操作放到 content 区域外；极小区域仍由共同 viewport 裁切。
                 let w = pose.width * pose.scale * zoom;
                 let h = pose.height * pose.scale * zoom;
                 let left = f32::from(viewport.left()) + w / 2.;
                 let right = (f32::from(viewport.right()) - w / 2.).max(left);
                 anchor_x = anchor_x.clamp(left, right);
-                anchor_y = anchor_y
-                    .max(f32::from(viewport.top()) + h)
-                    .min(f32::from(viewport.bottom()));
+                let top = f32::from(viewport.top()) + h / 2.;
+                let bottom = (f32::from(viewport.bottom()) - h / 2.).max(top);
+                anchor_y = anchor_y.clamp(top, bottom);
             }
             let (sx, sy) = (pose.width / 56., pose.height / 74.);
             let outer = Affine {
@@ -474,8 +515,8 @@ impl Frame {
                 b: b * sy,
                 c: c * sx,
                 d: d * sy,
-                x: anchor_x - a * pose.width / 2. - b * pose.height,
-                y: anchor_y - c * pose.width / 2. - d * pose.height,
+                x: anchor_x - a * pose.width / 2. - b * pose.height / 2.,
+                y: anchor_y - c * pose.width / 2. - d * pose.height / 2.,
             };
             let compression = (std::f32::consts::PI * pose.flip).cos().abs();
             let face = if pose.flip > 0.5 {
@@ -508,18 +549,20 @@ impl Frame {
         self
     }
 
-    // Keep the approved rem-sized target and label; narrow content clips its outer arc,
-    // rather than shrinking the pill's text and pointer target along with the viewport.
+    // The approved rem-sized target and label, hanging from the content's top
+    // edge: the line the centered Park entry sits above. Narrow content clips
+    // its outer arc, rather than shrinking the pill's text and pointer target
+    // along with the viewport.
     fn park_target_geometry(&self) -> Bounds<Pixels> {
         let scale = self
             .zoom
-            .min(f32::from(self.viewport.size.height) / 170.)
+            .min(f32::from(self.viewport.size.height) / PARK_TARGET_H)
             .max(0.);
-        let extent = size(px(360. * scale), px(170. * scale));
+        let extent = size(px(PARK_TARGET_W * scale), px(PARK_TARGET_H * scale));
         Bounds::new(
             point(
-                self.viewport.center().x - extent.width / 2.,
-                self.viewport.bottom() - extent.height,
+                self.window_center_x - extent.width / 2.,
+                self.viewport.top(),
             ),
             extent,
         )
@@ -532,14 +575,17 @@ impl Frame {
 
     pub fn park_pill_bounds(&self) -> Bounds<Pixels> {
         let target = self.park_target_geometry();
-        let scale = f32::from(target.size.width) / 360.;
+        let scale = f32::from(target.size.width) / PARK_TARGET_W;
         Bounds::new(
-            target.origin + point(px(140. * scale), px(12. * scale)),
-            size(px(80. * scale), px(24. * scale)),
+            target.origin + point(px(PARK_PILL[0] * scale), px(PARK_PILL[1] * scale)),
+            size(px(PARK_PILL[2] * scale), px(PARK_PILL[3] * scale)),
         )
         .intersect(&self.viewport)
     }
 
+    /// Whether `position` is inside the painted half-ellipse, not its
+    /// bounding rectangle: the target hangs from the top edge, so the empty
+    /// corners are the ones at its lower left and right.
     pub fn park_target_contains(&self, position: Point<Pixels>) -> bool {
         let target = self.park_target_geometry();
         if !self.viewport.contains(&position)
@@ -551,18 +597,15 @@ impl Frame {
             return false;
         }
         let x = f32::from(position.x - target.center().x) / f32::from(target.size.width / 2.);
-        let y = f32::from(position.y - target.bottom()) / f32::from(target.size.height);
-        x * x + y * y <= 1.
+        let y = f32::from(position.y - target.top()) / f32::from(target.size.height);
+        y >= 0. && x * x + y * y <= 1.
     }
 
     pub fn keyboard_bounds(&self) -> Bounds<Pixels> {
         let width = self.viewport.size.width.min(px(360. * self.zoom));
         let height = self.viewport.size.height.min(px(154. * self.zoom));
         Bounds {
-            origin: point(
-                self.deck_bounds.center().x - width / 2.,
-                self.viewport.bottom() - height,
-            ),
+            origin: point(self.center_x - width / 2., self.viewport.top()),
             size: size(width, height),
         }
         .intersect(&self.viewport)
@@ -573,7 +616,7 @@ impl Frame {
     ) -> impl Iterator<Item = (&ParkedCard, Bounds<Pixels>, bool, Option<Bounds<Pixels>>)> + '_
     {
         self.cards.iter().map(|card| {
-            let bounds_for = |transform: Affine, points: [(f32, f32); 4]| {
+            let bounds_for = |transform: Affine, points: [(f32, f32); 4], clip: bool| {
                 let points = points.map(|(x, y)| transform.apply(x, y));
                 let min_x = points.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min);
                 let min_y = points.iter().map(|p| p[1]).fold(f32::INFINITY, f32::min);
@@ -585,28 +628,52 @@ impl Frame {
                     .iter()
                     .map(|p| p[1])
                     .fold(f32::NEG_INFINITY, f32::max);
-                Bounds {
+                let bounds = Bounds {
                     origin: point(px(min_x), px(min_y)),
                     size: size(px(max_x - min_x), px(max_y - min_y)),
+                };
+                if clip {
+                    bounds.intersect(&self.viewport)
+                } else {
+                    bounds
                 }
-                .intersect(&self.viewport)
             };
-            let bounds = bounds_for(card.outer, [(0., 0.), (56., 0.), (56., 74.), (0., 74.)]);
+            // The card keeps its full rectangle: the deck's content mask is
+            // what hides the part above the pane area, but the card still
+            // exists at that rectangle (the fan is centred on the content's
+            // top line). Clipping it here would erase a resting card whose
+            // lower half is what the mask actually shows.
+            let bounds = bounds_for(
+                card.outer,
+                [(0., 0.), (56., 0.), (56., 74.), (0., 74.)],
+                false,
+            );
             let restore = (card.selected && card.pose.flip > 0.5).then(|| {
                 bounds_for(
                     card.face,
                     [(27., 84.), (93., 84.), (93., 108.), (27., 108.)],
+                    true,
                 )
             });
             (&card.model, bounds, card.selected, restore)
         })
     }
 
+    /// Whether `position` is in the deck's interaction band. The band starts
+    /// one title-bar row above the viewport's top edge — the centered Park
+    /// entry lives up there — and reaches down across the fanned cards, so
+    /// the pointer road from the entry into the fan never leaves the deck.
+    /// It reaches further to the right than the fan itself: the +N control
+    /// sits right of the band (and, in a narrow column, is clamped to the
+    /// deck's right edge), so the band has to cover its whole target or
+    /// moving onto it would close the deck before the click lands.
     pub fn deck_contains(&self, position: Point<Pixels>) -> bool {
-        self.viewport.contains(&position)
-            && (f32::from(position.x) - f32::from(self.deck_bounds.center().x)).abs()
-                <= 180. * self.zoom
-            && f32::from(position.y) >= f32::from(self.bounds.bottom()) - 154. * self.zoom
+        let x = f32::from(position.x) - f32::from(self.center_x);
+        let y = f32::from(position.y) - f32::from(self.viewport.top());
+        x >= -(180. * self.zoom)
+            && x <= (MORE_OFFSET + MORE_SLOT) * self.zoom
+            && y >= -(48. * self.zoom)
+            && y <= 154. * self.zoom
     }
 
     pub fn hit(&self, position: Point<Pixels>) -> Option<(u64, bool)> {
@@ -728,23 +795,34 @@ impl Frame {
         window: &mut Window,
         cx: &App,
     ) -> Result<(), String> {
-        let (width, height) = if park { (360., 170.) } else { (260., 130.) };
+        let (width, height) = if park {
+            (PARK_TARGET_W, PARK_TARGET_H)
+        } else {
+            (260., 130.)
+        };
         let data = if park {
+            // The target hangs from the content's top edge, directly under the
+            // centered entry: the same dome the deck wore at the bottom,
+            // mirrored into the edge it hangs from now. Its widest line is the
+            // top one, so the empty corners are the lower left and right.
             if self.park_hover {
-                r#"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="170"><path d="M0 170 A180 170 0 0 1 360 170" fill="white" fill-opacity=".14" stroke="white" stroke-opacity=".8"/><rect x="140" y="12" width="80" height="24" rx="12" fill="white"/></svg>"#
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="104"><path d="M0 0 A180 104 0 0 0 360 0" fill="white" fill-opacity=".14" stroke="white" stroke-opacity=".8"/><rect x="140" y="12" width="80" height="24" rx="12" fill="white"/></svg>"#
             } else {
-                r#"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="170"><defs><filter id="p" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="7"/></filter></defs><path d="M0 170 A180 170 0 0 1 360 170" fill="white" fill-opacity=".08" stroke="white" stroke-opacity=".54"/><rect x="140" y="16" width="80" height="24" rx="12" fill="white" fill-opacity=".22" filter="url(#p)"/><rect x="140" y="12" width="80" height="24" rx="12" fill="white" fill-opacity=".82"/></svg>"#
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="104"><defs><filter id="p" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="7"/></filter></defs><path d="M0 0 A180 104 0 0 0 360 0" fill="white" fill-opacity=".08" stroke="white" stroke-opacity=".54"/><rect x="140" y="16" width="80" height="24" rx="12" fill="white" fill-opacity=".22" filter="url(#p)"/><rect x="140" y="12" width="80" height="24" rx="12" fill="white" fill-opacity=".82"/></svg>"#
             }
         } else {
-            r#"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="130"><path d="M1 130 A129 129 0 0 1 259 130" fill="white" fill-opacity=".07" stroke="white" stroke-opacity=".58"/></svg>"#
+            // The fan aura opens downward from the title-bar edge: the same
+            // dome the deck wore at the content's bottom, mirrored into the
+            // top edge it hangs from now.
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="260" height="130"><path d="M1 0 A129 129 0 0 0 259 0" fill="white" fill-opacity=".07" stroke="white" stroke-opacity=".58"/></svg>"#
         };
         let bounds = if park {
             self.park_target_geometry()
         } else {
             Bounds {
                 origin: point(
-                    self.deck_bounds.center().x - px(width * self.zoom / 2.),
-                    self.bounds.bottom() - px(height * self.zoom),
+                    self.center_x - px(width * self.zoom / 2.),
+                    self.bounds.top(),
                 ),
                 size: size(px(width * self.zoom), px(height * self.zoom)),
             }
@@ -891,7 +969,7 @@ mod tests {
                         "{selected}, {value}, back={back}"
                     );
                 }
-                let expected = reference(actual, pill, 180., 28., [0., 0., 360., 170.]);
+                let expected = reference(actual, pill, 180., 28., [0., 0., 360., 104.]);
                 assert_eq!(
                     pixels(&renderer, &park_label(&labels.park, selected)),
                     pixels(&renderer, &expected),

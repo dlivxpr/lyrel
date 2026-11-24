@@ -25,7 +25,7 @@ fn live_pty_child_argv_detects_the_agent() {
 
     let mut detected = None;
     for _ in 0..200 {
-        if let Some(agent) = foreground_agent(&master).flatten() {
+        if let AgentProbe::Foreground(Some(agent)) = foreground_agent(&master, None) {
             detected = Some(agent);
             break;
         }
@@ -77,6 +77,133 @@ fn resumed_output_marks_do_not_release_the_running_agent() {
         state.facts.agent.is_none(),
         "the actual shell exit releases the agent"
     );
+}
+
+/// Process-name detection (the only kind a ConPTY pane has for a manually
+/// started agent) carries no argv. Applying it must not stamp an empty argv
+/// over the richer one a shell mark mapped — the probe names the agent; the
+/// launch args stay the mark's, or "set current launch args as default" would
+/// silently degrade to a bare executable name.
+#[test]
+fn name_only_detection_keeps_the_mapped_launch_argv() {
+    use crate::core::cli_agent::CLIAgent;
+
+    let mut state = test_state(true);
+    let mapped: Vec<String> = ["agy", "--effort", "high"]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    state.with_facts(|facts, emit| {
+        apply_agent(facts, Some((CLIAgent::Antigravity, mapped.clone())), emit)
+    });
+    assert_eq!(state.facts.agent_argv, Some(mapped.clone()));
+
+    state.with_facts(|facts, emit| {
+        apply_agent(facts, Some((CLIAgent::Antigravity, Vec::new())), emit)
+    });
+    assert_eq!(
+        state.facts.agent,
+        Some(CLIAgent::Antigravity),
+        "the same agent still stands"
+    );
+    assert_eq!(
+        state.facts.agent_argv,
+        Some(mapped),
+        "an empty argv stamps nothing over the mapped one"
+    );
+}
+
+/// Drive one read through a `FactReader` whose agent probe answers
+/// `AntigravityChild(sighting)`, and apply what it observed to `state`.
+#[cfg(windows)]
+fn apply_antigravity_probe(state: &mut PaneState, sighting: super::reader::AntigravitySighting) {
+    let probes = ForegroundProbes {
+        group: Box::new(|| Some(1234)),
+        remote: Box::new(|| None),
+        agent: Box::new(move || AgentProbe::AntigravityChild(sighting)),
+        cwd: Box::new(|| None),
+        local_group: |_| Some(true),
+    };
+    let mut reader = FactReader::new(probes);
+    let before = reader.before_read((true, true));
+    let observation = reader.parse([b"agy output".as_slice()]);
+    let foreground_running = || false;
+    let observation = reader.observe(observation, &foreground_running, before);
+    state.with_facts(|facts, emit| observation.apply(facts, emit));
+}
+
+/// A manually started agy is the one agent a ConPTY pane can name from the
+/// process tree. A *foreground* agy (a direct child of the shell) must
+/// replace a leftover identity — an agent whose exit hook never arrived — or
+/// the row keeps naming the previous agent while agy runs.
+#[cfg(windows)]
+#[test]
+fn antigravity_child_probe_replaces_a_leftover_agent_identity() {
+    use super::reader::AntigravitySighting;
+    use crate::core::cli_agent::CLIAgent;
+
+    let mut state = test_state(true);
+    state.with_facts(|facts, emit| {
+        apply_agent(facts, Some((CLIAgent::OhMyPi, vec!["omp".into()])), emit)
+    });
+    assert_eq!(state.facts.agent, Some(CLIAgent::OhMyPi));
+
+    apply_antigravity_probe(&mut state, AntigravitySighting::Foreground);
+    assert_eq!(
+        state.facts.agent,
+        Some(CLIAgent::Antigravity),
+        "a foreground agy replaces the leftover agent"
+    );
+    assert!(
+        state.facts.agent_argv.is_none(),
+        "the previous agent's launch args do not become agy's"
+    );
+}
+
+/// A *nested* agy — a tool call under the agent that still owns the pane —
+/// must not replace that agent, or the row would name the child while the
+/// parent is the real foreground, and (its hooks being dropped as foreign)
+/// stay wrong until the parent exits.
+#[cfg(windows)]
+#[test]
+fn a_nested_antigravity_does_not_replace_the_owning_agent() {
+    use super::reader::AntigravitySighting;
+    use crate::core::cli_agent::CLIAgent;
+
+    let mut state = test_state(true);
+    state.with_facts(|facts, emit| {
+        apply_agent(facts, Some((CLIAgent::OhMyPi, vec!["omp".into()])), emit)
+    });
+
+    apply_antigravity_probe(&mut state, AntigravitySighting::Nested);
+    assert_eq!(
+        state.facts.agent,
+        Some(CLIAgent::OhMyPi),
+        "a nested agy is the owning agent's tool call, not the foreground"
+    );
+    assert_eq!(state.facts.agent_argv, Some(vec!["omp".to_string()]));
+}
+
+/// The probe only knows agy: its absence says nothing about whatever else
+/// the pane is running, so it must never clear another agent's identity.
+#[cfg(windows)]
+#[test]
+fn antigravity_child_absence_does_not_clear_another_agent() {
+    use super::reader::AntigravitySighting;
+    use crate::core::cli_agent::CLIAgent;
+
+    let mut state = test_state(true);
+    state.with_facts(|facts, emit| {
+        apply_agent(facts, Some((CLIAgent::OhMyPi, vec!["omp".into()])), emit)
+    });
+
+    apply_antigravity_probe(&mut state, AntigravitySighting::Absent);
+    assert_eq!(
+        state.facts.agent,
+        Some(CLIAgent::OhMyPi),
+        "no agy child is not evidence about the agent that is running"
+    );
+    assert_eq!(state.facts.agent_argv, Some(vec!["omp".to_string()]));
 }
 
 #[test]
@@ -200,7 +327,7 @@ fn a_pane_killed_with_its_agent_keeps_the_facts_a_resume_needs() {
             ForegroundProbes {
                 group: Box::new(|| None),
                 remote: Box::new(|| None),
-                agent: Box::new(|| Some(None)),
+                agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Foreground(None)),
                 cwd: Box::new(|| None),
                 local_group: |_| Some(true),
             },
@@ -285,7 +412,7 @@ fn an_explicit_agent_exit_clears_the_live_and_reopened_machine_snapshot() {
             remote: Box::new(|| None),
             // Unsupported or unavailable process probes must not be needed
             // to honor the agent's own explicit shutdown event.
-            agent: Box::new(|| None),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Unavailable),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },
@@ -461,7 +588,7 @@ fn negative_process_probes_preserve_rich_turn_until_the_shell_prompt() {
                     as crate::daemon::procinfo::MediaProcessRoot)
             }),
             remote: Box::new(|| None),
-            agent: Box::new(|| Some(None)),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Foreground(None)),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },

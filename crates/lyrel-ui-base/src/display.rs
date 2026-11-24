@@ -8,6 +8,13 @@ pub const TAB_TEXT: f32 = 12.5 * (1. / 16.);
 /// Horizontal inset between window-chrome content and the frame.
 pub const CONTENT_INSET: f32 = 12.;
 
+/// The global status bar's height in rems: `2rem`, i.e. 32 px at the default
+/// 16 px rem. Toast clearance and the bar itself both resolve against this,
+/// so the floating stack always clears the actual bar at any UI scale. The
+/// editor panel's local status bar is deliberately shorter (`1.625rem`) and
+/// stays owned by the editor.
+pub const GLOBAL_STATUS_BAR_HEIGHT_REM: f32 = 2.;
+
 /// Tabular figures, so a column of counts, sizes and positions keeps its
 /// digits on one grid while the numbers change under it.
 pub fn tabular_figures() -> gpui_kit::FontFeatures {

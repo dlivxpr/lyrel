@@ -108,6 +108,12 @@ pub enum Command {
     )]
     Capture(CaptureArgs),
 
+    #[command(
+        about = "Ask the side panel showing this pane's workspace to open an absolute \
+                 http(s) URL as a preview, without taking the keyboard"
+    )]
+    Preview(PreviewArgs),
+
     #[command(about = "Processes and listening ports inside a pane")]
     Procs {
         #[arg(value_name = "%PANE")]
@@ -472,6 +478,23 @@ pub struct CaptureArgs {
         help = "Keep only the last N lines of the answer, the way `tail -n N` would"
     )]
     pub tail: Option<u64>,
+}
+
+#[derive(Debug, Args)]
+pub struct PreviewArgs {
+    #[arg(
+        value_name = "URL",
+        help = "Absolute http(s) URL; `about:blank`, local files and custom schemes are refused"
+    )]
+    pub url: String,
+
+    #[arg(
+        long,
+        value_name = "%PANE",
+        help = "Pane whose workspace receives the preview; defaults to $LYREL_PANE inside a \
+                lyrel shell. The pane also names the agent an explicit share returns to."
+    )]
+    pub pane: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

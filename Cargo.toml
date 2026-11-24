@@ -58,6 +58,10 @@ lyrel-ui-base = { path = "crates/lyrel-ui-base" }
 # server and CLI never link it — so it stays a desktop-only dependency, while
 # the crate itself remains Linux-buildable (browser modules gated there).
 lyrel-insights = { path = "crates/lyrel-insights" }
+# GUI-free structural (content-aware) diff engine: tree-sitter item matching
+# over two text versions. Desktop-only by ownership — the shell is its only
+# production consumer, so no grammar enters the CLI or protocol graphs.
+lyrel-content-diff = { path = "crates/lyrel-content-diff" }
 gpui-kit = { workspace = true }
 # Only the opt-in main-thread Markdown consumer harness needs this direct edge.
 lyrel-markdown-editor = { path = "crates/lyrel-markdown-editor", optional = true }
@@ -178,8 +182,14 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_LibraryLoader",
 ] }
 # The window's public `HasWindowHandle` handle is how `ui::backdrop` reaches
-# the HWND for the DWM calls. Already in the tree at 0.6 via gpui itself.
+# the HWND for the DWM calls, and how the Side Panel browser (`ui::browser`)
+# anchors its native child. Already in the tree at 0.6 via gpui itself.
 raw-window-handle = "0.6"
+# The Side Panel browser's WebView2 child surface (`ui::browser::surface`).
+# The same pinned line the draw.io document engine uses; wry is not used on
+# Windows because this surface needs WebView2's own permission, popup and
+# `IsUserInitiated` answers.
+webview2-com = "=0.39.1"
 # Windows dictionary segmentation; macOS uses CFStringTokenizer instead.
 # COM for toast branding (`core::aumid`): IShellLinkW + IPropertyStore stamp
 # System.AppUserModel.ID onto the Start Menu shortcut, which Windows requires
@@ -189,6 +199,11 @@ windows = { version = "0.62.2", features = [
     "Data_Xml_Dom",
     "Foundation",
     "UI_Notifications",
+    # ITaskbarList3's numeric taskbar overlay (#397): the shell interface and
+    # the GDI calls that draw the 1–9/9+ icon, over the COM apartment GPUI's
+    # Windows backend already initializes.
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
     "Win32_Foundation",
     "Win32_Globalization",
     "Win32_Storage_EnhancedStorage",
@@ -219,12 +234,39 @@ libc = "0.2.191"
 # app appearance to match the active theme (see `ui::theme::sync_native_appearance`)
 # so the native traffic-light buttons render in the right light/dark style.
 [target.'cfg(target_os = "macos")'.dependencies]
+# The Side Panel browser's native WKWebView (`ui::browser::surface`). It is
+# driven directly rather than through wry's child host (#392): the browser
+# needs an identified WKWebsiteDataStore per Host and the WKNavigationAction
+# metadata that tells a user-clicked link from a script-opened popup. No
+# custom protocol, message handler or page → workbench bridge is installed.
+objc2-web-kit = { version = "0.3.2", default-features = false, features = [
+    "block2",
+    "objc2-app-kit",
+    "WKNavigation",
+    "WKNavigationAction",
+    "WKNavigationDelegate",
+    "WKNavigationResponse",
+    "WKUIDelegate",
+    "WKWebView",
+    "WKWebViewConfiguration",
+    "WKWebsiteDataStore",
+    "WKWindowFeatures",
+    "WKFrameInfo",
+    "WKSecurityOrigin",
+    "WKOpenPanelParameters",
+    # The explicit preview share captures the visible page as PNG (#393).
+    "WKSnapshotConfiguration",
+] }
+# The capture completion handler is a block; `objc2-web-kit`'s block2
+# feature only points the bindings at it, so the type has to be in scope here.
+block2 = "0.6"
+raw-window-handle = "0.6"
 # CFStringTokenizer FFI for dictionary-based CJK word segmentation on
 # double-click (`terminal::smart_select`). Already in the tree transitively,
 # and it makes the Windows jieba fallback unnecessary here.
 core-foundation = "0.10.1"
-objc2 = "0.6.5"
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage", "NSMenu", "NSMenuItem", "NSSpellChecker"] }
+objc2 = { version = "0.6.5", features = ["disable-encoding-assertions"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSAppearance", "NSGraphics", "NSImage", "NSBitmapImageRep", "NSMenu", "NSMenuItem", "NSSpellChecker", "NSDockTile", "NSView", "NSWindow"] }
 # NSData feeds the runtime Dock icon for bare (non-bundled) binaries — see
 # `set_dock_icon_for_bare_binary` in main.rs.
 # NSUserNotification is the click-to-reveal notification path — see
@@ -235,7 +277,25 @@ objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "
 # NSMenu/NSMenuItem back the native-menu key-equivalent repair in
 # `ui::theme::fix_native_menu_key_equivalents` (gpui 0.3.9 does not map
 # "enter"/"tab", so the app rewrites those equivalents itself).
-objc2-foundation = { version = "0.3", features = ["NSData", "NSDictionary", "NSString", "NSUserDefaults", "NSUserNotification", "NSLocale", "NSArray", "NSRange"] }
+objc2-foundation = { version = "0.3", features = [
+    "NSData",
+    "NSDictionary",
+    "NSString",
+    "NSUserDefaults",
+    "NSUserNotification",
+    "NSLocale",
+    "NSArray",
+    "NSRange",
+    # The Side Panel browser's WKWebView host (#392): the data-store UUID,
+    # the initial NSURLRequest, error text for a failed load, the AppKit
+    # geometry and the KVO title observer.
+    "NSGeometry",
+    "NSError",
+    "NSKeyValueObserving",
+    "NSURL",
+    "NSURLRequest",
+    "NSUUID",
+] }
 # `oneshot::Receiver` appears in the `Platform` trait's prompt/screen-capture
 # signatures, which the full-delegation wrapper in `ui::platform` must name.
 # Already in the tree at 0.3.34 via gpui.
@@ -307,13 +367,13 @@ native-markdown-tests = [
 members = ["crates/*"]
 # 默认成员面向 Windows/macOS；此清单不随构建目标变化。
 # Linux headless 用 CI 与安装指南中的 --workspace --exclude 显式选包。
-default-members = [".", "crates/lyrel-ui-base", "crates/lyrel-terminal", "crates/lyrel-workbench-editor", "crates/lyrel-markdown-editor", "crates/lyrel-document", "crates/lyrel-insights", "crates/lyrel-protocol", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli", "crates/lyrel-updater"]
+default-members = [".", "crates/lyrel-ui-base", "crates/lyrel-terminal", "crates/lyrel-workbench-editor", "crates/lyrel-markdown-editor", "crates/lyrel-content-diff", "crates/lyrel-document", "crates/lyrel-insights", "crates/lyrel-protocol", "crates/lyrel-core", "crates/lyrel-server", "crates/lyrel-cli", "crates/lyrel-updater"]
 
 [workspace.package]
 edition = "2024"
 # 所有一起发布的 workspace 成员通过 version.workspace 继承此版本。
 # 发布时只修改这一处，不将应用版本与 IPC 协议版本混用。
-version = "0.4.1"
+version = "0.5.0"
 
 [workspace.dependencies]
 encoding_rs = "0.8.44"

@@ -45,6 +45,46 @@ pub fn foreground_name(procs: &[Proc], shell_pid: u32) -> Option<String> {
         .map(|(_, _, name)| name.to_string())
 }
 
+/// Match Antigravity's launcher or runtime only below this pane's shell.
+/// ConPTY exposes no foreground PGID, and some shells emit no command mark.
+pub fn has_antigravity_child(procs: &[Proc], shell_pid: u32) -> bool {
+    procs.iter().any(|process| {
+        if process.pid == shell_pid
+            || !(process.name.eq_ignore_ascii_case("agy.exe")
+                || process.name.eq_ignore_ascii_case("antigravity-cli.exe"))
+        {
+            return false;
+        }
+        let mut parent = process.parent;
+        for _ in 0..procs.len() {
+            if parent == shell_pid {
+                return true;
+            }
+            let Some(ancestor) = procs.iter().find(|p| p.pid == parent && p.pid != p.parent) else {
+                break;
+            };
+            parent = ancestor.parent;
+        }
+        false
+    })
+}
+
+/// Antigravity's launcher or runtime running as a *direct* child of this
+/// pane's shell — the ConPTY stand-in for "foreground", which has no PGID.
+/// The launcher shim is what the shell spawns (`pwsh → agy.exe →
+/// antigravity-cli.exe`), so a foreground launch always has one of the two
+/// names directly under the shell. An agy that only appears deeper — a tool
+/// call under the agent that still owns the pane, or an explicit wrapper —
+/// is not the foreground and must not replace that agent.
+pub fn has_foreground_antigravity(procs: &[Proc], shell_pid: u32) -> bool {
+    procs.iter().any(|process| {
+        process.pid != shell_pid
+            && process.parent == shell_pid
+            && (process.name.eq_ignore_ascii_case("agy.exe")
+                || process.name.eq_ignore_ascii_case("antigravity-cli.exe"))
+    })
+}
+
 pub fn snapshot() -> Vec<Proc> {
     checked_snapshot().unwrap_or_default()
 }
@@ -358,6 +398,61 @@ mod tests {
     fn foreground_name_breaks_depth_ties_by_pid() {
         let procs = vec![p(100, 1, "sh"), p(200, 100, "a"), p(201, 100, "b")];
         assert_eq!(foreground_name(&procs, 100).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn antigravity_belongs_only_to_its_own_shell() {
+        let procs = [
+            p(100, 1, "pwsh.exe"),
+            p(200, 1, "pwsh.exe"),
+            p(210, 200, "agy.exe"),
+            p(220, 210, "Antigravity-CLI.exe"),
+        ];
+        assert!(!has_antigravity_child(&procs, 100));
+        assert!(has_antigravity_child(&procs, 200));
+        assert!(has_antigravity_child(
+            &[procs[1].clone(), p(220, 200, "antigravity-cli.exe")],
+            200
+        ));
+        assert!(!has_antigravity_child(&procs[..2], 200));
+    }
+
+    #[test]
+    fn foreground_antigravity_is_a_direct_child_of_the_shell() {
+        // Foreground launch: the shell spawns the launcher shim, which spawns
+        // the runtime. The shim is the direct child.
+        let foreground = [
+            p(100, 1, "pwsh.exe"),
+            p(210, 100, "agy.exe"),
+            p(220, 210, "antigravity-cli.exe"),
+        ];
+        assert!(has_foreground_antigravity(&foreground, 100));
+        // A direct runtime launch (no shim) is also the foreground.
+        assert!(has_foreground_antigravity(
+            &[p(100, 1, "pwsh.exe"), p(220, 100, "antigravity-cli.exe")],
+            100
+        ));
+
+        // Nested: another agent's tool call runs agy under its own process
+        // (node.exe here), so no agy name sits directly under the shell.
+        let nested = [
+            p(100, 1, "pwsh.exe"),
+            p(300, 100, "node.exe"),
+            p(310, 300, "cmd.exe"),
+            p(320, 310, "agy.exe"),
+            p(330, 320, "antigravity-cli.exe"),
+        ];
+        assert!(has_antigravity_child(&nested, 100));
+        assert!(!has_foreground_antigravity(&nested, 100));
+
+        // An explicit wrapper is not the foreground either.
+        let wrapped = [
+            p(100, 1, "pwsh.exe"),
+            p(300, 100, "cmd.exe"),
+            p(320, 300, "agy.exe"),
+        ];
+        assert!(has_antigravity_child(&wrapped, 100));
+        assert!(!has_foreground_antigravity(&wrapped, 100));
     }
 
     #[test]

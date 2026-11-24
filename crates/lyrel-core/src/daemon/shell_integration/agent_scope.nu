@@ -38,3 +38,7 @@ def --wrapped opencode2 [...args] {
 def --wrapped hermes [...args] {
   with-env (__lyrel_agent_environment 'hermes') { ^hermes ...$args }
 }
+
+def --wrapped agy [...args] {
+  with-env (__lyrel_agent_environment 'agy') { ^agy ...$args }
+}

@@ -262,6 +262,26 @@ fn run_request(
                 .start(&conn.host, &conn.sink, id, p(&cwd), args);
             (ReplyOk::Unit, Vec::new())
         }
+        ControlRequest::GitBlob {
+            cwd,
+            spec,
+            max_bytes,
+        } => match conn.host.git_blob(&p(&cwd), &spec, max_bytes)? {
+            Some(bytes) => (
+                ReplyOk::GitBlob {
+                    present: true,
+                    len: bytes.len() as u64,
+                },
+                bytes,
+            ),
+            None => (
+                ReplyOk::GitBlob {
+                    present: false,
+                    len: 0,
+                },
+                Vec::new(),
+            ),
+        },
 
         ControlRequest::Shells => (ReplyOk::Shells(h.shells()?), Vec::new()),
         ControlRequest::AgentSessions { directory } => (
@@ -322,6 +342,61 @@ fn run_request(
             ReplyOk::Bool(conn.identity.open_gui(path, workspace)),
             Vec::new(),
         ),
+        ControlRequest::PreviewOpen { pane, url, scratch } => {
+            let url = url.trim();
+            if !lyrel_protocol::core::web::is_preview_address(url) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "an agent preview needs an absolute http(s) URL",
+                ));
+            }
+            // The owning daemon is the authority on which workspace a pane
+            // belongs to. A caller never supplies one, so a preview cannot be
+            // steered into another window.
+            let tree = conn.machine()?.machine();
+            let workspace = tree
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.tabs.iter().any(|tab| tab.root.contains(pane)))
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("no pane %{pane} on this machine"),
+                    )
+                })?;
+            // A pane the tree still remembers but the process has ended is
+            // no preview target either: the feedback would have nowhere to
+            // go.
+            if let Some(directory) = conn.panes.as_ref()
+                && !directory
+                    .panes()
+                    .iter()
+                    .any(|info| info.pane_id == pane && info.alive)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("pane %{pane} is not running on this machine"),
+                ));
+            }
+            let scratch = if scratch.trim().is_empty() {
+                preview_scratch_dir()
+            } else {
+                scratch.trim().to_string()
+            };
+            if !h.is_absolute(&p(&scratch)) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "the preview scratch directory must be absolute on this machine",
+                ));
+            }
+            // Delivery is targeted to the one link that holds this
+            // workspace and negotiated preview support; `false` means there
+            // is no eligible GUI and nothing was broadcast.
+            let delivered =
+                conn.identity
+                    .preview_open(&workspace.id.to_string(), pane, url, &scratch);
+            (ReplyOk::Bool(delivered), Vec::new())
+        }
 
         ControlRequest::MachineGet => (
             ReplyOk::MachineTree(Box::new(machine_with_live_panes(conn)?)),
@@ -771,6 +846,17 @@ fn tracked_view(conn: &Conn, view: u64) -> io::Result<()> {
     } else {
         Err(crate::host::sqlite::stale_view(view))
     }
+}
+
+/// The screenshot directory the daemon offers when a caller names none. It
+/// is on this machine by construction, which is the only place the explicit
+/// share action can write through the pane's Host (#393).
+fn preview_scratch_dir() -> String {
+    std::env::temp_dir()
+        .join("lyrel")
+        .join("previews")
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn paths(v: &[String]) -> Vec<PathBuf> {

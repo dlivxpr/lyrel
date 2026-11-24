@@ -100,6 +100,7 @@ function isDesktopOnly(file) {
     file.startsWith('crates/lyrel-ui-base/') ||
     file.startsWith('crates/lyrel-terminal/') ||
     file.startsWith('crates/lyrel-workbench-editor/') ||
+    file.startsWith('crates/lyrel-content-diff/') ||
     file.startsWith('tests/') ||
     file.startsWith('assets/icons/') ||
     file.startsWith('assets/drawio/') ||

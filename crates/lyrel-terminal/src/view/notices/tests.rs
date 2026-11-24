@@ -1,6 +1,16 @@
 use super::*;
 use crate::view::test_support::*;
 use gpui_kit::TestAppContext;
+use lyrel_core::daemon::protocol::{DaemonMsg, ProgramNote};
+use lyrel_ui_base::notification_history::Severity;
+
+fn osc_note(id: u128, body: impl Into<String>) -> DaemonMsg {
+    DaemonMsg::ProgramNote(ProgramNote {
+        id: uuid::Uuid::from_u128(id),
+        title: None,
+        body: body.into(),
+    })
+}
 
 /// What the label ladder asks a pane: are you showing a name of your own,
 /// or still standing under the app's? (#740)
@@ -617,4 +627,598 @@ fn a_bell_rung_at_key_repeat_rate_holds_one_steady_flash(cx: &mut TestAppContext
         .advance_clock(std::time::Duration::from_millis(300));
     cx.run_until_parked();
     assert!(!lit(cx), "the flash outlived the last bell");
+}
+
+/// History assertions are scoped per test app: the inbox installs lazily, so
+/// read through `ensure`.
+fn record_count(cx: &mut TestAppContext) -> usize {
+    cx.update(|cx| {
+        lyrel_ui_base::notification_history::ensure(cx);
+        lyrel_ui_base::notification_history::history(cx)
+            .read(cx)
+            .records()
+            .count()
+    })
+}
+
+fn records_since(cx: &mut TestAppContext, baseline: usize) -> Vec<(Severity, String)> {
+    cx.update(|cx| {
+        lyrel_ui_base::notification_history::ensure(cx);
+        lyrel_ui_base::notification_history::history(cx)
+            .read(cx)
+            .records()
+            .skip(baseline)
+            .map(|record| (record.severity(), record.message().to_string()))
+            .collect()
+    })
+}
+
+/// Name the pane so a command result's record is attributable to this test
+/// (the running title becomes the command label).
+fn name_pane(window: &gpui_kit::WindowHandle<TerminalView>, cx: &mut TestAppContext, name: &str) {
+    window
+        .update(cx, |view, _, _| {
+            view.default_title = name.to_string();
+            view.title = name.to_string();
+        })
+        .unwrap();
+}
+
+/// Failed and unknown exit results are eligible events: they enter the
+/// history with their own severities even while the desktop timing mode
+/// holds every banner back.
+#[gpui_kit::test]
+fn failed_and_unknown_command_results_record_with_desktop_delivery_closed(cx: &mut TestAppContext) {
+    let _capture = crate::desktop_notification::capture_test_notifications();
+    let _ = take_notifications();
+    let (window, mut daemon) = harness(cx);
+    let _ = take_notifications();
+    lyrel_ui_base::i18n::set_locale("en");
+    configure_notifications(cx, lyrel_core::core::config::NotifyMode::Never, 0);
+    let baseline = record_count(cx);
+
+    name_pane(&window, cx, "t395-failed");
+    ordinary_command(&window, &mut daemon, cx, Some(7));
+    assert!(
+        take_notifications().is_empty(),
+        "the Never mode keeps its hard gate on desktop delivery"
+    );
+    let recorded = records_since(cx, baseline);
+    assert_eq!(
+        recorded.len(),
+        1,
+        "one eligible command result records once: {recorded:?}"
+    );
+    assert_eq!(
+        recorded[0].0,
+        Severity::Error,
+        "an exit code is authoritative"
+    );
+    assert!(
+        recorded[0].1.contains("t395-failed") && recorded[0].1.contains("exit code 7"),
+        "the record names the command and its failure: {:?}",
+        recorded[0].1
+    );
+
+    name_pane(&window, cx, "t395-unknown");
+    ordinary_command(&window, &mut daemon, cx, None);
+    let recorded = records_since(cx, baseline);
+    assert_eq!(
+        recorded.len(),
+        2,
+        "the unknown outcome records as its own event: {recorded:?}"
+    );
+    assert_eq!(
+        recorded[1].0,
+        Severity::Warning,
+        "an absent result is preserved as unknown, not success"
+    );
+    assert!(
+        recorded[1].1.contains("t395-unknown") && recorded[1].1.contains("unknown"),
+        "the record names the command and the unknown status: {:?}",
+        recorded[1].1
+    );
+}
+
+/// A command result is one qualified event: two viewers of the same daemon
+/// pane land on the same stable identity, so the history holds one record
+/// and the desktop shows one banner.
+#[gpui_kit::test]
+fn one_command_result_records_once_across_two_viewers(cx: &mut TestAppContext) {
+    let _capture = crate::desktop_notification::capture_test_notifications();
+    let _ = take_notifications();
+    // Two windows attached to pane 1 the way two viewers share a daemon pane.
+    let (window_a, mut daemon_a) = harness(cx);
+    let (window_b, mut daemon_b) = harness(cx);
+    let _ = take_notifications();
+    lyrel_ui_base::i18n::set_locale("en");
+    configure_notifications(cx, lyrel_core::core::config::NotifyMode::Always, 0);
+    let baseline = record_count(cx);
+
+    name_pane(&window_a, cx, "t395-shared");
+    name_pane(&window_b, cx, "t395-shared");
+    ordinary_command(&window_a, &mut daemon_a, cx, Some(3));
+    ordinary_command(&window_b, &mut daemon_b, cx, Some(3));
+    assert_eq!(
+        take_notifications().len(),
+        1,
+        "one banner for one event, no matter how many viewers saw it"
+    );
+    let recorded = records_since(cx, baseline);
+    assert_eq!(
+        recorded.len(),
+        1,
+        "one history entry across viewers: {recorded:?}"
+    );
+    assert!(recorded[0].1.contains("t395-shared"));
+}
+
+/// Report `state` on `daemon` and wait for `pane` to hold it.
+fn report_agent_state(
+    state: lyrel_core::core::cli_agent::AgentSessionState,
+    pane: &gpui_kit::Entity<TerminalView>,
+    cx: &mut TestAppContext,
+    daemon: &mut lyrel_core::daemon::transport::Stream,
+) {
+    lyrel_core::daemon::protocol::DaemonMsg::AgentStatus(Some(Box::new(state.clone())))
+        .encode(daemon)
+        .unwrap();
+    for _ in 0..200 {
+        if cx.update(|cx| pane.read(cx).terminal.agent_session()) == Some(state.clone()) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    panic!("the agent status never reached the pane");
+}
+
+fn agent_state(
+    status: lyrel_core::core::cli_agent::AgentStatus,
+    turns: u64,
+    sid: &str,
+    message: Option<&str>,
+) -> lyrel_core::core::cli_agent::AgentSessionState {
+    lyrel_core::core::cli_agent::AgentSessionState {
+        status,
+        message: message.map(str::to_string),
+        session_id: Some(sid.into()),
+        launch_argv: Some(vec!["omp".into()]),
+        rich: true,
+        cwd: None,
+        activity: 0,
+        turns,
+        pending_requests: Vec::new(),
+        request_resume_status: Default::default(),
+        pending_stop: false,
+        readout: Default::default(),
+        since_ms: None,
+    }
+}
+
+/// Poll `pane`'s agent status the way the foreground lifecycle does.
+fn poll_agent(
+    window: &gpui_kit::WindowHandle<TerminalView>,
+    pane: &gpui_kit::Entity<TerminalView>,
+    cx: &mut TestAppContext,
+) {
+    cx.update_window((*window).into(), |_, window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.poll_agent_status(true, window, cx);
+        })
+    })
+    .unwrap();
+}
+
+fn run_out_agent_settle(cx: &mut TestAppContext) {
+    cx.executor()
+        .advance_clock(crate::agent_activity::DONE_SETTLE * 2);
+    cx.run_until_parked();
+}
+
+/// The completion settle window is a gate on the record too: the Done notice
+/// lands in history and on the desktop only after 1.5 s hold, and a status
+/// that supersedes it during the wait cancels both.
+#[gpui_kit::test]
+fn agent_done_records_after_settle_and_superseded_done_leaves_nothing(cx: &mut TestAppContext) {
+    let _capture = crate::desktop_notification::capture_test_notifications();
+    let _ = take_notifications();
+    let (window, _root_daemon) = harness(cx);
+    let _ = take_notifications();
+    lyrel_ui_base::i18n::set_locale("en");
+    configure_notifications(cx, lyrel_core::core::config::NotifyMode::Always, 0);
+    let (pane, mut daemon) = window
+        .update(cx, |_, window, cx| {
+            super::quiet_test_pane(39501, window, cx)
+        })
+        .unwrap();
+    let baseline = record_count(cx);
+
+    report_agent_state(
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Working,
+            0,
+            "sid-t395-settle",
+            None,
+        ),
+        &pane,
+        cx,
+        &mut daemon,
+    );
+    poll_agent(&window, &pane, cx);
+    report_agent_state(
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Done,
+            1,
+            "sid-t395-settle",
+            None,
+        ),
+        &pane,
+        cx,
+        &mut daemon,
+    );
+    poll_agent(&window, &pane, cx);
+    assert_eq!(
+        record_count(cx),
+        baseline,
+        "a completion still settling is not a record yet"
+    );
+
+    run_out_agent_settle(cx);
+    let recorded = records_since(cx, baseline);
+    assert_eq!(
+        recorded.len(),
+        1,
+        "the settled result recorded exactly once: {recorded:?}"
+    );
+    assert_eq!(recorded[0].0, Severity::Info);
+    let delivered = take_notifications();
+    assert_eq!(delivered.len(), 1, "and it interrupted once: {delivered:?}");
+
+    // A queued question resumes work before Done is stable: the pending
+    // completion is superseded and neither records nor delivers, while the
+    // wait itself is an eligible event of its own.
+    report_agent_state(
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Working,
+            1,
+            "sid-t395-settle",
+            None,
+        ),
+        &pane,
+        cx,
+        &mut daemon,
+    );
+    poll_agent(&window, &pane, cx);
+    report_agent_state(
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Done,
+            2,
+            "sid-t395-settle",
+            None,
+        ),
+        &pane,
+        cx,
+        &mut daemon,
+    );
+    poll_agent(&window, &pane, cx);
+    report_agent_state(
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Waiting,
+            2,
+            "sid-t395-settle",
+            Some("Resume the turn, t395?"),
+        ),
+        &pane,
+        cx,
+        &mut daemon,
+    );
+    poll_agent(&window, &pane, cx);
+    run_out_agent_settle(cx);
+    let delivered = take_notifications();
+    assert_eq!(
+        delivered.len(),
+        1,
+        "the superseding wait interrupted once, the cancelled done never: {delivered:?}"
+    );
+    let recorded = records_since(cx, baseline);
+    assert_eq!(
+        recorded.len(),
+        2,
+        "settled done + the wait that superseded it, nothing else: {recorded:?}"
+    );
+    assert!(
+        recorded[1].1.contains("Resume the turn, t395?"),
+        "the wait record carries the question: {:?}",
+        recorded[1].1
+    );
+}
+
+/// A replayed agent status is not a new event: the rebuilt pane's first
+/// sight of a settled turn restores the read mark instead of notifying, and
+/// the history keeps the single record the live view created.
+#[gpui_kit::test]
+fn replayed_agent_turn_does_not_recreate_its_history_record(cx: &mut TestAppContext) {
+    let _capture = crate::desktop_notification::capture_test_notifications();
+    let _ = take_notifications();
+    let (window, _root_daemon) = harness(cx);
+    let _ = take_notifications();
+    lyrel_ui_base::i18n::set_locale("en");
+    configure_notifications(cx, lyrel_core::core::config::NotifyMode::Always, 0);
+    let (before, mut before_daemon) = window
+        .update(cx, |_, window, cx| {
+            super::quiet_test_pane(39502, window, cx)
+        })
+        .unwrap();
+    let baseline = record_count(cx);
+
+    report_agent_state(
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Working,
+            0,
+            "sid-t395-replay",
+            None,
+        ),
+        &before,
+        cx,
+        &mut before_daemon,
+    );
+    poll_agent(&window, &before, cx);
+    report_agent_state(
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Done,
+            1,
+            "sid-t395-replay",
+            None,
+        ),
+        &before,
+        cx,
+        &mut before_daemon,
+    );
+    poll_agent(&window, &before, cx);
+    run_out_agent_settle(cx);
+    assert_eq!(
+        records_since(cx, baseline).len(),
+        1,
+        "the live view recorded the settled turn"
+    );
+    assert_eq!(
+        take_notifications().len(),
+        1,
+        "the live turn interrupted once"
+    );
+
+    // The same daemon pane, reattached the way a restored tab is: the replay
+    // is where this pane starts, not a result that just arrived.
+    let (after, mut after_daemon) = window
+        .update(cx, |_, window, cx| {
+            super::quiet_reattached_test_pane(39502, window, cx)
+        })
+        .unwrap();
+    report_agent_state(
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Done,
+            1,
+            "sid-t395-replay",
+            None,
+        ),
+        &after,
+        cx,
+        &mut after_daemon,
+    );
+    poll_agent(&window, &after, cx);
+    run_out_agent_settle(cx);
+    assert!(
+        take_notifications().is_empty(),
+        "the replay did not interrupt at all"
+    );
+    assert_eq!(
+        records_since(cx, baseline).len(),
+        1,
+        "no event recreation on replay"
+    );
+}
+
+/// Program-written notices enter the history through the same budget that
+/// bounds the desktop, and the rate-limited remainder is said once.
+#[gpui_kit::test]
+fn osc_notes_record_within_the_ingress_budget(cx: &mut TestAppContext) {
+    use lyrel_core::core::osc::NOTES_PER_WINDOW;
+    let _capture = crate::desktop_notification::capture_test_notifications();
+    let _ = take_notifications();
+    let (_window, mut daemon) = harness(cx);
+    let _ = take_notifications();
+    lyrel_ui_base::i18n::set_locale("en");
+    configure_notifications(cx, lyrel_core::core::config::NotifyMode::Always, 0);
+    let baseline = record_count(cx);
+
+    // One note per poll: the transport keeps only the newest few of a single
+    // burst, so a flood must arrive across polls for the rate budget — not
+    // the queue cap — to decide what is shown and what is dropped.
+    let mut delivered = Vec::new();
+    for index in 0..NOTES_PER_WINDOW + 2 {
+        osc_note(10_000 + index as u128, format!("t395-flood-{index}"))
+            .encode(&mut daemon)
+            .unwrap();
+        let want = (index + 1).min(NOTES_PER_WINDOW + 1);
+        for _ in 0..400 {
+            pump_foreground(cx);
+            delivered.extend(take_notifications());
+            if delivered.len() >= want {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+    // Let the note past the budget land; it must not add a second banner
+    // beyond the one note that says the rest were not shown.
+    for _ in 0..20 {
+        pump_foreground(cx);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    delivered.extend(take_notifications());
+    assert_eq!(
+        delivered.len(),
+        NOTES_PER_WINDOW + 1,
+        "the budget admitted its five and one note said the rest: {delivered:?}"
+    );
+    let recorded = records_since(cx, baseline);
+    assert_eq!(
+        recorded.len(),
+        NOTES_PER_WINDOW + 1,
+        "history intake keeps the same limits: {recorded:?}"
+    );
+    assert!(
+        recorded
+            .iter()
+            .take(NOTES_PER_WINDOW)
+            .all(|(severity, message)| *severity == Severity::Info
+                && message.starts_with("t395-flood-")),
+        "each admitted note is its own record: {recorded:?}"
+    );
+    assert!(
+        recorded[NOTES_PER_WINDOW].1.contains("weren't shown"),
+        "the dropped-notes note is recorded once too: {:?}",
+        recorded[NOTES_PER_WINDOW].1
+    );
+}
+
+/// A pane whose agent reports through lyrel's hooks gets its Waiting and
+/// Done notices from the hook path; the program's own OSC copy is their
+/// duplicate and must not enter the history either.
+#[gpui_kit::test]
+fn hooked_agent_program_notes_are_swallowed_before_the_history(cx: &mut TestAppContext) {
+    let _capture = crate::desktop_notification::capture_test_notifications();
+    let _ = take_notifications();
+    let (window, mut daemon) = harness(cx);
+    let _ = take_notifications();
+    lyrel_ui_base::i18n::set_locale("en");
+    configure_notifications(cx, lyrel_core::core::config::NotifyMode::Always, 0);
+    let baseline = record_count(cx);
+
+    lyrel_core::daemon::protocol::DaemonMsg::Agent(Some(
+        lyrel_core::core::cli_agent::CLIAgent::OhMyPi,
+    ))
+    .encode(&mut daemon)
+    .unwrap();
+    report_agent_state(
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Working,
+            0,
+            "sid-t395-hooks",
+            None,
+        ),
+        &window.update(cx, |_, _, cx| cx.entity()).unwrap(),
+        cx,
+        &mut daemon,
+    );
+    osc_note(11_000, "t395-hook-duplicate")
+        .encode(&mut daemon)
+        .unwrap();
+    for _ in 0..400 {
+        pump_foreground(cx);
+        if !take_notifications().is_empty() || record_count(cx) > baseline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    cx.executor()
+        .advance_clock(lyrel_core::core::osc::NOTE_WINDOW * 2);
+    pump_foreground(cx);
+    take_notifications();
+    assert_eq!(
+        record_count(cx),
+        baseline,
+        "the hook duplicate never lands in the history"
+    );
+}
+
+/// The hook/OSC duplicate suppression is the rich session itself, not the
+/// desktop timing gate: with desktop delivery hard-closed (`Never`), a hooked
+/// pane's program note is still swallowed, while the hook notice it
+/// duplicates still records — letting the OSC copy through the
+/// timing-closed moment would double the history entry.
+#[gpui_kit::test]
+fn hooked_agent_program_notes_stay_swallowed_when_desktop_timing_is_closed(
+    cx: &mut TestAppContext,
+) {
+    let _capture = crate::desktop_notification::capture_test_notifications();
+    let _ = take_notifications();
+    let (window, mut daemon) = harness(cx);
+    let _ = take_notifications();
+    lyrel_ui_base::i18n::set_locale("en");
+    configure_notifications(cx, lyrel_core::core::config::NotifyMode::Never, 0);
+    let baseline = record_count(cx);
+    let pane = window.update(cx, |_, _, cx| cx.entity()).unwrap();
+
+    lyrel_core::daemon::protocol::DaemonMsg::Agent(Some(
+        lyrel_core::core::cli_agent::CLIAgent::OhMyPi,
+    ))
+    .encode(&mut daemon)
+    .unwrap();
+    report_agent_state(
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Working,
+            0,
+            "sid-t395-hooks-closed",
+            None,
+        ),
+        &pane,
+        cx,
+        &mut daemon,
+    );
+    osc_note(11_001, "t395-hook-duplicate-closed")
+        .encode(&mut daemon)
+        .unwrap();
+    for _ in 0..400 {
+        pump_foreground(cx);
+        if !take_notifications().is_empty() || record_count(cx) > baseline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    cx.executor()
+        .advance_clock(lyrel_core::core::osc::NOTE_WINDOW * 2);
+    pump_foreground(cx);
+    take_notifications();
+    assert_eq!(
+        record_count(cx),
+        baseline,
+        "the hook duplicate stays out of the history even with the desktop gate closed"
+    );
+
+    // The hook notice itself is an eligible event: it records even while the
+    // timing mode holds its banner back. Poll with the timing gate closed,
+    // the way `poll_foreground` does under `Never`.
+    report_agent_state(
+        agent_state(
+            lyrel_core::core::cli_agent::AgentStatus::Waiting,
+            0,
+            "sid-t395-hooks-closed",
+            Some("Approve it, t395?"),
+        ),
+        &pane,
+        cx,
+        &mut daemon,
+    );
+    cx.update_window((*window).into(), |_, window, cx| {
+        pane.update(cx, |pane, cx| {
+            pane.poll_agent_status(false, window, cx);
+        })
+    })
+    .unwrap();
+    assert!(
+        take_notifications().is_empty(),
+        "the Never mode keeps its hard gate on the hook banner too"
+    );
+    let recorded = records_since(cx, baseline);
+    assert_eq!(
+        recorded.len(),
+        1,
+        "exactly one record — the hook notice, no OSC duplicate: {recorded:?}"
+    );
+    assert!(
+        recorded[0].1.contains("Approve it, t395?"),
+        "the single record is the hook notice: {:?}",
+        recorded[0].1
+    );
 }

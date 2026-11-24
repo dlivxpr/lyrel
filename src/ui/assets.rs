@@ -27,6 +27,7 @@ fn agent_icon(path: &str) -> Option<&'static [u8]> {
         "icons/terminal.svg" => include_bytes!("../../assets/icons/terminal.svg"),
         "icons/git-branch.svg" => include_bytes!("../../assets/icons/git-branch.svg"),
         "icons/pin.svg" => include_bytes!("../../assets/icons/pin.svg"),
+        "icons/park.svg" => include_bytes!("../../assets/icons/park.svg"),
         // Deliberately not `refresh.svg`: the panel header already carries a
         // refresh tile, and the same glyph meaning two different things one row
         // apart reads as a bug.
@@ -61,6 +62,7 @@ fn agent_icon(path: &str) -> Option<&'static [u8]> {
         "icons/refresh.svg" => include_bytes!("../../assets/icons/refresh.svg"),
         "icons/power.svg" => include_bytes!("../../assets/icons/power.svg"),
         "icons/coffee.svg" => include_bytes!("../../assets/icons/coffee.svg"),
+        "icons/coffee-filled.svg" => include_bytes!("../../assets/icons/coffee-filled.svg"),
         "icons/list-tree.svg" => include_bytes!("../../assets/icons/list-tree.svg"),
         "icons/list-flat.svg" => include_bytes!("../../assets/icons/list-flat.svg"),
         "icons/settings/about.svg" => include_bytes!("../../assets/icons/settings/about.svg"),
@@ -97,6 +99,9 @@ fn agent_icon(path: &str) -> Option<&'static [u8]> {
         "icons/agents/omp.svg" => include_bytes!("../../assets/icons/agents/omp.svg"),
         "icons/agents/kimi.png" => include_bytes!("../../assets/icons/agents/kimi.png"),
         "icons/agents/hermes.png" => include_bytes!("../../assets/icons/agents/hermes.png"),
+        "icons/agents/antigravity.svg" => {
+            include_bytes!("../../assets/icons/agents/antigravity.svg")
+        }
         // The GitHub tab's state glyphs: one shape per state, not one colour.
         "icons/github/issue-open.svg" => include_bytes!("../../assets/icons/github/issue-open.svg"),
         "icons/github/issue-closed.svg" => {

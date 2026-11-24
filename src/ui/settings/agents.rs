@@ -17,6 +17,7 @@ fn cli_agent(agent: HookAgent) -> crate::core::cli_agent::CLIAgent {
         HookAgent::OhMyPi => C::OhMyPi,
         HookAgent::Kimi => C::Kimi,
         HookAgent::Hermes => C::Hermes,
+        HookAgent::Antigravity => C::Antigravity,
     }
 }
 
@@ -543,6 +544,10 @@ fn integration_diagnostic(diagnostic: &crate::core::agent_hooks::HooksDiagnostic
             L10nKey::IntegrationHermesObserver,
             &[("home", &home.display().to_string())],
         ),
+        HooksDiagnostic::AntigravityRegistry { path } => t_fmt(
+            L10nKey::IntegrationAntigravityRegistry,
+            &[("path", &path.display().to_string())],
+        ),
         HooksDiagnostic::ScopeUnavailable { error } => {
             t_fmt(L10nKey::IntegrationScopeUnavailable, &[("error", error)])
         }
@@ -750,6 +755,31 @@ impl SettingsWindow {
             cx.notify();
             return;
         };
+
+        // Antigravity hook commands run `agent-hook antigravity` on the
+        // selected Host's server, so installing them on a peer that never
+        // advertised `antigravity-v1` would leave hooks its binary cannot
+        // consume. Refuse with the same upgrade path exact resume uses
+        // (`RemoteHost::session_operation`); removal stays allowed, since it
+        // only edits the registry and must remain possible after a downgrade.
+        if install
+            && agent == crate::core::agent_hooks::HookAgent::Antigravity
+            && !host_id.is_local()
+            && !crate::ui::desktop_lookups::HostLinks::peer_supports(
+                cx,
+                host_id,
+                crate::daemon::control::feature::ANTIGRAVITY,
+            )
+        {
+            if let Some(s) = self.settings.as_mut() {
+                s.agent_hooks_note = Some((
+                    agent,
+                    t(L10nKey::AppAgentHooksAntigravityUpdateServer).to_string(),
+                ));
+            }
+            cx.notify();
+            return;
+        }
 
         if let Some(s) = self.settings.as_mut() {
             s.agent_busy.insert(agent);

@@ -232,6 +232,7 @@ impl LyrelApp {
         cx: &mut Context<LyrelApp>,
     ) {
         cx.subscribe_in(view, window, |app, view, _: &ChildExited, window, cx| {
+            app.forget_exact_resume(view.entity_id());
             app.on_child_exited(view.clone(), window, cx);
         })
         .detach();
@@ -254,9 +255,17 @@ impl LyrelApp {
         cx.subscribe_in(
             view,
             window,
-            |app, _view, _: &lyrel_terminal::view::AgentSessionChanged, _window, cx| {
-                app.save_session(cx);
-                cx.notify();
+            |_app, view, _: &lyrel_terminal::view::AgentSessionChanged, window, cx| {
+                // The pane emits this from inside its own update. Saving
+                // session state reads every pane — this one included — and
+                // the exact-resume check reads it too, so hand both to the
+                // next effect cycle instead of re-entering the view.
+                let view = view.clone();
+                cx.defer_in(window, move |app, window, cx| {
+                    app.save_session(cx);
+                    app.note_agent_session_changed(&view, window, cx);
+                    cx.notify();
+                });
             },
         )
         .detach();
@@ -267,6 +276,10 @@ impl LyrelApp {
             window,
             |_app, _view, _: &lyrel_terminal::view::AgentStatusChanged, _window, cx| {
                 crate::ui::caffeine::CaffeineState::agents_changed(cx);
+                // The same transition reshapes the inbox's live Pending rows.
+                crate::ui::notification_history::note_pending_changed(cx);
+                // And the process-wide system badge.
+                crate::ui::system_badge::SystemBadgeState::refresh_deferred(cx);
             },
         )
         .detach();
@@ -275,6 +288,12 @@ impl LyrelApp {
             window,
             |app, _view, ev: &lyrel_terminal::view::AgentDetected, _window, cx| {
                 app.note_agent_detected(ev.0, cx);
+                // The identity change is the sidebar's avatar and label, and
+                // nothing else repaints for it: a detection-only agent has no
+                // session edge, and a program-status note can land before the
+                // probe that names the agent. Repaint so the row follows the
+                // pane the moment the agent does.
+                cx.notify();
             },
         )
         .detach();
@@ -324,6 +343,7 @@ impl LyrelApp {
         .detach();
         Self::watch_terminal_scm(view, cx);
         Self::watch_open_file_requests(view, window, cx);
+        Self::watch_open_web_requests(view, window, cx);
         let handle = view.read(cx).focus_handle.clone();
         Self::watch_pane_focus(&handle, view.entity_id(), window, cx);
     }
@@ -367,6 +387,10 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) {
         let reminder_changed = self.observe_program_attention(view, frames, window, cx);
+        // A blocked report arriving or resolving reshapes the inbox's live
+        // Pending rows even when no unread cursor moved (blocked → done keeps
+        // the count), so schedule the re-projection like an agent edge does.
+        crate::ui::notification_history::note_pending_changed(cx);
         let active = self.tabs.active_index();
         #[cfg(test)]
         let mut summary_changed = false;
@@ -380,6 +404,9 @@ impl LyrelApp {
                 summary_changed |= tab.refresh_program_summary(cx);
             }
             in_active_tab |= index == active;
+        }
+        if in_active_tab && self.tabs[active].is_parked_slot(&PaneSlot::Ready(view.clone()), cx) {
+            self.sync_parked_deck(window, cx);
         }
         // The bar presents the Context Pane's representative, which can sit
         // behind a tab-wide state another pane owns. Compare what it would
@@ -425,6 +452,31 @@ impl LyrelApp {
                 {
                     app.open_linked_file(&ev.path, ev.line, ev.column, ev.is_dir, window, cx);
                 }
+            },
+        )
+        .detach();
+    }
+
+    /// A loopback link clicked in a managed remote Workspace pane opens a
+    /// Side Panel page bound to that Workspace's Host (#392). The app builds
+    /// the durable Host binding and the browser verifies the forward before
+    /// anything loads.
+    fn watch_open_web_requests(
+        view: &Entity<TerminalView>,
+        window: &mut Window,
+        cx: &mut Context<LyrelApp>,
+    ) {
+        cx.subscribe_in(
+            view,
+            window,
+            |app, view, ev: &lyrel_ui_base::web_preview::OpenWebPageRequested, _window, cx| {
+                let workspace = view.read(cx).workspace().map(|ws| ws.workspace);
+                let Some(host) = workspace
+                    .and_then(|id| lyrel_ui_base::session::WorkspaceStore::remote_ref(cx, id))
+                else {
+                    return;
+                };
+                app.open_web_page(&ev.address, Some(host), cx);
             },
         )
         .detach();

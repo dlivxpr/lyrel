@@ -975,7 +975,7 @@ impl DaemonPane {
             ForegroundProbes {
                 group: Box::new(|| None),
                 remote: Box::new(|| None),
-                agent: Box::new(|| None),
+                agent: Box::new(|| facts::AgentProbe::Unavailable),
                 cwd: Box::new(|| None),
                 local_group: crate::daemon::procinfo::foreground_group_is_local,
             },
@@ -1192,7 +1192,17 @@ impl DaemonPane {
                             let observation =
                                 facts_reader.observe(observation, &prompt_foreground, before);
                             let mut st = state.lock().unwrap();
-                            let change = st.with_facts(|facts, emit| facts.apply_output(observation, emit));
+                            let PaneState {
+                                facts, subscriptions, graphics: graphics_state, ..
+                            } = &mut *st;
+                            let change = facts.apply_output(observation, &mut |msg| {
+                                if matches!(msg, DaemonMsg::ProgramNote(_)) {
+                                    let len = subscriptions::gated_len(&msg);
+                                    subscriptions.broadcast(msg, len, &gate, graphics_state);
+                                } else {
+                                    subscriptions.notify(msg, graphics_state);
+                                }
+                            });
                             graphics.set_local(st.facts.remote().is_none());
                             let pane = st.id;
                             let alive = st.alive;
@@ -1497,7 +1507,7 @@ impl DaemonPane {
         if !st.alive {
             return Err(format!("pane {} is not running", self.id));
         }
-        let change = st.with_facts(|facts, emit| facts.apply_events(vec![event], None, emit));
+        let change = st.with_facts(|facts, emit| facts.apply_events(vec![event], emit));
         drop(st);
         change.publish(self.id, true, self.shutting_down.load(Ordering::SeqCst));
         Ok(())
@@ -2350,7 +2360,7 @@ mod tests {
             ForegroundProbes {
                 group: Box::new(|| None),
                 remote: Box::new(|| None),
-                agent: Box::new(|| None),
+                agent: Box::new(|| facts::AgentProbe::Unavailable),
                 cwd: Box::new(|| None),
                 local_group: |_| Some(true),
             },
@@ -2435,7 +2445,7 @@ mod tests {
             ForegroundProbes {
                 group: Box::new(|| None),
                 remote: Box::new(|| None),
-                agent: Box::new(|| None),
+                agent: Box::new(|| facts::AgentProbe::Unavailable),
                 cwd: Box::new(|| None),
                 local_group: |_| Some(true),
             },
@@ -2525,7 +2535,7 @@ mod tests {
                     remote: Box::new(|| None),
                     agent: Box::new(move || {
                         counted.fetch_add(1, Ordering::SeqCst);
-                        None
+                        facts::AgentProbe::Unavailable
                     }),
                     cwd: Box::new(|| None),
                     local_group: |_| Some(true),

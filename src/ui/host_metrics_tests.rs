@@ -392,6 +392,18 @@ fn titlebar_metrics_track_the_context_host_and_click_opens_monitor(cx: &mut Test
         assert!(window.find("titlebar-metric-cpu-chart").visible());
         assert!(window.find("titlebar-metric-ram-chart").visible());
         assert!(window.find("titlebar-metric-gpu-chart").visible());
+        // The three metrics share the approved two-line capsule: readings on
+        // the upper line, short trends below, sitting right of the centered
+        // Park entry and left of the command group.
+        let capsule = window.find("titlebar-metrics").bounds();
+        assert!(
+            (capsule.size.width - px(224.)).abs() <= px(1.),
+            "the content-sized three-metric capsule is 224 px at the default scale"
+        );
+        assert!(window.find("titlebar-metric-readings").visible());
+        assert!(window.find("titlebar-metric-trends").visible());
+        assert!(window.find("titlebar-park").bounds().right() <= capsule.left());
+        assert!(window.find("titlebar-split-right").bounds().left() >= capsule.right());
     });
 
     // The former bottom-bar indicators are gone.
@@ -596,8 +608,10 @@ fn monitor_history_survives_being_offscreen(cx: &mut TestAppContext) {
     );
 }
 
+/// Microcharts disappear first, then the readings. Both platforms exercise
+/// the same stages at widths that account for their native controls.
 #[gpui_kit::test]
-fn narrow_windows_drop_charts_first_then_the_whole_strip(cx: &mut TestAppContext) {
+fn narrow_windows_drop_charts_then_hide_the_capsule(cx: &mut TestAppContext) {
     let server = HostServer::new();
     let (app, mut vcx, _pane_streams) = harness_with_tabs(cx, 1);
     vcx.update(|window, cx| {
@@ -612,92 +626,126 @@ fn narrow_windows_drop_charts_first_then_the_whole_strip(cx: &mut TestAppContext
     });
     wait_sample(&mut vcx, true);
 
-    for (width, charts, strip) in [
-        (1440., true, true),
-        (790., false, true),
-        (760., false, true),
-        (720., false, true),
-        (500., false, false),
-    ] {
-        vcx.simulate_resize(size(px(width), px(720.)));
-        settle(&mut vcx);
-        vcx.update(|window, _| {
-            assert_eq!(
-                window.try_find("titlebar-metrics").is_some(),
-                strip,
-                "width {width}: strip presence"
-            );
-            if strip {
-                assert_eq!(
-                    window.try_find("titlebar-metric-cpu-chart").is_some(),
-                    charts,
-                    "width {width}: charts are what narrow windows drop first"
-                );
-                assert!(
-                    window.find("titlebar-metric-cpu-value").visible(),
-                    "width {width}: readings survive the charts"
-                );
-                assert!(
-                    window.find("titlebar-metric-gpu-value").visible(),
-                    "width {width}: the GPU reading survives the charts like the others"
-                );
-                // The strip begins after the left command group and ends
-                // before the right one: no chart or tile may sit over a
-                // command tile at the widths the old fixed threshold let
-                // through.
-                let metrics = window.find("titlebar-metrics").bounds();
-                let left_group_end = window.find("titlebar-add").bounds();
-                let right_command = window.find("titlebar-split-right").bounds();
-                assert!(
-                    metrics.left() >= left_group_end.right(),
-                    "width {width}: the metrics strip covers the left command group"
-                );
-                assert!(
-                    metrics.left() - left_group_end.right() >= px(40.),
-                    "width {width}: the drag band shrank below the chrome budget"
-                );
-                assert!(
-                    metrics.right() <= right_command.left(),
-                    "width {width}: the metrics strip covers the right command group"
-                );
-            }
-            // The chrome around the strip never yields: native-adjacent
-            // controls and the drag area stay put at every width.
-            for id in [
-                "titlebar-split-right",
-                "titlebar-split-down",
-                "titlebar-right-panel",
-            ] {
-                assert!(window.find(id).visible(), "width {width}: {id}");
-            }
-        });
-    }
+    let rem = 16.;
+    use crate::ui::window_chrome::{
+        PARK_ENTRY_W, titlebar_native_controls_width, titlebar_required_width,
+    };
+    let controls = vcx.update(|window, _| titlebar_native_controls_width(window));
+    let full_w = titlebar_required_width(
+        rem,
+        false,
+        controls,
+        PARK_ENTRY_W,
+        capsule_strip_w(true, true, true, true, rem),
+    );
+    let no_charts_w = titlebar_required_width(
+        rem,
+        false,
+        controls,
+        PARK_ENTRY_W,
+        capsule_strip_w(true, true, true, false, rem),
+    );
 
-    // The budget is in rems: a larger interface loses the compact strip
+    // Wide: the full two-line capsule sits right of the icon-and-count entry.
+    vcx.simulate_resize(size(px(full_w + 40.), px(720.)));
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        let capsule = window.find("titlebar-metrics").bounds();
+        let entry = window.find("titlebar-park").bounds();
+        assert!(
+            (capsule.size.width - px(224.)).abs() <= px(1.),
+            "the content-sized three-metric capsule is 224 px at the default scale"
+        );
+        assert!(window.find("titlebar-metric-readings").visible());
+        assert!(window.find("titlebar-metric-trends").visible());
+        assert!(
+            (entry.size.width - px(56.)).abs() <= px(1.),
+            "the wide window uses the compact icon-and-count entry"
+        );
+        assert!(capsule.left() >= entry.right());
+        assert!(window.find("titlebar-split-right").bounds().left() >= capsule.right());
+        assert!(window.find("titlebar-add").bounds().right() <= entry.left());
+    });
+
+    // Microcharts no longer fit: the readings and the same Park entry survive.
+    vcx.simulate_resize(size(px((no_charts_w + full_w) / 2.), px(720.)));
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        let capsule = window.find("titlebar-metrics").bounds();
+        assert!(
+            (capsule.size.width - px(219.)).abs() <= px(1.),
+            "readings-only is the fallback the narrowing order buys first"
+        );
+        assert!(window.try_find("titlebar-metric-trends").is_none());
+        assert!(window.try_find("titlebar-metric-cpu-chart").is_none());
+        assert!(window.find("titlebar-metric-cpu-value").visible());
+        assert!(window.find("titlebar-metric-gpu-value").visible());
+        assert!(
+            (window.find("titlebar-park").bounds().size.width - px(56.)).abs() <= px(1.),
+            "losing the microcharts does not resize the Park entry"
+        );
+        assert!(capsule.left() >= window.find("titlebar-park").bounds().right());
+    });
+
+    // Narrowest: the capsule hides entirely, preserving Park and the controls.
+    vcx.simulate_resize(size(px(no_charts_w - 40.), px(720.)));
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        assert!(window.try_find("titlebar-metrics").is_none());
+        assert!(window.find("titlebar-park").visible());
+        assert!(
+            window.find("workbench-left-drag").bounds().size.width >= px(40.),
+            "the drag band survives at the narrowest stage"
+        );
+        for id in [
+            "titlebar-split-right",
+            "titlebar-split-down",
+            "titlebar-right-panel",
+        ] {
+            assert!(window.find(id).visible(), "{id}");
+        }
+    });
+
+    // The budget is in rems: a larger interface reaches the same stages
     // earlier than the default rem would at the same pixel width.
     app.update_in(&mut vcx, |_, _, cx| {
         cx.global_mut::<lyrel_ui_base::config::Config>()
             .ui_font_size = 20.;
         cx.notify();
     });
-    vcx.simulate_resize(size(px(730.), px(720.)));
+    let rem = 20.;
+    let scaled_compact = titlebar_required_width(
+        rem,
+        false,
+        controls,
+        PARK_ENTRY_W * (rem / 16.),
+        capsule_strip_w(true, true, true, false, rem),
+    );
+    let scaled_full = titlebar_required_width(
+        rem,
+        false,
+        controls,
+        PARK_ENTRY_W * (rem / 16.),
+        capsule_strip_w(true, true, true, true, rem),
+    );
+    vcx.simulate_resize(size(px((scaled_compact + scaled_full) / 2.), px(720.)));
     settle(&mut vcx);
     vcx.update(|window, _| {
         assert!(
             window.try_find("titlebar-metrics").is_some(),
-            "a 730px window still has room for compact readings at a 20px rem"
+            "a window just wider than the scaled compact need keeps readings"
         );
         assert!(
             window.try_find("titlebar-metric-cpu-chart").is_none(),
             "charts do not fit at this rem either"
         );
     });
-    vcx.simulate_resize(size(px(690.), px(720.)));
+    vcx.simulate_resize(size(px(scaled_compact - 30.), px(720.)));
     settle(&mut vcx);
     vcx.update(|window, _| {
         assert!(
             window.try_find("titlebar-metrics").is_none(),
-            "a 690px window at a 20px rem has no room for the strip"
+            "a window just narrower than the scaled compact need hides the capsule"
         );
     });
 }
@@ -753,22 +801,26 @@ fn host_samples_follow_workspace_and_recover_after_link_loss(cx: &mut TestAppCon
     assert!(app.read_with(&vcx, |app, cx| {
         app.tabs[app.tabs.active_index()].pip_slot(cx).is_none()
     }));
-    for (width, font) in [(1440., 16.), (760., 20.)] {
-        vcx.simulate_resize(size(px(width), px(720.)));
-        app.update_in(&mut vcx, |_, _, cx| {
-            cx.global_mut::<lyrel_ui_base::config::Config>()
-                .ui_font_size = font;
-            cx.notify();
-        });
-        settle(&mut vcx);
-        vcx.update(|window, _| {
-            assert!(window.find("titlebar-metric-cpu").visible());
-            assert!(window.find("titlebar-metric-ram").visible());
-            let metrics = window.find("titlebar-metrics").bounds();
-            assert!(metrics.right() <= window.viewport_size().width);
-            assert!(metrics.top() >= px(0.));
-        });
-    }
+    settle(&mut vcx);
+    vcx.simulate_resize(size(px(1440.), px(720.)));
+    settle(&mut vcx);
+    vcx.update(|window, _| {
+        assert!(window.find("titlebar-metric-cpu").visible());
+        assert!(window.find("titlebar-metric-ram").visible());
+        let metrics = window.find("titlebar-metrics").bounds();
+        assert!(metrics.right() <= window.viewport_size().width);
+        assert!(metrics.top() >= px(0.));
+    });
+    vcx.simulate_resize(size(px(760.), px(720.)));
+    app.update_in(&mut vcx, |_, _, cx| {
+        cx.global_mut::<lyrel_ui_base::config::Config>()
+            .ui_font_size = 20.;
+        cx.notify();
+    });
+    settle(&mut vcx);
+    vcx.update(|window, _| assert!(window.try_find("titlebar-metrics").is_none()));
+    vcx.simulate_resize(size(px(1440.), px(720.)));
+    wait_sample(&mut vcx, true);
 
     // A document workflow replaces, rather than duplicates, the terminal widgets.
     vcx.dispatch_action(EditorNewFile);
@@ -1017,26 +1069,46 @@ fn metrics_completion_uses_daemon_identity_without_replaying_old_link_errors(
     }
 }
 
-/// The 760–790px band that used to paint the chart over the left command
-/// group now buys compact readings. Keep the drag band and native controls.
+/// The capsule width hands the chrome budget: every enabled metric sums its
+/// own measured minimum column (RAM's unit-carrying reading is the widest),
+/// a charts capsule never narrows a column below the reviewed sparkline
+/// width, and the readings-only fallback stays below the full capsule for
+/// the same set.
 #[test]
-fn the_titlebar_budget_drops_charts_then_the_whole_strip() {
-    assert_eq!(titlebar_metrics_layout(1440., 16., 3, false), Some(true));
-    for width in [760., 775., 790.] {
-        assert_eq!(
-            titlebar_metrics_layout(width, 16., 3, false),
-            Some(false),
-            "width {width}: charts must give way before the command group"
-        );
-    }
-    assert_eq!(titlebar_metrics_layout(720., 16., 3, false), Some(false));
-    assert_eq!(titlebar_metrics_layout(500., 16., 3, false), None);
-
-    assert_eq!(titlebar_metrics_layout(730., 20., 3, false), Some(false));
-    assert_eq!(titlebar_metrics_layout(690., 20., 3, false), None);
-    assert_eq!(titlebar_metrics_layout(600., 16., 1, false), Some(true));
-    assert_eq!(titlebar_metrics_layout(760., 16., 1, false), Some(true));
-    assert_eq!(titlebar_metrics_layout(760., 16., 0, false), None);
+fn capsule_strip_w_sums_the_enabled_metric_minimums() {
+    // All three metrics: 20 padding + 57/78/57 columns + 12 gaps, plus the
+    // 0.75rem trailing gap; readings-only drops the sparkline minimum.
+    assert_eq!(capsule_strip_w(true, true, true, true, 16.), 236.);
+    assert_eq!(capsule_strip_w(true, true, true, false, 16.), 231.);
+    assert_eq!(capsule_strip_w(true, true, true, true, 20.), 295.);
+    // A lone RAM capsule is sized for its own reading (`RAM 888.8 GB`), not
+    // a third of the three-metric capsule — the clipping this contract
+    // guards against.
+    assert_eq!(capsule_strip_w(false, true, false, false, 16.), 110.);
+    assert_eq!(capsule_strip_w(false, true, false, true, 16.), 110.);
+    // CPU-only and GPU-only capsules fit `CPU 100%` / `GPU 100%`; charts
+    // widen those columns to the sparkline minimum.
+    assert_eq!(capsule_strip_w(true, false, false, false, 16.), 86.);
+    assert_eq!(capsule_strip_w(false, false, true, false, 16.), 87.);
+    assert_eq!(capsule_strip_w(true, false, false, true, 16.), 89.);
+    assert_eq!(capsule_strip_w(false, false, true, true, 16.), 89.);
+    // The fallback is always below the full capsule for the same set.
+    assert!(
+        capsule_strip_w(true, true, true, false, 16.)
+            < capsule_strip_w(true, true, true, true, 16.)
+    );
+    // Enabling RAM adds exactly its own column and one gap whichever other
+    // metrics are on — columns never redistribute between combinations.
+    assert_eq!(
+        capsule_strip_w(true, true, false, false, 16.)
+            - capsule_strip_w(true, false, false, false, 16.),
+        84.
+    );
+    assert_eq!(
+        capsule_strip_w(true, true, true, false, 16.)
+            - capsule_strip_w(true, false, true, false, 16.),
+        84.
+    );
 }
 
 #[test]

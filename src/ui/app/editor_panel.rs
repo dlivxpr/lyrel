@@ -488,7 +488,16 @@ impl LyrelApp {
     /// Keep explicit terminal commands on `focus_active`; only an overlay's
     /// return path restores the foreground document or the last docked shell.
     pub(crate) fn focus_previous_content(&self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.status_document_context(window, cx) {
+        self.focus_content(self.status_document_context(window, cx), window, cx);
+    }
+
+    pub(in crate::ui) fn focus_content(
+        &self,
+        document: Option<crate::ui::tab::OverlayTop>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match document {
             Some(crate::ui::tab::OverlayTop::Code) => {
                 let has_file = self
                     .tab_code()
@@ -517,6 +526,13 @@ impl LyrelApp {
                     .and_then(|tab| tab.github_detail.as_ref())
                 {
                     window.focus(&doc.focus_handle, cx);
+                }
+            }
+            Some(crate::ui::tab::OverlayTop::Browser) => {
+                if let Some(chrome) = self.browser_chrome.as_ref() {
+                    window.focus(&chrome.input.read(cx).focus_handle(cx), cx);
+                } else {
+                    self.focus_active(window, cx);
                 }
             }
             None => self.focus_active(window, cx),

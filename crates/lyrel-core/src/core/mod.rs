@@ -43,6 +43,7 @@ pub use lyrel_protocol::core::tab_view;
 pub use lyrel_protocol::core::term_modes;
 pub mod terminal_resize;
 pub mod threads;
+pub use lyrel_protocol::core::web;
 pub use lyrel_protocol::core::window_state;
 pub use lyrel_protocol::core::worktree;
 pub mod xtgettcap;

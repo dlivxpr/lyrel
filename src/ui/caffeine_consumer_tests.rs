@@ -176,14 +176,21 @@ fn menu_offers_three_modes_and_reflects_the_live_hold(cx: &mut TestAppContext) {
             "menu must offer {label:?}"
         );
     }
-    // The cup's own accessible name is also "Caffeine": the title appears
-    // alongside it, not instead of it.
+    // The cup's accessible name carries the mode and the actual state; the
+    // menu's title row keeps the plain title beside it (#401).
+    let cup_label =
+        vcx.update(|window, _| window.find("status-caffeine").label().map(str::to_owned));
+    assert_eq!(
+        cup_label.as_deref(),
+        Some("Caffeine, Off: Sleeps per system power settings"),
+        "Off exposes its mode and actual state in the accessible name"
+    );
     assert!(
         vcx.update(|window, _| {
             window
                 .find_all_by_label(t(L10nKey::StatusCaffeineTitle))
                 .len()
-                >= 2
+                >= 1
         }),
         "the menu title shows beside the cup's accessible name"
     );
@@ -668,4 +675,140 @@ fn quitting_the_desktop_releases_the_request(cx: &mut TestAppContext) {
     vcx.update(|_, cx| CaffeineState::agents_changed(cx));
     settle(&mut vcx);
     assert_eq!(caffeine_truth(&mut vcx), (CaffeineMode::Off, false, None));
+}
+
+#[test]
+fn cup_look_decides_the_four_presentations() {
+    use crate::ui::caffeine::{CupInk, cup_look};
+
+    // A live hold is the filled cup in the contrast-checked accent, whatever
+    // a stale release error still says: the request is genuinely held and the
+    // failure already shows in the menu footer and the accessible name.
+    assert_eq!(
+        cup_look(true, false),
+        ("icons/coffee-filled.svg", CupInk::AccentInk),
+        "the active hold fills the cup"
+    );
+    assert_eq!(
+        cup_look(true, true),
+        ("icons/coffee-filled.svg", CupInk::AccentInk),
+        "a still-live request is not painted as a failure"
+    );
+    // Off and automatic waiting keep the muted outline...
+    assert_eq!(
+        cup_look(false, false),
+        ("icons/coffee.svg", CupInk::Muted),
+        "Off and the wait keep the outline in the caption role"
+    );
+    // ...failure keeps the outline with the danger role.
+    assert_eq!(
+        cup_look(false, true),
+        ("icons/coffee.svg", CupInk::Danger),
+        "a failed request keeps the outline and takes the danger role"
+    );
+}
+
+#[gpui_kit::test]
+fn the_accessible_name_exposes_mode_and_actual_state_through_the_four_states(
+    cx: &mut TestAppContext,
+) {
+    set_locale("en");
+    let (app, mut vcx, mut streams) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| WindowRegistry::init(cx));
+    register(&app, &mut vcx);
+
+    let cup_name = |vcx: &mut VisualTestContext| -> Option<String> {
+        vcx.update(|window, _| window.find("status-caffeine").label().map(str::to_owned))
+    };
+
+    // Off: the mode and the actual state, not the mode alone.
+    assert_eq!(
+        cup_name(&mut vcx).as_deref(),
+        Some("Caffeine, Off: Sleeps per system power settings")
+    );
+
+    // Always On, held.
+    open_menu(&mut vcx);
+    click_label(&mut vcx, t(L10nKey::StatusCaffeineModeAlwaysOn));
+    assert_eq!(
+        caffeine_truth(&mut vcx),
+        (CaffeineMode::AlwaysOn, true, None)
+    );
+    assert_eq!(
+        cup_name(&mut vcx).as_deref(),
+        Some("Caffeine, Always On: Keeping this computer awake")
+    );
+
+    // Automatic mode, waiting on an agent.
+    open_menu(&mut vcx);
+    click_label(&mut vcx, t(L10nKey::StatusCaffeineModeWhileAgentsWork));
+    assert_eq!(
+        cup_name(&mut vcx).as_deref(),
+        Some("Caffeine, While Agents Work: Waiting for an agent to start working")
+    );
+
+    // Automatic mode, actually holding while an agent works.
+    report(&app, &mut vcx, &mut streams[0], AgentStatus::Working);
+    settle(&mut vcx);
+    assert_eq!(
+        caffeine_truth(&mut vcx),
+        (CaffeineMode::WhileAgentsWork, true, None)
+    );
+    assert_eq!(
+        cup_name(&mut vcx).as_deref(),
+        Some("Caffeine, While Agents Work: Keeping this computer awake"),
+        "the actual hold replaces the wait in the accessible name"
+    );
+    report(&app, &mut vcx, &mut streams[0], AgentStatus::Done);
+    settle(&mut vcx);
+
+    // Failure: the accessible name carries the explanation itself.
+    crate::ui::caffeine::force_failure_for_test(true);
+    open_menu(&mut vcx);
+    click_label(&mut vcx, t(L10nKey::StatusCaffeineModeAlwaysOn));
+    assert!(caffeine_truth(&mut vcx).2.is_some());
+    assert_eq!(
+        cup_name(&mut vcx).as_deref(),
+        Some("Caffeine, Always On: Couldn't keep the computer awake: injected power-API failure"),
+        "the failure's explanation is part of the accessible name"
+    );
+    open_menu(&mut vcx);
+    click_label(&mut vcx, t(L10nKey::StatusCaffeineModeOff));
+    settle(&mut vcx);
+    crate::ui::caffeine::force_failure_for_test(false);
+    assert_eq!(
+        cup_name(&mut vcx).as_deref(),
+        Some("Caffeine, Off: Sleeps per system power settings"),
+        "recovery restores the plain Off name"
+    );
+}
+
+#[gpui_kit::test]
+fn the_installed_theme_carries_the_contrast_checked_accent_ink(cx: &mut TestAppContext) {
+    set_locale("en");
+    let (_app, mut vcx, _stream) = harness_with_tabs(cx, 1);
+    vcx.update(|_, cx| WindowRegistry::init(cx));
+    settle(&mut vcx);
+
+    // The role `render_caffeine` paints a live hold with is installed with
+    // the preset, cleared to the text floor on the surfaces the status bar
+    // can sit on — the same guarantee the theme-token tests pin for every
+    // builtin theme.
+    let (installed, background) = vcx.update(|_, cx| {
+        let installed = cx.global::<lyrel_ui_base::presets::ActiveAccentInk>().0;
+        let theme = lyrel_ui_base::presets::by_id(cx, lyrel_ui_base::presets::DEFAULT_ID);
+        (installed, theme.neutrals().background)
+    });
+    let expected = lyrel_ui_base::presets::builtins()
+        .into_iter()
+        .find(|t| t.id == lyrel_ui_base::presets::DEFAULT_ID)
+        .unwrap()
+        .neutrals()
+        .accent_ink;
+    assert_eq!(installed, expected, "the live theme carries the token role");
+    assert!(
+        lyrel_ui_base::presets::contrast(installed, background) >= 4.5 - 0.01,
+        "the installed accent ink clears the text floor on the window: {:.2}:1",
+        lyrel_ui_base::presets::contrast(installed, background),
+    );
 }

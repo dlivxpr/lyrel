@@ -91,7 +91,7 @@ fn choose_shell(
         })
 }
 
-fn apply_shell_integration(
+fn apply_shell_integration_args(
     cmd: &mut CommandBuilder,
     resolved_program: &str,
     integration: &shell_integration::Injection,
@@ -100,9 +100,6 @@ fn apply_shell_integration(
         *cmd = CommandBuilder::new(resolved_program);
     }
     cmd.args(&integration.args);
-    for (k, v) in &integration.env {
-        cmd.env(k, v);
-    }
 }
 
 pub(super) struct SpawnConfig {
@@ -243,11 +240,18 @@ fn build_shell_command(
         has_custom_args(configured.as_ref()),
     );
     if let Some(integration) = &integration {
-        apply_shell_integration(&mut cmd, &resolved_program, integration);
+        apply_shell_integration_args(&mut cmd, &resolved_program, integration);
     }
     let integration_dir = integration.as_ref().and_then(|i| i.dir.clone());
     let launched = launched_shell_program(&cmd, &resolved_program);
-    apply_common_command_setup(&mut cmd, initial_cwd, pane, workspace, &launched);
+    apply_common_command_setup(
+        &mut cmd,
+        initial_cwd,
+        pane,
+        workspace,
+        &launched,
+        integration.as_ref(),
+    );
     if passive_cmd_prompt {
         let prompt = cmd
             .get_env("PROMPT")
@@ -602,6 +606,7 @@ fn apply_common_command_setup(
     pane: u64,
     workspace: Option<&str>,
     shell: &str,
+    integration: Option<&shell_integration::Injection>,
 ) {
     if let Some(dir) = initial_cwd {
         cmd.cwd(dir);
@@ -647,6 +652,15 @@ fn apply_common_command_setup(
     #[cfg(windows)]
     for (k, v) in crate::daemon::windows_env::refreshed_pane_environment(&extra_env) {
         cmd.env(k, v);
+    }
+
+    // Refreshing the Windows environment also copies inherited variables.
+    // Apply the shell bootstrap after it so a parent pane's integration
+    // guard cannot disable this new pane's cwd and prompt reporting.
+    if let Some(integration) = integration {
+        for (key, value) in &integration.env {
+            cmd.env(key, value);
+        }
     }
 
     let dark = crate::core::machine::appearance().dark;
@@ -697,7 +711,7 @@ mod tests {
     fn the_appimage_runtimes_argv0_does_not_reach_the_pane() {
         let mut cmd = CommandBuilder::new("/bin/sh");
         cmd.env("ARGV0", "./lyrel-26.9.5-linux-x86_64.AppImage");
-        apply_common_command_setup(&mut cmd, &None, 1, None, "sh");
+        apply_common_command_setup(&mut cmd, &None, 1, None, "sh", None);
         assert_eq!(cmd.get_env("ARGV0"), None);
     }
 
@@ -732,7 +746,7 @@ mod tests {
         // directory has to win over it.
         let inherited = cmd.get_env("PWD").map(std::ffi::OsStr::to_owned);
         let dir = Some(std::path::PathBuf::from("/tmp"));
-        apply_common_command_setup(&mut cmd, &dir, 1, None, "sh");
+        apply_common_command_setup(&mut cmd, &dir, 1, None, "sh", None);
         assert_ne!(cmd.get_env("PWD").map(std::ffi::OsStr::to_owned), inherited);
         assert_eq!(
             cmd.get_env("PWD"),
@@ -924,7 +938,7 @@ mod tests {
             dir: None,
         };
 
-        apply_shell_integration(&mut cmd, "/bin/fish", &injection);
+        apply_shell_integration_args(&mut cmd, "/bin/fish", &injection);
 
         assert!(!cmd.is_default_prog(), "argv can now be appended safely");
         let argv: Vec<_> = cmd
@@ -947,7 +961,8 @@ mod tests {
             dir: None,
         };
 
-        apply_shell_integration(&mut cmd, "/bin/zsh", &injection);
+        apply_shell_integration_args(&mut cmd, "/bin/zsh", &injection);
+        apply_common_command_setup(&mut cmd, &None, 1, None, "/bin/zsh", Some(&injection));
 
         assert!(
             cmd.is_default_prog(),

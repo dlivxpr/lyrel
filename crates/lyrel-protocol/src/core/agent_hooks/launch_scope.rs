@@ -220,6 +220,26 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
                 "--query-file",
             ]
             .contains(&key);
+        // Valued options agree with the exact-resume adapter
+        // (`host/session_operations/antigravity.rs`): a configured launch the
+        // adapter can replay must not read as ambiguous here. `--add-dir` is
+        // valued through the shared `values` list above.
+        let antigravity_value = agent == HookAgent::Antigravity
+            && [
+                "--prompt-interactive",
+                "-i",
+                "--effort",
+                "--mode",
+                "--input-format",
+                "--json-schema",
+                "--output-format",
+                "--print-timeout",
+                "--project",
+                "--log-file",
+                "--settings",
+                "--conversation",
+            ]
+            .contains(&key);
         let takes_value = if agent == HookAgent::Pi {
             crate::core::cli_agent::PI_VALUE_OPTIONS.contains(&key)
                 || matches!(
@@ -234,7 +254,10 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
                         | "-r"
                 )
         } else {
-            values.contains(&key) || hermes_value || (agent == HookAgent::OpenCode && key == "-s")
+            values.contains(&key)
+                || hermes_value
+                || antigravity_value
+                || (agent == HookAgent::OpenCode && key == "-s")
         };
         if takes_value {
             let value = if let Some(value) = inline {
@@ -266,6 +289,18 @@ fn parse_arguments(agent: HookAgent, args: &[String]) -> io::Result<ConfiguredSc
         } else if !switches.contains(&key)
             && !(agent == HookAgent::Pi && crate::core::cli_agent::PI_SWITCHES.contains(&key))
             && !(agent == HookAgent::OpenCode && key == "--auto")
+            && !(agent == HookAgent::Antigravity
+                && [
+                    "--dangerously-skip-permissions",
+                    "--disable-slash-commands",
+                    "--new-project",
+                    "--print",
+                    "-p",
+                    "--remote-agent",
+                    "--remote-control",
+                    "--sandbox",
+                ]
+                .contains(&key))
             && !(agent == HookAgent::Hermes
                 && [
                     "--verbose",

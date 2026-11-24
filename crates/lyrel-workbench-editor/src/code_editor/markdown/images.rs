@@ -1367,8 +1367,12 @@ fn open_preview_dialog(
         drag: None,
     });
     let dialog_preview = preview.clone();
+    // The window's native browser surface gives way to the dialog; the guard
+    // is released from the dialog's own close callback (#403).
+    let cover = lyrel_ui_base::native_surface::cover(window, cx);
     window.open_dialog(cx, move |dialog, window, cx| {
         let dialog_w = dialog_preview.read(cx).dialog_width(window);
+        let close_cover = cover.clone();
         dialog
             .title(title.clone())
             .centered()
@@ -1377,6 +1381,7 @@ fn open_preview_dialog(
             .on_close({
                 let focus = focus.clone();
                 move |_, window, cx| {
+                    close_cover.release(cx);
                     if let Some(focus) = &focus {
                         focus.focus(window, cx);
                     }

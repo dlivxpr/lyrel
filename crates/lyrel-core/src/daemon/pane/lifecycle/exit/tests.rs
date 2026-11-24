@@ -84,7 +84,7 @@ fn reader_eof_with_subscriber_sends_exited_not_on_dead() {
         ForegroundProbes {
             group: Box::new(|| None),
             remote: Box::new(|| None),
-            agent: Box::new(|| None),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Unavailable),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },
@@ -193,7 +193,7 @@ fn closing_conpty_waits_for_delayed_reader_output_before_exit() {
         ForegroundProbes {
             group: Box::new(|| None),
             remote: Box::new(|| None),
-            agent: Box::new(|| None),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Unavailable),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },
@@ -295,7 +295,7 @@ fn a_pty_that_never_reaches_eof_still_reports_the_exit() {
         ForegroundProbes {
             group: Box::new(|| None),
             remote: Box::new(|| None),
-            agent: Box::new(|| None),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Unavailable),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },
@@ -336,7 +336,7 @@ fn the_exit_monitor_defers_to_the_reader_that_saw_eof() {
         ForegroundProbes {
             group: Box::new(|| None),
             remote: Box::new(|| None),
-            agent: Box::new(|| None),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Unavailable),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },
@@ -405,7 +405,7 @@ fn reader_drains_late_text_without_reviving_graphics_after_exit_report() {
         ForegroundProbes {
             group: Box::new(|| None),
             remote: Box::new(|| None),
-            agent: Box::new(|| None),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Unavailable),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },
@@ -463,7 +463,7 @@ fn reader_eof_without_subscriber_fires_on_dead() {
         ForegroundProbes {
             group: Box::new(|| None),
             remote: Box::new(|| None),
-            agent: Box::new(|| None),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Unavailable),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },
@@ -493,7 +493,7 @@ fn reader_eof_during_shutdown_is_silent() {
         ForegroundProbes {
             group: Box::new(|| None),
             remote: Box::new(|| None),
-            agent: Box::new(|| None),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Unavailable),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },

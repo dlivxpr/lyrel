@@ -3,11 +3,13 @@ pub mod app;
 pub mod assets;
 #[cfg(target_os = "windows")]
 pub mod backdrop;
+pub(crate) mod browser;
 pub(crate) mod caffeine;
 #[cfg(test)]
 mod caffeine_consumer_tests;
 #[cfg(any(test, feature = "native-markdown-tests"))]
 pub mod code_editor;
+pub mod content_diff;
 pub mod desktop_lookups;
 pub mod dialog;
 pub mod diff_list;
@@ -74,7 +76,11 @@ pub mod sftp_host;
 pub mod ssh_connect;
 pub mod ssh_prompt;
 pub(crate) mod status_bar;
+pub(crate) mod surface_coordinator;
 pub mod switcher;
+pub(crate) mod system_badge;
+#[cfg(test)]
+mod system_badge_tests;
 pub(crate) mod tab;
 pub mod tab_sidebar;
 pub mod tab_strip;

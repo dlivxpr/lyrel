@@ -50,6 +50,40 @@ pub fn build_diff_review_prompt(diff: &str, cwd: Option<&str>) -> Option<String>
     Some(prompt)
 }
 
+/// The prompt an explicit side-panel share sends to the agent pane that asked
+/// for the preview (#393): the user's own words plus the absolute path of the
+/// screenshot on that pane's Host. `feedback` may be empty when the screenshot
+/// alone is the message; both empty is not a share at all.
+pub fn build_preview_feedback_prompt(
+    feedback: &str,
+    screenshot: Option<&str>,
+    address: &str,
+) -> Option<String> {
+    let feedback = feedback.trim();
+    let screenshot = screenshot.map(str::trim).filter(|path| !path.is_empty());
+    if feedback.is_empty() && screenshot.is_none() {
+        return None;
+    }
+    let mut prompt = String::from(
+        "Here is feedback on the page preview you asked me to check. Please use it to fix the \
+         page.",
+    );
+    if !address.is_empty() {
+        prompt.push_str(&format!(" Preview: `{address}`."));
+    }
+    prompt.push_str("\n\n");
+    if feedback.is_empty() {
+        prompt.push_str("I did not write notes — the screenshot shows the problem.");
+    } else {
+        prompt.push_str("Feedback:\n");
+        prompt.push_str(&capped(feedback));
+    }
+    if let Some(path) = screenshot {
+        prompt.push_str(&format!("\n\nScreenshot (PNG): `{path}`"));
+    }
+    Some(prompt)
+}
+
 pub fn submit_bytes(prompt: &str) -> Vec<u8> {
     let mut bytes = crate::core::paste::bracket(prompt.as_bytes());
     bytes.push(b'\r');
@@ -84,6 +118,29 @@ mod tests {
         let p = build_selection_prompt(&big, None).unwrap();
         assert!(p.len() < big.len() + 500);
         assert!(p.contains("truncated by lyrel"));
+    }
+
+    #[test]
+    fn preview_feedback_names_the_page_and_the_screenshot() {
+        let p = build_preview_feedback_prompt(
+            "the button overlaps the title",
+            Some("/tmp/lyrel/previews/preview-7-1.png"),
+            "http://localhost:5173",
+        )
+        .expect("feedback builds");
+        assert!(p.contains("http://localhost:5173"));
+        assert!(p.contains("the button overlaps the title"));
+        assert!(p.contains("preview-7-1.png"));
+        assert_eq!(
+            build_preview_feedback_prompt("   ", None, "http://localhost:5173"),
+            None,
+            "an empty feedback with no screenshot is not a share"
+        );
+        let shot_only =
+            build_preview_feedback_prompt("", Some("/tmp/a.png"), "http://localhost:5173")
+                .expect("a screenshot alone is a share");
+        assert!(shot_only.contains("the screenshot shows the problem"));
+        assert!(shot_only.contains("/tmp/a.png"));
     }
 
     #[test]

@@ -8,7 +8,8 @@ use gpui_kit::component::{
     ActiveTheme as _, Disableable as _, Icon, Selectable as _, Sizable as _, TitleBar, h_flex,
 };
 use gpui_kit::{
-    AnyElement, App, Axis, ClickEvent, Pixels, Point, Window, img, point, prelude::*, px, rems,
+    AnyElement, App, Axis, ClickEvent, Pixels, Point, TestSupportExt as _, Window, img, point,
+    prelude::*, px, rems,
 };
 
 use lyrel_ui_base::actions::{
@@ -168,6 +169,24 @@ fn title_bar_drag(
     })
 }
 
+/// A title-bar row that is a window-move region unless a pane drag owns the
+/// pointer. Locked, it keeps its identity, its tiles and its drag band for
+/// layout — only the native caption area and the move gesture go away, and
+/// they come back the frame the drag ends.
+fn title_bar_row(
+    row: gpui_kit::Stateful<gpui_kit::Div>,
+    key: &'static str,
+    window_move_locked: bool,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    if window_move_locked {
+        row
+    } else {
+        title_bar_drag(row, key, window, cx)
+    }
+}
+
 struct WindowMoveArm {
     should_move: bool,
 }
@@ -256,6 +275,9 @@ pub(crate) fn window_controls_drawn(fullscreen: bool) -> bool {
 /// metrics strip are present. Narrow windows drop the strip, never this.
 const TITLEBAR_DRAG_MIN_WIDTH: f32 = 40.;
 
+/// Space between the resource capsule and the right command group, in rem.
+pub(super) const METRICS_GROUP_GAP_REM: f32 = 0.75;
+
 /// One command group's width: three `size_8` tiles plus its pad and gaps.
 /// Every part is rem-based, so the group follows `ui_font_size`; the
 /// metrics tiles do not.
@@ -271,37 +293,95 @@ fn titlebar_trailing_inset(fullscreen: bool) -> f32 {
     }
 }
 
-/// Width the title bar keeps for its leading inset, window mark, both
-/// command groups, native window controls and the drag band before the
-/// metrics strip gets a pixel. `host_metrics` reads this one number to
-/// choose the strip's full, compact and hidden states; `render` lays those
-/// same pieces out, so a chart cannot be chosen over a command group.
-pub(crate) fn titlebar_chrome_reserve(rem_size: f32, fullscreen: bool) -> f32 {
+/// Width required by the two command groups and the chosen optional content.
+/// With Park present, each side must fit within its own half of the bar.
+pub(super) fn titlebar_required_width(
+    rem_size: f32,
+    fullscreen: bool,
+    controls_width: f32,
+    park_width: f32,
+    capsule_width: f32,
+) -> f32 {
     let scale = rem_size / 16.;
-    let macos_fullscreen = cfg!(target_os = "macos") && fullscreen;
-    let lead = if macos_fullscreen {
-        // A fullscreen macOS window has no traffic lights; the row uses
-        // `pl_3` instead of their reserved lead.
+    let lead = if cfg!(target_os = "macos") && fullscreen {
         12. * scale
     } else {
         TITLE_BAR_LEAD
     };
-    let native = if window_controls_drawn(fullscreen) {
-        gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * 3.
+    let group = titlebar_group_width(rem_size);
+    let left = lead + WINDOW_MARK_SIZE * scale + 12. * scale + group + TITLEBAR_DRAG_MIN_WIDTH;
+    let right =
+        group + rem_size * titlebar_trailing_inset(fullscreen) + controls_width + capsule_width;
+    if park_width > 0. {
+        park_width + 2. * (left.max(right) + CENTER_SLOT_GAP * scale)
+    } else {
+        left + right
+    }
+}
+
+pub(super) fn titlebar_native_controls_width(window: &Window) -> f32 {
+    if !window_controls_drawn(window.is_fullscreen()) {
+        return 0.;
+    }
+    let controls = window.window_controls();
+    let count = 1 + u8::from(controls.minimize) + u8::from(controls.maximize);
+    gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * f32::from(count)
+}
+
+/// Width of the icon-and-count Park entry at the default 16px rem.
+pub(crate) const PARK_ENTRY_W: f32 = 56.;
+/// Breathing room the fit predicate keeps between the centered Park slot and
+/// whichever side approaches it.
+pub(crate) const CENTER_SLOT_GAP: f32 = 8.;
+
+/// Which version of the metrics capsule fits beside the centered Park entry
+/// and the fixed window controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TitlebarFit {
+    /// Readings and microcharts fit.
+    Full,
+    /// Only the readings fit.
+    NoCharts,
+    /// Even the compact capsule no longer fits: the top metrics hide.
+    HiddenMetrics,
+}
+
+impl TitlebarFit {
+    /// Whether the metrics capsule may paint its microcharts this frame.
+    pub(crate) fn capsule_charts(self) -> bool {
+        matches!(self, Self::Full)
+    }
+}
+
+/// The narrowing decision shared by paint and sampling. Microcharts go first,
+/// then the whole metrics capsule. Each capsule width includes its trailing gap.
+/// Both widths are zero when metrics are disabled or a filling document owns
+/// their space. The Park entry keeps its size wherever a terminal tab exists.
+pub(crate) fn titlebar_fit(
+    viewport_width: f32,
+    rem_size: f32,
+    fullscreen: bool,
+    controls_width: f32,
+    park_shown: bool,
+    capsule_full_w: f32,
+    capsule_compact_w: f32,
+) -> TitlebarFit {
+    let park_width = if park_shown {
+        PARK_ENTRY_W * (rem_size / 16.)
     } else {
         0.
     };
-    let group = titlebar_group_width(rem_size);
-    TITLEBAR_DRAG_MIN_WIDTH
-        + lead
-        + WINDOW_MARK_SIZE * scale
-        // Left row: `gap_2` before the group and `pr_1` after it.
-        + 12. * scale
-        + group
-        // Right strip: the group and its trailing inset.
-        + group
-        + rem_size * titlebar_trailing_inset(fullscreen)
-        + native
+    let fits = |capsule| {
+        viewport_width
+            >= titlebar_required_width(rem_size, fullscreen, controls_width, park_width, capsule)
+    };
+    if fits(capsule_full_w) {
+        TitlebarFit::Full
+    } else if fits(capsule_compact_w) {
+        TitlebarFit::NoCharts
+    } else {
+        TitlebarFit::HiddenMetrics
+    }
 }
 
 pub(crate) fn chrome_tile_variant(cx: &gpui_kit::App) -> ButtonCustomVariant {
@@ -373,9 +453,17 @@ pub(crate) enum ChromeCommand {
 pub(crate) struct WindowChrome {
     left: AnyElement,
     right: AnyElement,
-    /// The shared host-metrics strip (`element`, `width`) sitting left of the
-    /// button group; `None` where the window must not show it.
+    /// The shared host-metrics capsule (`element`, `width`) sitting left of
+    /// the button group; `None` where the window must not show it.
     metrics: Option<(AnyElement, f32)>,
+    /// The centered Park entry (`element`, `width`); `None` where there is
+    /// no terminal tab to park panes in.
+    park: Option<(AnyElement, f32)>,
+    /// Whether a pane drag owns the pointer. The title bar then stops being a
+    /// window-move region: the parking target hangs directly below its centre,
+    /// and a release or a press up there must not be swallowed by the native
+    /// caption hit test.
+    window_move_locked: bool,
 }
 
 impl WindowChrome {
@@ -384,7 +472,9 @@ impl WindowChrome {
         right_open: bool,
         can_split: bool,
         new_tab: impl IntoElement,
+        park: Option<(AnyElement, f32)>,
         metrics: Option<(AnyElement, f32)>,
+        window_move_locked: bool,
         cx: &App,
         on_command: impl Fn(ChromeCommand) -> F,
     ) -> Self
@@ -494,11 +584,14 @@ impl WindowChrome {
             left: left.into_any_element(),
             right: right.into_any_element(),
             metrics,
+            park,
+            window_move_locked,
         }
     }
 
     pub(crate) fn render(self, window: &mut Window, cx: &mut App) -> AnyElement {
         let macos_fullscreen = cfg!(target_os = "macos") && window.is_fullscreen();
+        let window_move_locked = self.window_move_locked;
         let left_row = h_flex()
             .id("workbench-left-drag")
             .w_full()
@@ -514,7 +607,15 @@ impl WindowChrome {
             .gap_2()
             .child(window_mark())
             .child(self.left);
-        let left = title_bar_drag(left_row, "workbench-left-drag", window, cx).into_any_element();
+        let left = title_bar_row(
+            left_row,
+            "workbench-left-drag",
+            window_move_locked,
+            window,
+            cx,
+        )
+        .test_support()
+        .into_any_element();
         let trailing_inset = titlebar_trailing_inset(macos_fullscreen);
         let metrics_width = self.metrics.as_ref().map_or(0., |(_, width)| *width);
         let strip = h_flex()
@@ -523,20 +624,11 @@ impl WindowChrome {
             .h_full()
             .justify_end()
             .pr(rems(trailing_inset))
+            .gap(rems(METRICS_GROUP_GAP_REM))
             .when_some(self.metrics, |strip, (metrics, _)| strip.child(metrics))
             .child(self.right);
         let controls_drawn = window_controls_drawn(window.is_fullscreen());
-        let native_width = if controls_drawn {
-            let controls = window.window_controls();
-            let count = 1 + u8::from(controls.minimize) + u8::from(controls.maximize);
-            gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * f32::from(count)
-        } else {
-            0.
-        };
-        // 三按钮组、指标条与外边距共用宽度预算；原生控件不随界面缩放。
-        // The group's tiles and spacing follow the rem; keeping the same
-        // arithmetic here and in `titlebar_chrome_reserve` is what stops a
-        // wide metrics strip from being chosen over the group.
+        let native_width = titlebar_native_controls_width(window);
         let rem_size = window.rem_size().as_f32();
         let right_width = titlebar_group_width(rem_size)
             + rem_size * trailing_inset
@@ -558,14 +650,75 @@ impl WindowChrome {
                 .flex_none()
                 .w_full()
                 .child(strip);
-            title_bar_drag(row, "workbench-right-drag", window, cx).into_any_element()
+            title_bar_row(row, "workbench-right-drag", window_move_locked, window, cx)
+                .into_any_element()
+        };
+        let right = gpui_kit::div().flex_none().w(px(right_width)).child(right);
+        let right = if self.park.is_some() {
+            // The centered Park entry leaves this side's flex reach blank
+            // between the slot and the strip; the band is exactly that empty
+            // reach. It carries the same native caption and move gesture as
+            // the left half's row, and it ends where the strip begins, so the
+            // capsule, the command tiles and the native controls keep their
+            // own hit targets and the strip's own drag handling.
+            let gap = title_bar_row(
+                h_flex()
+                    .id("workbench-right-gap-drag")
+                    .flex_1()
+                    .min_w_0()
+                    .h(rems(3.)),
+                "workbench-right-gap-drag",
+                window_move_locked,
+                window,
+                cx,
+            )
+            .test_support();
+            h_flex().flex_1().min_w_0().child(gap).child(right)
+        } else {
+            right
         };
         h_flex()
+            .relative()
             .flex_none()
             .h(rems(3.))
             .w_full()
             .child(gpui_kit::div().flex_1().min_w_0().child(left))
-            .child(gpui_kit::div().flex_none().w(px(right_width)).child(right))
+            .when_some(self.park, |bar, (park, park_width)| {
+                // The Park entry owns the geometric window centre: equal flex
+                // zones on both sides keep its slot centred no matter how
+                // wide either side's content runs, and the slot's own row
+                // keeps the empty reach around the entry draggable.
+                let row = gpui_kit::div()
+                    .id("workbench-center-drag")
+                    .flex_none()
+                    .w(px(park_width))
+                    // Same line as the rows either side: the entry must not
+                    // ride half a point above the tiles it stands between.
+                    .title_strip_row(px(TITLE_BAR_BORDER), cx.theme().transparent)
+                    .items_center()
+                    .justify_center()
+                    .child(park);
+                let center =
+                    title_bar_row(row, "workbench-center-drag", window_move_locked, window, cx);
+                bar.child(center)
+            })
+            .child(right)
+            // While a pane drag owns the pointer, one occluding plate covers
+            // the bar: `TitleBar`'s own caption hitbox and the rows' move
+            // gestures are then behind the front hitbox, so the native hit
+            // test reports no window-control area up here and no press can
+            // arm a window move. It is rebuilt away the frame the drag ends,
+            // which restores ordinary title-bar dragging.
+            .when(window_move_locked, |bar| {
+                bar.child(
+                    gpui_kit::div()
+                        .id("titlebar-drag-shield")
+                        .test_support()
+                        .absolute()
+                        .inset_0()
+                        .occlude(),
+                )
+            })
             .into_any_element()
     }
 }
@@ -641,6 +794,188 @@ mod gpui_tests {
     fn the_title_bar_lead_clears_the_traffic_lights() {
         let right = traffic_light_position().x + px(TRAFFIC_LIGHTS_W);
         assert!(right + px(TRAFFIC_LIGHT_INSET) <= px(crate::ui::window_chrome::TITLE_BAR_LEAD));
+    }
+
+    /// Microcharts disappear first, then the readings, while Park keeps its size.
+    #[test]
+    fn titlebar_fit_stages_narrowing_in_the_approved_order() {
+        use super::{PARK_ENTRY_W, TitlebarFit, titlebar_fit, titlebar_required_width};
+        // The capsule widths the product derives for all three metrics.
+        let capsule_full = crate::ui::host_metrics::capsule_strip_w(true, true, true, true, 16.);
+        let capsule_compact =
+            crate::ui::host_metrics::capsule_strip_w(true, true, true, false, 16.);
+        let rem = 16.;
+        let controls = if cfg!(target_os = "macos") {
+            0.
+        } else {
+            gpui_kit::component::TITLE_BAR_HEIGHT.as_f32() * 3.
+        };
+        let full_need = titlebar_required_width(rem, false, controls, PARK_ENTRY_W, capsule_full);
+        let compact_need =
+            titlebar_required_width(rem, false, controls, PARK_ENTRY_W, capsule_compact);
+        assert_eq!(
+            titlebar_fit(
+                full_need,
+                rem,
+                false,
+                controls,
+                true,
+                capsule_full,
+                capsule_compact
+            ),
+            TitlebarFit::Full
+        );
+        assert_eq!(
+            titlebar_fit(
+                full_need - 1.,
+                rem,
+                false,
+                controls,
+                true,
+                capsule_full,
+                capsule_compact
+            ),
+            TitlebarFit::NoCharts
+        );
+        assert_eq!(
+            titlebar_fit(
+                compact_need,
+                rem,
+                false,
+                controls,
+                true,
+                capsule_full,
+                capsule_compact
+            ),
+            TitlebarFit::NoCharts
+        );
+        assert_eq!(
+            titlebar_fit(
+                compact_need - 1.,
+                rem,
+                false,
+                controls,
+                true,
+                capsule_full,
+                capsule_compact
+            ),
+            TitlebarFit::HiddenMetrics
+        );
+        // No metrics reserve when the settings or document mode hides the capsule.
+        assert_eq!(
+            titlebar_fit(
+                titlebar_required_width(rem, false, controls, PARK_ENTRY_W, 0.),
+                rem,
+                false,
+                controls,
+                true,
+                0.,
+                0.
+            ),
+            TitlebarFit::Full
+        );
+        assert!(TitlebarFit::Full.capsule_charts());
+        assert!(!TitlebarFit::NoCharts.capsule_charts());
+    }
+
+    /// The Park entry sits at the geometric window midpoint whatever the
+    /// side panels do, and neither command group nor the capsule ever reach
+    /// over it. The drag band beside it never shrinks away, and the blank
+    /// reach right of the slot is covered by a native drag band of its own:
+    /// it abuts the slot exactly, ends exactly where the strip begins, and
+    /// spans the bar's height, so no dead region survives beside the entry.
+    /// (gpui keeps the window-control hitboxes crate-private, so the band's
+    /// caption and move gesture are locked on `title_bar_row`'s builder in
+    /// `window_drag_tests`; here the harness asserts the band's consumer
+    /// geometry.)
+    #[gpui_kit::test]
+    fn park_entry_sits_at_the_window_midpoint_and_clears_both_sides(cx: &mut TestAppContext) {
+        let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+        for (width, font_size) in [(1440., 16.), (900., 16.), (900., 20.)] {
+            app.update_in(&mut vcx, |_, _, cx| {
+                cx.global_mut::<lyrel_ui_base::config::Config>()
+                    .ui_font_size = font_size;
+                gpui_kit::component::Theme::update(cx, |theme| theme.font_size = px(font_size));
+                cx.notify();
+            });
+            vcx.simulate_resize(size(px(width), px(900.)));
+            settle(&mut vcx);
+            for (left_open, right_open) in [(true, true), (false, true), (false, false)] {
+                app.update_in(&mut vcx, |app, _, cx| {
+                    app.sidebar_collapsed = !left_open;
+                    app.right_panel_visible = right_open;
+                    cx.notify();
+                });
+                settle_panel_toggle(&mut vcx);
+                vcx.update(|window, _| {
+                    let entry = window.find("titlebar-park").bounds();
+                    let viewport = window.viewport_size();
+                    assert!(
+                        (f32::from(entry.center().x) - f32::from(viewport.width) / 2.).abs() <= 1.,
+                        "width {width} font {font_size} panels ({left_open}, {right_open}): \
+                         the Park entry owns the geometric window centre, got {entry:?}"
+                    );
+                    assert!(
+                        window.find("titlebar-add").bounds().right() <= entry.left(),
+                        "width {width}: the left command group cannot reach over the Park entry"
+                    );
+                    assert!(
+                        window.find("workbench-left-drag").bounds().size.width >= px(40.),
+                        "width {width}: the drag band survives next to the centered entry"
+                    );
+                    let right_group = window.find("titlebar-split-right").bounds();
+                    assert!(
+                        right_group.left() >= entry.right(),
+                        "width {width}: the right group clears Park"
+                    );
+                    if let Some(capsule) = window.try_find("titlebar-metrics") {
+                        let capsule = capsule.bounds();
+                        assert!(
+                            capsule.left() >= entry.right(),
+                            "width {width}: the capsule clears Park"
+                        );
+                        // The first button also sits behind the group's 0.125rem inset.
+                        let spacing = right_group.left() - capsule.right();
+                        assert!(
+                            (spacing.as_f32() - 0.875 * font_size).abs() <= 1.,
+                            "width {width} font {font_size}: the capsules keep a visible gap, got {spacing:?} to the first button"
+                        );
+                    }
+                    let gap = window.find("workbench-right-gap-drag").bounds();
+                    assert!(
+                        (f32::from(gap.left()) - f32::from(entry.right())).abs() <= 1.,
+                        "width {width}: the right gap band starts where the centered slot ends, \
+                         got {gap:?} beside entry {entry:?}"
+                    );
+                    let controls_left = window
+                        .try_find("titlebar-metrics")
+                        .map_or(right_group.left(), |capsule| capsule.bounds().left());
+                    let blank_midpoint = (entry.right() + controls_left) / 2.;
+                    assert!(
+                        blank_midpoint < gap.right() && gap.right() <= controls_left,
+                        "width {width}: the right gap band covers the middle of the blank area \
+                         without reaching into the controls, got {gap:?} before {controls_left:?}"
+                    );
+                    assert!(
+                        gap.size.width > px(0.),
+                        "width {width}: the fit predicate keeps the center slot's breathing room"
+                    );
+                    assert_eq!(
+                        gap.size.height,
+                        window.find("workbench-left-drag").bounds().size.height,
+                        "width {width}: the right gap band spans the bar like the left row"
+                    );
+                    for id in [
+                        "titlebar-left-panel",
+                        "titlebar-search",
+                        "titlebar-split-right",
+                        "titlebar-right-panel",
+                    ] {
+                        assert!(window.find(id).visible(), "width {width}: {id}");
+                    }
+                });
+            }
+        }
     }
 
     fn settle(vcx: &mut VisualTestContext) {

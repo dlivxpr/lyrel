@@ -308,6 +308,18 @@ enum FocusHistoryOutcome {
     Unconfirmed,
 }
 
+/// A launched exact resume whose native conversation identity has not been
+/// observed yet. The observer hook reports `conversationId` after the TUI
+/// starts; if it reports a different id, upstream opened another conversation
+/// and the resume was not exact (#385). Only Antigravity has an authoritative
+/// post-launch conversation identity, so only it records an expectation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ExactResumeExpectation {
+    pub(crate) pane: gpui_kit::EntityId,
+    pub(crate) agent: CLIAgent,
+    pub(crate) session_id: String,
+}
+
 /// How an open pane's same-host agent/native ID relates to a saved session
 /// row, or `None` when the pane is not a same-ID candidate at all.
 ///
@@ -330,6 +342,15 @@ fn pane_open_session_match(
     let state = view.agent_session()?;
     if state.session_id.as_deref() != Some(request.session_id.as_str()) {
         return None;
+    }
+    if request.agent == CLIAgent::Antigravity {
+        // `conversationId` is the UUID the CLI itself assigns inside the one
+        // user-level Antigravity CLI store. A pane on the same Host reporting
+        // that exact id is the same conversation; the observer hook's
+        // `transcriptPath` and the index scan's derived brain path need not be
+        // byte-identical for the focus decision, and focusing never starts a
+        // second writer (#385).
+        return Some(OpenSessionMatch::Same);
     }
     // The pane's host names the path semantics its session files use; a
     // remote pane's `/tmp/x` must not be compared as this client's path.
@@ -462,6 +483,16 @@ impl LyrelApp {
             fork,
         } = request.clone();
         use lyrel_core::host::session_operations::{SessionOperation, SessionOperationKind};
+        if fork && agent.fork_label().is_none() {
+            window.notify_app(
+                t_fmt(
+                    L10nKey::AppForkIndependentUnavailable,
+                    &[("name", agent.display_name())],
+                ),
+                cx,
+            );
+            return;
+        }
         let Some(cwd) = cwd else {
             window.notify_app(lyrel_ui_base::i18n::t(L10nKey::AppPaneNoKnownDirectory), cx);
             return;
@@ -538,6 +569,91 @@ impl LyrelApp {
             SessionPlacement::History
         };
         self.prepare_session_launch(host, request, placement, window, cx);
+    }
+
+    /// Record that this pane's launched exact resume must report its target
+    /// conversation. The observer hook's `conversationId` is authoritative
+    /// (#384); when it names another id, upstream did not open the requested
+    /// conversation and the workbench says so instead of pretending success.
+    /// Other adapters have no post-launch conversation identity to compare,
+    /// so they record nothing.
+    pub(crate) fn expect_exact_resume(
+        &mut self,
+        view: &gpui_kit::Entity<lyrel_terminal::view::TerminalView>,
+        prepared: &lyrel_core::host::session_operations::PreparedSession,
+    ) {
+        if prepared.agent != CLIAgent::Antigravity || prepared.created {
+            return;
+        }
+        let Some(target) = prepared.target_id.as_deref() else {
+            return;
+        };
+        let pane = view.entity_id();
+        self.exact_resumes.retain(|entry| entry.pane != pane);
+        self.exact_resumes.push(ExactResumeExpectation {
+            pane,
+            agent: prepared.agent,
+            session_id: target.to_string(),
+        });
+    }
+
+    /// A closed pane can never report the resume it was started for.
+    pub(crate) fn forget_exact_resume(&mut self, pane: gpui_kit::EntityId) {
+        self.exact_resumes.retain(|entry| entry.pane != pane);
+    }
+
+    /// Compare the pane's now-reported conversation with the exact resume it
+    /// was started for. A different id is a failed exact resume: the upstream
+    /// CLI ignored or replaced the requested selector. The new conversation is
+    /// left alone; only the outcome is reported.
+    pub(crate) fn note_agent_session_changed(
+        &mut self,
+        view: &gpui_kit::Entity<lyrel_terminal::view::TerminalView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let pane = view.entity_id();
+        let Some(index) = self
+            .exact_resumes
+            .iter()
+            .position(|entry| entry.pane == pane)
+        else {
+            return;
+        };
+        let (agent, expected) = {
+            let entry = &self.exact_resumes[index];
+            (entry.agent, entry.session_id.clone())
+        };
+        let (live_agent, live_id) = {
+            let view = view.read(cx);
+            (
+                view.agent(),
+                view.agent_session().and_then(|state| state.session_id),
+            )
+        };
+        // The pane has not reported an agent identity yet; keep waiting for
+        // the hook instead of guessing from the launch line.
+        if live_agent.is_none() && live_id.is_none() {
+            return;
+        }
+        self.exact_resumes.remove(index);
+        if live_agent != Some(agent) {
+            return;
+        }
+        let Some(actual) = live_id else {
+            return;
+        };
+        if actual == expected {
+            return;
+        }
+        window.notify_app(
+            crate::ui::notification_history::Notification::error(t_fmt(
+                L10nKey::AppSessionResumeOpenedDifferent,
+                &[("expected", expected.as_str()), ("actual", actual.as_str())],
+            ))
+            .autohide(false),
+            cx,
+        );
     }
 
     pub(crate) fn open_prepared_session(
@@ -726,6 +842,7 @@ impl LyrelApp {
                     view.seed_session_title(title, cx);
                 }
             });
+            self.expect_exact_resume(&pane, &prepared);
             // The idle proof above ran on this same turn with no await
             // between it and the write; nothing could have started in the pane
             // since, so the line the command lands on is the empty prompt.
@@ -808,6 +925,9 @@ impl LyrelApp {
             );
             return;
         };
+        if let PaneSlot::Ready(view) = &slot {
+            self.expect_exact_resume(view, &prepared);
+        }
         match &slot {
             PaneSlot::Ready(view) => {
                 let view = view.downgrade();

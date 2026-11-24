@@ -1814,6 +1814,51 @@ fn workspaces_on(cx: &gpui_kit::App, host: HostId) -> Vec<(WorkspaceId, String)>
         .collect()
 }
 
+/// Reveals one agent preview in the window that already holds its workspace
+/// (#393). Deliberately no activation: a preview that runs while the agent
+/// works must not pull a window in front of the user. The workbench decides
+/// whether the remembered source pane is still sendable; this only maps the
+/// event's machine workspace to this client's view.
+fn deliver_preview_event(
+    cx: &mut gpui_kit::App,
+    host: HostId,
+    workspace: &str,
+    pane: u64,
+    url: String,
+    scratch: String,
+) {
+    let source_workspace: WorkspaceId = match workspace.parse() {
+        Ok(id) => id,
+        Err(_) => {
+            log::warn!("preview from {host:?} names an invalid workspace: {workspace}");
+            return;
+        }
+    };
+    let client_workspace = if host.is_local() {
+        // The local daemon's tree id is the id this machine's window claims.
+        WorkspaceStore::all(cx)
+            .views
+            .iter()
+            .find(|view| view.open && view.host.is_none() && view.id == source_workspace)
+            .map(|view| view.id)
+    } else {
+        client_id_for(cx, host, workspace)
+    };
+    let Some(client_workspace) = client_workspace else {
+        log::warn!("preview from {host:?} for workspace {workspace} has no open window");
+        return;
+    };
+    let Some(app) = crate::ui::windows::WindowRegistry::app_for(cx, client_workspace) else {
+        log::warn!("preview from {host:?} for workspace {workspace} has no live view");
+        return;
+    };
+    let _ = app.update(cx, |app, cx| {
+        if let Err(error) = app.reveal_agent_preview(source_workspace, pane, &url, &scratch, cx) {
+            log::warn!("preview from {host:?} for pane %{pane} was refused: {error}");
+        }
+    });
+}
+
 pub(crate) fn drain_events(cx: &mut gpui_kit::App) {
     let events = match EVENTS.lock() {
         Ok(mut queue) => std::mem::take(&mut *queue),
@@ -1863,6 +1908,14 @@ pub(crate) fn drain_events(cx: &mut gpui_kit::App) {
             }
             ControlEvent::GuiOpen { path, .. } if host.is_local() => {
                 crate::ui::windows::open_from_cli(cx, path.map(std::path::PathBuf::from));
+            }
+            ControlEvent::PreviewOpen {
+                workspace,
+                pane,
+                url,
+                scratch,
+            } => {
+                deliver_preview_event(cx, host, &workspace, pane, url, scratch);
             }
             other => log::debug!("unhandled control event from {host:?}: {other:?}"),
         }

@@ -15,12 +15,25 @@ use gpui_kit::{
     },
 };
 use lyrel_core::core::machine::TabId;
+use lyrel_ui_base::rounding::POPOVER_RADIUS;
 use std::{cell::RefCell, collections::HashMap, rc::Rc, sync::Arc, time::Instant};
 
 mod graphics;
 mod keyboard_region;
 use graphics::{Frame, FrameCard, FrameInput, Pose, Sprite, Tokens};
 use keyboard_region::KeyboardRegion;
+
+/// How much of the deck band the canvas reserves for the +N control when the
+/// fan overflows: the cards fan within the shrunken band and the button sits
+/// in the freed reach. Shared by the canvas prepaint and the button's own
+/// positioning so the two never disagree.
+const MORE_RESERVE_REM: f32 = 6.5;
+
+/// The +N control's design offset right of the band centre, and the slot the
+/// deck keeps for it at the right edge of a narrow column. The interaction
+/// band has to cover both so moving onto the control does not close the deck.
+const MORE_OFFSET: f32 = 188.;
+const MORE_SLOT: f32 = 72.;
 
 /// 当前 tab 中稳定的客户端卡片身份（如 PaneSlot.entity_id.as_u64()）。
 /// App 必须在本地/远端混合场景提供唯一 token；alive 只影响标签，不禁止查看已退出会话的 scrollback。
@@ -111,6 +124,12 @@ pub enum ParkedDeckEvent {
     /// 再解析真实 Host/daemon 身份；不得直接把 token 传给 daemon 或创建/重启不存在的会话。
     Restore(u64),
     Dismiss,
+    /// The fan, preview, overflow list, drop target or their closing aura is
+    /// on screen and must take precedence over the window's native surfaces.
+    CoverageChanged {
+        fan: bool,
+        drop_target: bool,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -162,6 +181,11 @@ pub struct ParkedDeck {
     drop_target: bool,
     overflow_open: bool,
     content_size: Size<Pixels>,
+    /// The deck overlay's window-space origin. The fan is painted in window
+    /// coordinates (it hangs from the title-bar Park entry, not from whichever
+    /// column the overlay covers), so its controls must subtract this to sit in
+    /// the deck's local layout.
+    content_origin: Point<Pixels>,
     scroll: UniformListScrollHandle,
     focus: FocusHandle,
     trigger: Option<FocusHandle>,
@@ -169,6 +193,9 @@ pub struct ParkedDeck {
     aura_from: f32,
     aura_to: f32,
     aura_start: Instant,
+    /// The last coverage state reported to the App, so a repaint only emits
+    /// when the fan, drop target or their closing aura crosses the line.
+    coverage: (bool, bool),
     frame: Rc<RefCell<Rc<Frame>>>,
     paint_error: Rc<RefCell<Option<String>>>,
 }
@@ -199,11 +226,13 @@ impl ParkedDeck {
             trigger: None,
             overflow_open: false,
             content_size: size(px(0.), px(0.)),
+            content_origin: point(px(0.), px(0.)),
             scroll: UniformListScrollHandle::new(),
             rem: 16.,
             aura_from: 0.,
             aura_to: 0.,
             aura_start: Instant::now(),
+            coverage: (false, false),
             frame: Rc::new(RefCell::new(Rc::default())),
             paint_error: Rc::new(RefCell::new(None)),
         }
@@ -217,6 +246,7 @@ impl ParkedDeck {
         self.tab = tab;
         self.cards.clear();
         self.clear_interaction();
+        self.refresh_coverage(Instant::now(), cx.reduce_motion(), cx);
         cx.notify();
     }
 
@@ -295,7 +325,7 @@ impl ParkedDeck {
         if selection_removed || self.cards.is_empty() {
             self.dismiss(window, cx);
         } else {
-            self.update_targets(cx.reduce_motion(), self.focus.is_focused(window));
+            self.update_targets(cx.reduce_motion(), self.focus.is_focused(window), cx);
             cx.notify();
         }
         // 关闭的 pane 不能在下一次绘制前通过旧 frame 被点击。
@@ -319,15 +349,76 @@ impl ParkedDeck {
             return;
         }
         self.drop_target = visible;
+        if visible {
+            // A pane drag owns the pointer from now on: the fan's hover road,
+            // preview and overflow list are not part of that gesture, and the
+            // target must be the only thing the deck offers until it ends.
+            self.pointer_fan = false;
+            self.hovered = None;
+            self.selected = None;
+            self.overflow_open = false;
+            self.keyboard = false;
+        }
+        self.refresh_coverage(Instant::now(), cx.reduce_motion(), cx);
         cx.notify();
     }
 
-    pub fn is_drop_target_visible(&self) -> bool {
-        self.drop_target
+    /// Record the overlay's window-space rectangle before it paints. The App
+    /// owns the column layout, so it can supply the size the fan has to budget
+    /// for on the first frame it opens — the deferred canvas measurement would
+    /// otherwise arrive a frame late and the fan would open empty (or with a
+    /// needless +N) before resettling. The canvas still reports its own bounds
+    /// each frame; this only removes the first-frame guess.
+    pub(crate) fn set_content_bounds(&mut self, bounds: Bounds<Pixels>, cx: &mut Context<Self>) {
+        if self.content_origin == bounds.origin && self.content_size == bounds.size {
+            return;
+        }
+        self.content_origin = bounds.origin;
+        self.content_size = bounds.size;
+        // Old frame geometry no longer describes where a click lands.
+        *self.frame.borrow_mut() = Rc::default();
+        cx.notify();
     }
 
+    /// Whether the deck currently paints anything that must win over a native
+    /// child surface: the fan, a preview, the overflow list, the warm drop
+    /// target, or the fan's closing aura.
+    pub(crate) fn covers_native_surface(&self, cx: &App) -> bool {
+        self.drop_target
+            || (!self.cards.is_empty()
+                && (self.pointer_fan
+                    || self.keyboard
+                    || self.selected.is_some()
+                    || self.overflow_open
+                    || self.aura(Instant::now(), cx.reduce_motion()) > 0.001))
+    }
+
+    fn refresh_coverage(&mut self, now: Instant, reduced: bool, cx: &mut Context<Self>) {
+        let fan = !self.cards.is_empty()
+            && (self.pointer_fan
+                || self.keyboard
+                || self.selected.is_some()
+                || self.overflow_open
+                || self.aura(now, reduced) > 0.001);
+        let drop_target = self.drop_target;
+        if self.coverage != (fan, drop_target) {
+            self.coverage = (fan, drop_target);
+            cx.emit(ParkedDeckEvent::CoverageChanged { fan, drop_target });
+        }
+    }
+
+    /// Whether `position` is inside the painted half-ellipse: releasing there
+    /// parks the dragged pane.
     pub fn drop_target_contains(&self, position: Point<Pixels>) -> bool {
         self.drop_target && self.frame.borrow().park_target_contains(position)
+    }
+
+    /// Whether `position` is inside the target's clipped envelope — the
+    /// rectangle around the painted dome. A release in its empty lower
+    /// corners cancels the gesture instead of turning into a split, so the
+    /// affordance never means two things at once.
+    pub fn drop_target_covers(&self, position: Point<Pixels>) -> bool {
+        self.drop_target && self.frame.borrow().park_target_bounds().contains(&position)
     }
 
     #[cfg(test)]
@@ -337,6 +428,40 @@ impl ParkedDeck {
     #[cfg(test)]
     pub fn selected_pane(&self) -> Option<u64> {
         self.selected
+    }
+
+    /// The number of cards in the current tab — the title-bar entry badge.
+    pub fn parked_count(&self) -> usize {
+        self.cards.len()
+    }
+
+    /// The title-bar entry is being hovered: open the fan without taking the
+    /// keyboard. Chrome owns the entry element; the deck owns the fan.
+    pub fn show_for_pointer(&mut self, cx: &mut Context<Self>) {
+        if self.drop_target || self.cards.is_empty() || self.pointer_fan {
+            return;
+        }
+        self.pointer_fan = true;
+        self.update_targets(cx.reduce_motion(), false, cx);
+        cx.notify();
+    }
+
+    /// The entry hover ended. The fan stays open while the pointer is on the
+    /// road from the entry into the cards (the deck's band reaches one
+    /// title-bar row above the content, where the entry lives); it closes
+    /// when the pointer left for anywhere else.
+    pub fn hide_for_pointer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.pointer_fan {
+            return;
+        }
+        // A pane drag owns the pointer and shows the drop target instead of
+        // the fan; the road from the entry into the cards is not open then.
+        if !self.drop_target && self.frame.borrow().deck_contains(window.mouse_position()) {
+            return;
+        }
+        self.pointer_fan = false;
+        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window), cx);
+        cx.notify();
     }
 
     /// trigger 省略时记录当前真实焦点；既不默认 focus 新建 view，也不从 render 抢焦点。
@@ -352,7 +477,7 @@ impl ParkedDeck {
         self.retain_trigger(trigger, window, cx);
         self.keyboard = true;
         self.focus.focus(window, cx);
-        self.update_targets(cx.reduce_motion(), true);
+        self.update_targets(cx.reduce_motion(), true, cx);
         cx.notify();
     }
 
@@ -370,7 +495,7 @@ impl ParkedDeck {
         self.active = Some(pane);
         self.selected = Some(pane);
         self.focus.focus(window, cx);
-        self.update_targets(cx.reduce_motion(), true);
+        self.update_targets(cx.reduce_motion(), true, cx);
         cx.notify();
     }
 
@@ -408,7 +533,7 @@ impl ParkedDeck {
                 trigger.focus(window, cx);
             }
         }
-        self.update_targets(cx.reduce_motion(), false);
+        self.update_targets(cx.reduce_motion(), false, cx);
         if was_open {
             cx.emit(ParkedDeckEvent::Dismiss);
         }
@@ -432,7 +557,7 @@ impl ParkedDeck {
         }
     }
 
-    fn update_targets(&mut self, reduced: bool, focused: bool) {
+    fn update_targets(&mut self, reduced: bool, focused: bool, cx: &mut Context<Self>) {
         let now = Instant::now();
         let keyboard = self.keyboard && focused;
         let fan = self.pointer_fan || keyboard || self.selected.is_some();
@@ -482,6 +607,7 @@ impl ParkedDeck {
                 };
             }
         }
+        self.refresh_coverage(now, reduced, cx);
     }
 
     fn navigate(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -501,7 +627,7 @@ impl ParkedDeck {
         self.hovered = None;
         self.keyboard = true;
         self.focus.focus(window, cx);
-        self.update_targets(cx.reduce_motion(), true);
+        self.update_targets(cx.reduce_motion(), true, cx);
         cx.notify();
     }
 
@@ -545,7 +671,7 @@ impl ParkedDeck {
             "tab" if self.selected.is_some() => {
                 // 翻面预览只有一个主操作，Tab 保持在它的 keyboard/AX owner；Escape 可退出。
                 self.keyboard = true;
-                self.update_targets(cx.reduce_motion(), true);
+                self.update_targets(cx.reduce_motion(), true, cx);
                 cx.notify();
             }
             _ => return,
@@ -558,8 +684,14 @@ impl ParkedDeck {
             return;
         }
         let frame = self.frame.borrow();
-        let hit = frame.hit(position).map(|hit| hit.0);
-        let fan = !self.cards.is_empty() && (frame.deck_contains(position) || hit.is_some());
+        let hit = if self.drop_target {
+            None
+        } else {
+            frame.hit(position).map(|hit| hit.0)
+        };
+        let fan = !self.drop_target
+            && !self.cards.is_empty()
+            && (frame.deck_contains(position) || hit.is_some());
         drop(frame);
         if self.hovered == hit && self.pointer_fan == fan {
             return;
@@ -567,7 +699,7 @@ impl ParkedDeck {
         self.hovered = hit;
         self.pointer_fan = fan;
         self.keyboard = false;
-        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window));
+        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window), cx);
         cx.notify();
     }
 
@@ -611,7 +743,7 @@ impl ParkedDeck {
         }
         self.hovered = None;
         self.pointer_fan = false;
-        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window));
+        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window), cx);
         cx.notify();
     }
 
@@ -624,7 +756,7 @@ impl ParkedDeck {
             .position(|card| Some(card.model.pane) == self.active)
             .unwrap_or(0);
         self.scroll.scroll_to_item(ix, ScrollStrategy::Top);
-        self.update_targets(cx.reduce_motion(), true);
+        self.update_targets(cx.reduce_motion(), true, cx);
         cx.notify();
     }
 
@@ -693,7 +825,7 @@ impl ParkedDeck {
             .text_color(cx.theme().foreground)
             .border_1()
             .border_color(cx.theme().border)
-            .rounded_lg()
+            .rounded(POPOVER_RADIUS)
             .overflow_hidden()
             .track_focus(&self.focus)
             .role(Role::Group)
@@ -819,27 +951,83 @@ impl Render for ParkedDeck {
                 .size_full()
                 .into_any_element();
         }
+        let now = Instant::now();
+        let reduced = cx.reduce_motion();
+        // At rest the deck paints nothing: the title-bar entry is the Park
+        // affordance now. The fan renders only while it is open — the pointer
+        // is on the entry or the cards, the keyboard owns it, a preview or
+        // the overflow list is up, or the closing aura is still fading — or
+        // while the drop target paints.
+        let open = !self.cards.is_empty()
+            && (self.pointer_fan
+                || self.keyboard
+                || self.selected.is_some()
+                || self.overflow_open
+                || self.aura(now, reduced) > 0.001);
+        if !open && !self.drop_target {
+            // Nothing paints at rest, but the deck can still own keyboard
+            // focus — dismissing the overflow hands focus back to the deck
+            // when the +N vanishes. A frame that tracked no element for the
+            // handle would drop that focus after the paint, so keep a tiny
+            // carrier registered (no tab stop, and not the whole overlay, so
+            // it cannot take pointer focus from the panes). Its key listener
+            // keeps arrows/Home/End usable until the fan paints again.
+            return div()
+                .id("parked-deck")
+                .test_support()
+                .size_full()
+                .child(
+                    div()
+                        .id("parked-deck-focus")
+                        .w(px(1.))
+                        .h(px(1.))
+                        .track_focus(&self.focus)
+                        .tab_stop(false)
+                        .on_key_down(cx.listener(Self::key_down)),
+                )
+                .into_any_element();
+        }
+        let park = self.drop_target;
         self.rem = f32::from(window.rem_size());
         let capacity = self.deck_capacity();
         self.refresh_resources(cx);
-        let overflow = self.overflow_open && self.selected.is_none();
-        let more = self.cards.len() > capacity || self.overflow_open;
+        let overflow = !park && self.overflow_open && self.selected.is_none();
+        let more = !park && (self.cards.len() > capacity || self.overflow_open);
         let overflow_list = overflow.then(|| self.render_overflow(cx));
         let more_button = more.then(|| {
-            Button::new("parked-more")
-                .ghost()
-                .small()
-                .w(rems(6.))
-                .label(self.labels.more.clone())
-                .accessibility_label(format!("{}: {}", self.labels.more, self.labels.title))
-                .on_click(cx.listener(|this, _, window, cx| this.open_overflow(window, cx)))
+            // The fan owns its +N control: right of the band the cards fan
+            // across, under the title bar. The canvas shifts the band left by
+            // the same reserve, so the button cannot sit over a card. The
+            // fan itself is painted in window coordinates (it hangs from the
+            // Park entry's line), while this element lives in the overlay's
+            // local layout, so subtract the overlay origin before using the
+            // window-centred band. Without that, a side panel shoves the deck
+            // right while the button stays at the window coordinate and is
+            // clipped off the overlay's edge.
+            let zoom = self.zoom();
+            let reserve = MORE_RESERVE_REM * 16. * zoom / 2.;
+            let measured_width = f32::from(self.content_size.width);
+            let width = if measured_width > 0. {
+                measured_width
+            } else {
+                f32::from(window.viewport_size().width)
+            };
+            let origin = f32::from(self.content_origin.x);
+            let center = f32::from(window.viewport_size().width) / 2. - origin - reserve;
+            let x = (center + MORE_OFFSET * zoom).min((width - MORE_SLOT * zoom).max(0.));
+            div().absolute().left(px(x)).top(px(10. * zoom)).child(
+                Button::new("parked-more")
+                    .ghost()
+                    .small()
+                    .label(self.labels.more.clone())
+                    .accessibility_label(format!("{}: {}", self.labels.more, self.labels.title))
+                    .on_click(cx.listener(|this, _, window, cx| this.open_overflow(window, cx))),
+            )
         });
         if self.focus.is_focused(window) && window.last_input_was_keyboard() {
             self.keyboard = true;
         }
-        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window));
-        let now = Instant::now();
-        let reduced = cx.reduce_motion();
+        self.update_targets(cx.reduce_motion(), self.focus.is_focused(window), cx);
         if self
             .cards
             .iter()
@@ -852,19 +1040,22 @@ impl Render for ParkedDeck {
         }
         let keyboard = self.keyboard && self.focus.is_focused(window);
         let target = self.hovered.or(if keyboard { self.active } else { None });
-        let cards = self
-            .cards
-            .iter()
-            .enumerate()
-            .filter(|(ix, card)| *ix < capacity || self.selected == Some(card.model.pane))
-            .map(|(_, card)| FrameCard {
-                model: card.model.clone(),
-                pose: card.motion.sample(now, reduced),
-                sprites: card.sprites.clone(),
-                selected: self.selected == Some(card.model.pane),
-                highlighted: target == Some(card.model.pane),
-            })
-            .collect();
+        let cards = if park {
+            Vec::new()
+        } else {
+            self.cards
+                .iter()
+                .enumerate()
+                .filter(|(ix, card)| *ix < capacity || self.selected == Some(card.model.pane))
+                .map(|(_, card)| FrameCard {
+                    model: card.model.clone(),
+                    pose: card.motion.sample(now, reduced),
+                    sprites: card.sprites.clone(),
+                    selected: self.selected == Some(card.model.pane),
+                    highlighted: target == Some(card.model.pane),
+                })
+                .collect()
+        };
         let labels = self.labels.clone();
         let focus = self.focus.clone();
         let frame = self.frame.clone();
@@ -873,8 +1064,7 @@ impl Render for ParkedDeck {
         let error = self.paint_error.clone();
         let tokens = Tokens::from_theme(cx);
         let aura = self.aura(now, reduced);
-        let park = self.drop_target;
-        let has_cards = !self.cards.is_empty() && !overflow;
+        let has_cards = !park && !self.cards.is_empty() && !overflow;
         let measure = cx.weak_entity();
         let park_ink = self
             .park_ink
@@ -892,27 +1082,32 @@ impl Render for ParkedDeck {
                 canvas(
                     move |bounds, window, cx| {
                         let viewport = bounds.intersect(&window.content_mask().bounds);
-                        let size = viewport.size;
                         let measure = measure.clone();
                         cx.defer(move |cx| {
-                            let _ = measure.update(cx, |this, cx| {
-                                if this.content_size != size {
-                                    this.content_size = size;
-                                    *this.frame.borrow_mut() = Rc::default();
-                                    cx.notify();
-                                }
-                            });
+                            let _ =
+                                measure.update(cx, |this, cx| this.set_content_bounds(bounds, cx));
                         });
-                        let mut deck_bounds = bounds;
-                        if more {
-                            deck_bounds.size.width =
-                                (deck_bounds.size.width - window.rem_size() * 6.5).max(px(0.));
-                        }
+                        let zoom = f32::from(window.rem_size()) / 16.;
+                        // The fan hangs from the window's centre line — the
+                        // Park entry's line — not from the deck overlay's own
+                        // centre, which side panels shove sideways. When the
+                        // +N control shows, the cards' band shifts left by
+                        // half its reserve so the button keeps the freed
+                        // reach (deck_capacity already counts the fan within
+                        // the shrunken band).
+                        let reserve = if more {
+                            MORE_RESERVE_REM * 16. * zoom / 2.
+                        } else {
+                            0.
+                        };
+                        let center_x = px(f32::from(window.viewport_size().width) / 2. - reserve);
+                        let window_center_x = px(f32::from(window.viewport_size().width) / 2.);
                         let scene = Frame::new(FrameInput {
                             bounds,
                             viewport,
-                            deck_bounds,
-                            zoom: f32::from(window.rem_size()) / 16.,
+                            center_x,
+                            window_center_x,
+                            zoom,
                             cards,
                             fan: aura,
                             park,
@@ -950,7 +1145,11 @@ impl Render for ParkedDeck {
                         for (model, bounds, selected, restore) in
                             scene.semantic_cards().filter(|_| has_cards)
                         {
-                            if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
+                            // The card's rectangle is reported unclipped so the
+                            // fan's centre line stays queryable, but a card the
+                            // content mask cannot show at all gets no element.
+                            let shown = bounds.intersect(&scene.viewport());
+                            if shown.size.width <= px(0.) || shown.size.height <= px(0.) {
                                 continue;
                             }
                             let pane = model.pane;
@@ -1095,9 +1294,7 @@ impl Render for ParkedDeck {
                 )
                 .size_full(),
             )
-            .when_some(more_button, |root, button| {
-                root.child(div().absolute().right_2().bottom_2().child(button))
-            })
+            .when_some(more_button, |root, button| root.child(button))
             .when_some(overflow_list, |root, list| root.child(list))
             .into_any_element()
     }

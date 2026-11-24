@@ -1,6 +1,7 @@
 //! Host-owned session operations. Preparation is blocking and pane-independent;
 //! consumers retain a PreparedSession until its new pane has opened successfully.
 
+pub mod antigravity;
 mod pi;
 
 use std::collections::BTreeMap;
@@ -317,6 +318,13 @@ pub(crate) fn prepare<H: Host + ?Sized>(
         CLIAgent::Kimi => kimi::prepare(host, request),
         CLIAgent::OpenCode => opencode::prepare(request),
         CLIAgent::Hermes => hermes::prepare(request),
+        // #385 resumes one exact conversation by its native id. Fork is
+        // refused inside the adapter with the recorded upstream limitation
+        // (#386): `agy` has only an interactive `/fork` that switches the
+        // invoking terminal. A remote peer is checked for `antigravity-v1`
+        // before this request reaches the wire (RemoteHost), so a peer too old
+        // to decode or perform it never sees the request.
+        CLIAgent::Antigravity => antigravity::prepare(host, request),
     }
 }
 

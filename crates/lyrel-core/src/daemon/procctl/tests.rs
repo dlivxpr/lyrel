@@ -171,6 +171,8 @@ impl Tree {
             assert!(!remaining.is_zero(), "fixture sleepers did not register");
             match listener.accept() {
                 Ok((mut stream, _)) => {
+                    // Windows inherits the listener's nonblocking mode.
+                    stream.set_nonblocking(false).unwrap();
                     stream.set_read_timeout(Some(remaining)).unwrap();
                     let mut bytes = [0; 4];
                     stream.read_exact(&mut bytes).unwrap();

@@ -7,6 +7,7 @@ use gpui_kit::{App, Task};
 use lyrel_core::core::cli_agent::{AgentSessionState, AgentStatus, CLIAgent};
 use lyrel_ui_base::host_ops::HostId;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
+use lyrel_ui_base::notification_history::Severity;
 use std::time::{Duration, Instant};
 
 type PaneKey = (HostId, u64);
@@ -47,6 +48,18 @@ pub struct AgentNotice {
     pub agent: &'static str,
     pub body: String,
     pub delayed: bool,
+    /// How the settled result reads in the shared history.
+    pub severity: Severity,
+    /// The activity-matrix row this transition belongs to (waiting on the
+    /// user, or a settled result). The row's channels decide how it may
+    /// interrupt; the record itself is written either way.
+    pub activity: lyrel_core::core::config::ActivityState,
+    /// The session-and-transition half of the stable event identity. The view
+    /// prepends its source (Host, pane, ownership); what remains here names
+    /// the session and the transition, so the same turn settling is recorded
+    /// once no matter how many views observed it. Durations never belong in
+    /// it — two viewers' clocks must not split one event into two records.
+    pub identity: String,
 }
 
 /// What the terminal reports about the pane's agent right now: the detected
@@ -165,12 +178,15 @@ impl AgentActivity {
         self.pending_finish_notice = None;
     }
 
+    /// Observe the pane's current agent state. Eligibility for a notice —
+    /// a rich session's Waiting edge or a settled Done — does not depend on
+    /// the desktop delivery mode: a held-back note still belongs in the
+    /// history, and the caller decides delivery separately.
     pub fn observe(
         &mut self,
         key: PaneKey,
         observation: AgentObservation<'_>,
         focused: bool,
-        notify_allowed: bool,
         cx: &mut App,
     ) -> AgentUpdate {
         let AgentObservation {
@@ -265,25 +281,35 @@ impl AgentActivity {
         let agent_name = agent.map(|a| a.display_name()).unwrap_or("Agent");
         match status {
             Some(AgentStatus::Working) => self.turn_started = Some(Instant::now()),
-            Some(AgentStatus::Waiting) if rich && notify_allowed => {
+            Some(AgentStatus::Waiting) if rich => {
+                let message = session.and_then(|s| s.message.clone());
                 update.notice = Some(AgentNotice {
                     agent: agent_name,
-                    body: session
-                        .and_then(|s| s.message.clone())
+                    body: message
+                        .clone()
                         .unwrap_or_else(|| t(L10nKey::NotifyAgentWaiting).to_string()),
                     delayed: false,
+                    severity: Severity::Warning,
+                    activity: lyrel_core::core::config::ActivityState::Waiting,
+                    identity: format!(
+                        "agent-wait|{}|{}|{}|{}",
+                        session_identity(session),
+                        turns,
+                        session.map_or(0, |s| s.activity),
+                        message.unwrap_or_default()
+                    ),
                 });
             }
             Some(AgentStatus::Done)
                 if rich
-                    && notify_allowed
                     && matches!(
                         prev,
                         Some(AgentStatus::Working) | Some(AgentStatus::Waiting)
                     ) =>
             {
                 let elapsed = self.turn_started.take().map(|start| start.elapsed());
-                let body = match session.and_then(|s| s.readout.result.as_ref()) {
+                let result = session.and_then(|s| s.readout.result.clone());
+                let body = match result.as_ref() {
                     Some(result) => {
                         let result = lyrel_ui_base::i18n::agent_result_text(result);
                         match elapsed {
@@ -307,6 +333,25 @@ impl AgentActivity {
                 };
                 update.notice = Some(AgentNotice {
                     agent: agent_name,
+                    severity: result.as_ref().map_or(Severity::Info, |result| {
+                        use lyrel_core::core::cli_agent::AgentOutcome;
+                        match result.outcome {
+                            AgentOutcome::Succeeded => Severity::Success,
+                            AgentOutcome::Failed | AgentOutcome::Rejected => Severity::Error,
+                            AgentOutcome::Interrupted => Severity::Warning,
+                        }
+                    }),
+                    activity: lyrel_core::core::config::ActivityState::of_agent(
+                        AgentStatus::Done,
+                        result.as_ref().map(|result| result.outcome),
+                    )
+                    .expect("Done always maps to a result row"),
+                    identity: format!(
+                        "agent-done|{}|{}|{}|{result:?}",
+                        session_identity(session),
+                        turns,
+                        session.map_or(0, |s| s.activity),
+                    ),
                     body,
                     delayed: true,
                 });
@@ -314,6 +359,20 @@ impl AgentActivity {
             _ => {}
         }
         update
+    }
+}
+
+/// The session half of a stable event identity: what the agent itself
+/// reported, nothing inferred. Two views of the same daemon pane hash the
+/// same string.
+fn session_identity(session: Option<&AgentSessionState>) -> String {
+    match session {
+        Some(session) => format!(
+            "{}|{:?}",
+            session.session_id.as_deref().unwrap_or(""),
+            session.launch_argv.as_deref().unwrap_or(&[])
+        ),
+        None => "|".to_string(),
     }
 }
 
@@ -353,7 +412,6 @@ mod tests {
                     replayed: None,
                 },
                 true,
-                false,
                 cx,
             );
             assert!(!first.session_id_changed);
@@ -367,7 +425,6 @@ mod tests {
                     replayed: None,
                 },
                 true,
-                false,
                 cx,
             );
             assert!(resumed.session_id_changed);
@@ -380,7 +437,6 @@ mod tests {
                     replayed: None,
                 },
                 true,
-                false,
                 cx,
             );
             assert!(

@@ -137,7 +137,9 @@ pub fn connect_blocking(
         )
     })?;
 
-    let hello = ControlHello::host_rpc(new_session_token(), client_hostname());
+    // This machine's desktop consumes agent previews from the remote server;
+    // `gui` stays false because no GUI runs on that Host (#393).
+    let hello = ControlHello::host_rpc(new_session_token(), client_hostname()).with_preview();
     let host = handshake(stream, &target.connection_key(), &hello).map_err(|e| {
         t_fmt(
             L10nKey::RemoteHostNotLyrel,
@@ -168,11 +170,20 @@ fn refresh_agent_hooks_once(
         Ok(mut seen) if !seen.contains(&id) => seen.push(id),
         _ => return,
     }
+    // Antigravity hook commands only run on a server that speaks
+    // `antigravity-v1`; an older peer keeps its entries untouched.
+    let antigravity_supported = host
+        .peer()
+        .has_feature(crate::daemon::control::feature::ANTIGRAVITY);
     let (host, home) = (Arc::clone(host), home.to_path_buf());
     let launch_commands = launch_commands.clone();
     std::thread::spawn(move || {
-        let refreshed =
-            crate::core::agent_hooks::refresh_remote_hooks(&*host, home, &launch_commands);
+        let refreshed = crate::core::agent_hooks::refresh_remote_hooks(
+            &*host,
+            home,
+            &launch_commands,
+            antigravity_supported,
+        );
         if refreshed > 0 {
             log::info!("refreshed {refreshed} stale agent hook integration(s) on {id:?}");
         }

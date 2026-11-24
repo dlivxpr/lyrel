@@ -78,6 +78,18 @@ pub struct ChildExited;
 
 impl gpui_kit::EventEmitter<ChildExited> for TerminalView {}
 
+/// Why a pane cannot take an agent prompt at this moment. The workbench maps
+/// each answer to its own wording; the terminal keeps the facts (#393).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentPromptError {
+    /// The child process or its link ended.
+    Exited,
+    /// The pane's Host link is down, so input has nowhere to go.
+    HostDisconnected,
+    /// Another client is driving the workspace.
+    Locked,
+}
+
 pub struct AuthPromptReady;
 
 impl gpui_kit::EventEmitter<AuthPromptReady> for TerminalView {}
@@ -129,6 +141,11 @@ impl gpui_kit::EventEmitter<TitleContractUnsupported> for TerminalView {}
 /// tree are its to drive. The payload lives in `lyrel_ui_base::desktop_file`,
 /// shared with the launchers below it there.
 impl gpui_kit::EventEmitter<lyrel_ui_base::desktop_file::OpenFileRequested> for TerminalView {}
+
+/// A loopback link clicked in a managed remote Workspace pane, on its way to
+/// the Side Panel browser (#392). The terminal keeps the Host's spelling of
+/// the address; the app owns the tab and verifies the forward.
+impl gpui_kit::EventEmitter<lyrel_ui_base::web_preview::OpenWebPageRequested> for TerminalView {}
 
 /// A command boundary may have changed a known repository. The shell bumps
 /// its epoch without scheduling a second read alongside the badge refresh.
@@ -1366,6 +1383,38 @@ impl TerminalView {
     pub fn send_agent_prompt(&self, prompt: &str) {
         self.terminal
             .write(lyrel_core::core::agent_prompt::submit_bytes(prompt));
+    }
+
+    /// Why this pane cannot receive an agent prompt right now, or `None`.
+    ///
+    /// A preview's explicit share is addressed to a remembered pane id; the
+    /// id alone is not enough. The pane may have exited, its Host link may be
+    /// down, or another client may be driving the workspace (#393). Checking
+    /// here keeps the caller from reporting a share the pane never saw.
+    pub fn agent_prompt_error(&self, cx: &App) -> Option<AgentPromptError> {
+        if self.terminal.exited || self.terminal.child_exited() {
+            return Some(AgentPromptError::Exited);
+        }
+        if self.host(cx).is_none_or(|host| !host.is_connected()) {
+            return Some(AgentPromptError::HostDisconnected);
+        }
+        if !self.accepts_input(cx) {
+            return Some(AgentPromptError::Locked);
+        }
+        None
+    }
+
+    /// Delivers one prompt only after [`Self::agent_prompt_error`] agrees
+    /// the pane can take it. Ordinary input paths keep using
+    /// [`Self::send_agent_prompt`] directly.
+    pub fn deliver_agent_prompt(&self, prompt: &str, cx: &App) -> Result<(), AgentPromptError> {
+        match self.agent_prompt_error(cx) {
+            Some(error) => Err(error),
+            None => {
+                self.send_agent_prompt(prompt);
+                Ok(())
+            }
+        }
     }
 
     pub fn run_command_line(&self, cmd: &str) {

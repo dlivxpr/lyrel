@@ -95,17 +95,26 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui_kit::AnyElement {
-        self.sync_parked_deck(window, cx);
-        let pointer = window.mouse_position();
-        let show_park_target = self.dragged_parking_pane(cx).is_some()
-            && self.pane_area.get().is_some_and(|area| {
-                area.contains(&pointer)
-                    && pointer.y < area.bottom()
-                    && pointer.y
-                        >= area.bottom() - (window.rem_size() * (170. / 16.)).min(area.size.height)
+        self.hide_inactive_browser_surfaces(cx);
+        // The deck's overlay covers the terminal column. Its +N control and
+        // capacity budget live in that local frame, but the fan itself is
+        // window-centred, so hand the deck the column's window rectangle
+        // before it renders. The canvas measurement alone is deferred and
+        // would leave the first open frame guessing at the wrong size.
+        if let Some(area) = self.pane_area.get() {
+            self.parked_deck.update(cx, |deck, cx| {
+                deck.set_content_bounds(area, cx);
             });
+        }
+        self.sync_parked_deck(window, cx);
+        // A recognized tiled or PiP pane drag reveals the parking target for
+        // as long as it is in flight — the affordance has to be findable
+        // before the pointer reaches it, and it must exist with no pane
+        // parked. The same read locks the title-bar move hit region, so a
+        // release or a press up there cannot start moving the window.
+        let dragging_pane = self.dragged_parking_pane(cx).is_some();
         self.parked_deck.update(cx, |deck, cx| {
-            deck.set_drop_target(show_park_target, cx);
+            deck.set_drop_target(dragging_pane, cx);
         });
         let tab_landing = self.tab_landing(window, cx);
         // Membership diff for the sidebar's row/disclosure motion, run even
@@ -134,16 +143,23 @@ impl LyrelApp {
                     })
                 });
                 match maximized {
-                    Some(leaf) => Pane::leaf(PaneSlot::Ready(leaf.clone())).render(
-                        &crate::ui::pane::PaneChrome {
-                            dim_inactive: false,
-                            app: cx.entity().downgrade(),
-                            lifted: None,
-                            drag: self.pane_drag.clone(),
-                        },
-                        window,
-                        cx,
-                    ),
+                    Some(leaf) => div()
+                        .id("pane-presentations")
+                        .test_support()
+                        .size_full()
+                        .relative()
+                        .overflow_hidden()
+                        .child(Pane::leaf(PaneSlot::Ready(leaf.clone())).render(
+                            &crate::ui::pane::PaneChrome {
+                                dim_inactive: false,
+                                app: cx.entity().downgrade(),
+                                lifted: None,
+                                drag: self.pane_drag.clone(),
+                            },
+                            window,
+                            cx,
+                        ))
+                        .into_any_element(),
                     None => {
                         let several = active_tab.pane.leaves().len() > 1;
                         let chrome = crate::ui::pane::PaneChrome {
@@ -246,9 +262,24 @@ impl LyrelApp {
                 Vec::new(),
                 self.render_document_column(w, document_chrome, window, cx),
             ),
+            None if self.active_browser_detail().is_some() => (
+                self.render_browser_document(
+                    crate::ui::document_column::DocumentChrome::Fill,
+                    window,
+                    cx,
+                )
+                .into_iter()
+                .collect(),
+                None,
+            ),
             None => {
+                // The fill overlay covers the body area, so its width — not
+                // the window's — is what the paired/single-column decision
+                // reads.
+                let body_width = self.document_body_px(window, cx);
                 let diff_overlay = self.render_diff_overlay(
                     crate::ui::document_column::DocumentChrome::Fill,
+                    body_width,
                     window,
                     cx,
                 );
@@ -297,12 +328,16 @@ impl LyrelApp {
             .get(self.tabs.active_index())
             .and_then(|tab| tab.detail_pane(window, cx))
             .is_some();
+        // Use the same fit for painting and sampling the metrics capsule.
+        let chrome_fit = self.titlebar_chrome_fit(window, cx);
         let top_chrome = WindowChrome::new(
             self.left_panel_open(cx),
             self.right_panel_open(cx),
             can_split,
             self.new_tab_button("titlebar-add", cx),
-            self.render_titlebar_metrics(window, cx),
+            self.render_park_entry(window, cx),
+            self.render_titlebar_metrics(window, cx, chrome_fit),
+            dragging_pane,
             cx,
             |command| {
                 cx.listener(move |this, _, window, cx| match command {
@@ -408,6 +443,61 @@ impl LyrelApp {
 }
 
 impl LyrelApp {
+    /// The centered title-bar Park entry: the active tab's parked count, with
+    /// the deck's downward fan as its surface. Hovering opens the fan without
+    /// taking the keyboard; clicking focuses the deck for keyboard
+    /// navigation; Escape hands focus back to whatever was focused before.
+    /// `None` where there is no terminal tab to park panes in.
+    fn render_park_entry(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(gpui_kit::AnyElement, f32)> {
+        if self.tabs.is_empty() {
+            return None;
+        }
+        use gpui_kit::component::button::ButtonVariants as _;
+        let count = self.parked_deck.read(cx).parked_count();
+        let width = crate::ui::window_chrome::PARK_ENTRY_W * (window.rem_size().as_f32() / 16.);
+        let count_label = count.to_string();
+        let badge = t_fmt(L10nKey::ParkedEntryCount, &[("count", &count_label)]);
+        let entry = gpui_kit::component::button::Button::new("titlebar-park")
+            .custom(crate::ui::window_chrome::chrome_tile_variant(cx))
+            .h(gpui_kit::rems(2.))
+            .w(px(width))
+            .gap(gpui_kit::rems(6. / 16.))
+            .items_center()
+            .justify_center()
+            .rounded_lg()
+            .icon(
+                gpui_kit::component::Icon::empty()
+                    .path("icons/park.svg")
+                    .size_4(),
+            )
+            .label(count_label)
+            .when(count == 0, |entry| entry.tooltip(badge.clone()))
+            .accessibility_label(badge)
+            .when(count != 0, |entry| {
+                entry.on_hover(cx.listener(|this, over: &bool, window, cx| {
+                    this.parked_deck.update(cx, |deck, cx| {
+                        if *over {
+                            deck.show_for_pointer(cx);
+                        } else {
+                            deck.hide_for_pointer(window, cx);
+                        }
+                    });
+                }))
+            })
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.parked_deck
+                    .update(cx, |deck, cx| deck.focus(None, window, cx));
+            }))
+            .into_any_element();
+        Some((entry, width))
+    }
+}
+
+impl LyrelApp {
     pub(super) fn render_window(
         &mut self,
         window: &mut Window,
@@ -499,6 +589,10 @@ impl LyrelApp {
         let detach_caret = self.detach_caret(window, cx);
         let main_layout = self.render_work_area(window, cx);
         let status_bar = self.render_status_bar(window, cx);
+        // Ordinary toasts sit at the content area's lower-right edge while a
+        // web page is visible: clear of the WebView and above the global
+        // status bar. This never hides the page (#403).
+        self.apply_toast_clearance(window, cx);
 
         let window_bg = crate::ui::theme::workspace_background(cx);
         let bg_image = window_background_image_layer(cx);

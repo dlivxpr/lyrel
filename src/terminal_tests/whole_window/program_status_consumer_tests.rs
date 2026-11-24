@@ -76,10 +76,12 @@ fn program_consumer_real_pty_current_state_and_reattach_use_daemon_records(
         window.render_frame(cx);
         let status = window.find("status-program");
         assert!(status.visible());
+        // A named program omits the generic Program prefix (#402).
         assert_eq!(
             status.label(),
-            Some("Program · builder · Working · 42% · Compiling · Building")
+            Some("builder · Working · 42% · Compiling · Building")
         );
+        assert!(window.find("status-program-dot").visible());
     });
     // A child inherits the live root app and outranks it. Invalid ids must not
     // replace the root; a second report proves the stream remains usable.
@@ -102,7 +104,7 @@ fn program_consumer_real_pty_current_state_and_reattach_use_daemon_records(
         window.render_frame(cx);
         assert_eq!(
             window.find("status-program").label(),
-            Some("Program · builder · Answer needed · Answer")
+            Some("builder · Answer needed · Answer")
         );
     });
     let before = view.read_with(cx, |view, _| {
@@ -145,7 +147,7 @@ fn program_consumer_real_pty_current_state_and_reattach_use_daemon_records(
         window.render_frame(cx);
         assert_eq!(
             window.find("status-program").label(),
-            Some("Program · builder · Answer needed · Answer")
+            Some("builder · Answer needed · Answer")
         );
     });
     graphics_send_fixture(&fresh, cx, 750103, b"\x1b]7501;state=clear:id=build\x07");

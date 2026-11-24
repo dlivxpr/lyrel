@@ -7,6 +7,7 @@ pub(crate) mod output_marks;
 pub(super) mod probes;
 mod reader;
 use output_marks::{ShellState, SniffSignals};
+pub(super) use reader::AgentProbe;
 pub(super) use reader::{FactReader, ForegroundProbes};
 
 /// Display-only process evidence, discarded after one pane-list request.
@@ -161,11 +162,10 @@ impl PaneFacts {
     pub(super) fn apply_events(
         &mut self,
         events: Vec<AgentEvent>,
-        notification: Option<String>,
         emit: &mut dyn FnMut(DaemonMsg),
     ) -> FactChange {
         let before = observed_facts(self);
-        apply_agent_signals(self, events, notification, emit);
+        apply_agent_signals(self, events, None, emit);
         self.change_since(Some(before))
     }
 
@@ -396,7 +396,21 @@ fn apply_signals(st: &mut PaneFacts, signals: SniffSignals, emit: &mut dyn FnMut
             last_exit: shell.last_exit_code,
         });
     }
-    apply_agent_signals(st, signals.agent_events, signals.notification, emit);
+    apply_agent_signals(
+        st,
+        signals.agent_events,
+        signals.notifications.back().map(|(_, body)| body.as_str()),
+        emit,
+    );
+    for (title, body) in signals.notifications {
+        emit(DaemonMsg::ProgramNote(
+            crate::daemon::protocol::ProgramNote {
+                id: uuid::Uuid::new_v4(),
+                title,
+                body,
+            },
+        ));
+    }
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -436,7 +450,7 @@ fn kimi_observer(
 fn apply_agent_signals(
     st: &mut PaneFacts,
     events: Vec<crate::core::cli_agent::AgentEvent>,
-    notification: Option<String>,
+    notification: Option<&str>,
     emit: &mut dyn FnMut(DaemonMsg),
 ) {
     use crate::core::cli_agent::{AgentEventKind, AgentSessionState, AgentStatus};
@@ -545,7 +559,7 @@ fn apply_agent_signals(
             .agent_session
             .get_or_insert_with(AgentSessionState::default);
         sess.status = AgentStatus::Waiting;
-        sess.message = Some(body);
+        sess.message = Some(body.to_owned());
         sess.note_transition(previous, now_ms);
     }
 
@@ -671,9 +685,12 @@ fn apply_agent(
         st.agent_session = None;
         emit(DaemonMsg::AgentStatus(None));
     }
-    if agent.is_none() {
-        st.agent_argv = None;
-    }
+    // The launch args belong to the previous agent just as much as its
+    // session id does. A switch to an agent detected without argv (the
+    // Windows process probe) must not leave the old agent's args standing:
+    // they would be read as the new agent's launch line, and they would
+    // block the probe's own clear-on-exit.
+    st.agent_argv = None;
     emit(DaemonMsg::Agent(agent));
     st.agent = agent;
     stamp_launch_argv(st, argv, emit);

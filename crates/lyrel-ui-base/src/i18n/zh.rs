@@ -13,7 +13,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::NotificationInbox => "通知",
         L10nKey::NotificationClearHistory => "清空通知历史",
         L10nKey::NotificationScope => {
-            "收录本机应用的成功、信息、警告与错误提示，保留最近 500 条；不含系统通知、终端输出和 GUI 关闭期间的事件。"
+            "收录本机应用提示、智能体等待与结果以及终端事件，保留最近 500 条；不含系统通知和 GUI 关闭期间的事件。"
         }
         L10nKey::NotificationDetails => "完整内容",
         L10nKey::NotificationBack => "返回通知列表",
@@ -25,6 +25,11 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::NotificationInfo => "信息",
         L10nKey::NotificationWarning => "警告",
         L10nKey::NotificationError => "错误",
+        L10nKey::NotificationPending => "待处理",
+        L10nKey::NotificationFilterAll => "全部",
+        L10nKey::NotificationMarkAllRead => "全部标为已读",
+        L10nKey::NotificationGoToSource => "转到来源",
+        L10nKey::NotificationNoUnread => "暂无未读通知。",
         L10nKey::SettingsNavSkills => "技能",
         L10nKey::SkillsPageDescription => {
             "浏览所选机器和项目中的 omp、Kimi Code、pi、OpenCode 2.x、Hermes 技能。通过 GitHub 或 skills.sh 发现候选，审查共享安装、检查更新、保留本地改动并安全移除精确关联链接。"
@@ -363,6 +368,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::IntegrationHermesObserver => {
             "Hermes observer 目录：{home}。安装不代表授权。请在同一 home/profile 运行 hermes plugins enable lyrel，再运行 hermes plugins list。HERMES_SAFE_MODE 或禁用插件会阻止报告。on_session_end 携带最终结果，on_session_finalize 不是本轮结果。缺少事件不代表 Idle/Done。原生历史与操作使用所选安装的运行时，不使用系统 Python；lyrel 不更改插件授权。"
         }
+        L10nKey::IntegrationAntigravityRegistry => {
+            "Antigravity 注册表：{path}。lyrel 只在全局 hooks.json 中管理自己的具名条目，不改动其他 hooks 或状态栏偏好。observer 只报告 Working 与确定结束的 Done；普通工具调用不会显示为 Waiting。该 agy 版本的钩子契约仍需真实轮次验证。"
+        }
         L10nKey::IntegrationScopeUnavailable => "集成作用域不可用：{error}。未修改文件。",
         L10nKey::IntegrationOpenCodeUnreadable => "无法读取 OpenCode CLI 插件配置：{path}",
         L10nKey::IntegrationOpenCodeRuntimeDiagnosis => {
@@ -516,6 +524,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppSessionDirectoryGone => "会话所在的目录已不存在：{path}",
         L10nKey::AppSessionOpenUnconfirmed => {
             "已有窗格在运行会话 {id}，但无法从这里确认其存储。请直接在该窗格中恢复，以免启动第二个写入者。"
+        }
+        L10nKey::AppSessionResumeOpenedDifferent => {
+            "已请求恢复会话 {expected}，但 Antigravity 打开了 {actual}；这不是精确恢复。"
         }
         L10nKey::SearchSessionActions => "选择要对这个会话执行的操作…",
         L10nKey::SessionActionsHint => "操作",
@@ -1257,10 +1268,33 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::DocumentDock => "停靠在终端旁",
         L10nKey::DocumentFill => "铺满窗口",
         L10nKey::SettingsNotifications => "通知",
-        L10nKey::SettingsNotifyOnCommandFinish => "命令完成时通知",
-        L10nKey::SettingsNotifyOnCommandFinishDesc => "较长的前台命令完成后发出桌面提醒。",
+        L10nKey::SettingsNotifyOnCommandFinish => "通知时机",
+        L10nKey::SettingsNotifyOnCommandFinishDesc => {
+            "已启用渠道何时允许打扰；符合条件的事件仍会进入通知历史。"
+        }
         L10nKey::SettingsNotifyThreshold => "最短命令运行时间",
         L10nKey::SettingsNotifyThresholdDesc => "仅在命令运行达到此时长后发送完成通知。",
+        L10nKey::SettingsCommandDesktop => "命令结果",
+        L10nKey::SettingsCommandDesktopDesc => "前台命令运行达到最短时长后发送桌面通知。",
+        L10nKey::SettingsOscDesktop => "程序通知（OSC）",
+        L10nKey::SettingsOscDesktopDesc => "程序显式请求的桌面通知（OSC 9、99、777）。",
+        L10nKey::SettingsProgramActivity => "程序活动",
+        L10nKey::SettingsProgramActivityDesc => {
+            "按程序报告的活动状态分别配置标签页、桌面和声音渠道。同一次结果只会是结束或失败之一。"
+        }
+        L10nKey::ActivityRowRunning => "运行中",
+        L10nKey::ActivityRowRunningDesc => "程序或 agent 正在工作；只有标签页标记适用。",
+        L10nKey::ActivityRowWaiting => "等待中",
+        L10nKey::ActivityRowWaitingDesc => "程序或 agent 在等待你的输入。",
+        L10nKey::ActivityRowEnded => "已结束",
+        L10nKey::ActivityRowEndedDesc => "程序或 agent 成功完成任务。",
+        L10nKey::ActivityRowFailed => "失败",
+        L10nKey::ActivityRowFailedDesc => "程序或 agent 因错误结束。",
+        L10nKey::ActivityChannelTab => "标签页",
+        L10nKey::ActivityChannelDesktop => "桌面",
+        L10nKey::ActivityChannelSound => "声音",
+        L10nKey::ActivityChannelBadge => "徽标",
+        L10nKey::SystemBadgeTabsNeedAttention => "需要处理的标签页：{count}",
         L10nKey::SettingsWindow => "启动与恢复",
         L10nKey::NotifyModeNever => "从不",
         L10nKey::NotifyModeUnfocused => "窗口未聚焦时",
@@ -1475,6 +1509,27 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SettingsSearchNotifyThresholdKeywords => {
             "通知阈值 通知 秒数 时长 命令 notify threshold notification duration seconds"
         }
+        L10nKey::SettingsSearchProgramActivityKeywords => {
+            "程序活动 活动矩阵 渠道 标签页 桌面 声音 通知 program activity matrix channels tab desktop sound"
+        }
+        L10nKey::SettingsSearchActivityRunningKeywords => {
+            "运行中 工作中 程序 agent 进度 活动 标签页 running working busy progress"
+        }
+        L10nKey::SettingsSearchActivityWaitingKeywords => {
+            "等待中 阻塞 权限 提问 需要输入 程序 agent waiting blocked permission question"
+        }
+        L10nKey::SettingsSearchActivityEndedKeywords => {
+            "已结束 完成 成功 程序 agent 结果 ended finished done completed success result"
+        }
+        L10nKey::SettingsSearchActivityFailedKeywords => {
+            "失败 错误 拒绝 程序 agent 结果 failed error rejected crashed result"
+        }
+        L10nKey::SettingsSearchCommandDesktopKeywords => {
+            "命令结果 命令完成 通知 桌面 阈值 时长 command finished result notification desktop"
+        }
+        L10nKey::SettingsSearchOscDesktopKeywords => {
+            "程序通知 osc 桌面 转义序列 显式 osc notification desktop escape explicit"
+        }
         L10nKey::SettingsSearchOpacityKeywords => {
             "不透明度 透明度 窗口 半透明 alpha opacity transparency translucent window"
         }
@@ -1584,6 +1639,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::SftpMenuNewFile => "新建文件",
         L10nKey::SftpMenuUploadFiles => "上传文件",
         L10nKey::SftpMenuUploadFolders => "上传文件夹",
+        L10nKey::SftpMenuGotoPath => "转到路径",
         L10nKey::SftpMenuGotoShellCwd => "转到 shell 目录",
         L10nKey::SftpMenuHideTransferHistory => "隐藏传输历史",
         L10nKey::SftpMenuTransferHistory => "传输历史",
@@ -2441,6 +2497,49 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::MonitorDiskPartialDetail => "{dir} · 至少 {used} / {total}（{reason}）",
         L10nKey::ToolHostAdd => "添加工具",
         L10nKey::ToolHostClose => "关闭{tool}",
+        L10nKey::ToolHostCloseWeb => "关闭{page}",
+        L10nKey::PanelBrowserTitle => "浏览器",
+        L10nKey::BrowserListNew => "新建页面",
+        L10nKey::BrowserListEmpty => "暂无页面",
+        L10nKey::BrowserListEmptyHint => "通过上方的新建页面、链接或智能体预览打开一个。",
+        L10nKey::BrowserBack => "后退",
+        L10nKey::BrowserForward => "前进",
+        L10nKey::BrowserReload => "重新加载",
+        L10nKey::BrowserOpenExternal => "在系统浏览器中打开",
+        L10nKey::BrowserReconnect => "重新连接",
+        L10nKey::BrowserHostLocal => "本机",
+        L10nKey::BrowserHostRemote => "{host}",
+        L10nKey::BrowserStarting => "正在加载页面",
+        L10nKey::BrowserConcealedHint => "浮层打开期间已隐藏；页面内容、滚动位置和草稿都会保留。",
+        L10nKey::BrowserSurfaceAutomated => "自动化测试不启动浏览器表面",
+        L10nKey::BrowserSurfaceNoDataDir => "该主机暂无浏览器数据目录",
+        L10nKey::BrowserPreviewShare => "分享",
+        L10nKey::BrowserPreviewShareTip => "把截图和反馈发送给请求此预览的智能体窗格",
+        L10nKey::BrowserPreviewSource => "{pane}",
+        L10nKey::BrowserPreviewSourceMissing => "{pane}（已关闭）",
+        L10nKey::BrowserPreviewSourceStale => "{pane}（未关联）",
+        L10nKey::BrowserPreviewSourceTip => "由窗格 {pane} 请求的智能体预览",
+        L10nKey::BrowserPreviewFeedbackPlaceholder => "告诉智能体要改什么…",
+        L10nKey::BrowserPreviewSend => "发送到 {pane}",
+        L10nKey::BrowserPreviewCancel => "取消",
+        L10nKey::BrowserPreviewSending => "正在发送…",
+        L10nKey::BrowserPreviewSent => "已发送到 {pane}",
+        L10nKey::BrowserPreviewNoSource => "此页面不是由智能体打开的。",
+        L10nKey::BrowserPreviewPaneGone => "窗格 {pane} 已不存在，反馈未发送。",
+        L10nKey::BrowserPreviewPaneElsewhere => "窗格 {pane} 现在属于其他工作区，反馈未发送。",
+        L10nKey::BrowserPreviewWorkspaceChanged => "预览所在工作区已变化，反馈未发送。",
+        L10nKey::BrowserPreviewHostMismatch => "该窗格已不在预览所属主机上，反馈未发送。",
+        L10nKey::BrowserPreviewHostDisconnected => "预览所属主机未连接，反馈未发送。",
+        L10nKey::BrowserPreviewPaneExited => "窗格 {pane} 已退出，反馈未发送。",
+        L10nKey::BrowserPreviewPaneLocked => "其他客户端正在操作窗格 {pane}，反馈未发送。",
+        L10nKey::BrowserPreviewSourceUnverified => {
+            "该预览未与请求它的实时窗格关联；请让智能体重新请求预览。"
+        }
+        L10nKey::BrowserPreviewScratchInvalid => "该预览在其主机上没有绝对截图画目录。",
+        L10nKey::BrowserPreviewCaptureUnavailable => "当前无法截取页面：{error}",
+        L10nKey::BrowserPreviewCaptureFailed => "无法截取页面：{error}",
+        L10nKey::BrowserPreviewWriteFailed => "无法把截图保存到窗格所属主机：{error}",
+        L10nKey::BrowserPreviewSavedUnsent => "截图已保存到 {path}，但未发送：{reason}",
         L10nKey::PanelNoSession => "没有活动会话。",
         L10nKey::PanelNoSessionHint => "打开一个标签页以在此处查看其 shell、目录和进程。",
         L10nKey::PanelNoWorkingDirectory => "没有工作目录。",
@@ -2606,7 +2705,46 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::DiffUntrackedSummary => "{count} 个未跟踪",
         L10nKey::DiffViewSplit => "并排",
         L10nKey::DiffViewUnified => "统一",
+        L10nKey::DiffViewContent => "内容感知",
         L10nKey::DiffCopySelection => "复制选中的行",
+        L10nKey::DiffContentReading => "正在读取文件…",
+        L10nKey::DiffContentPatchOnly => "内容感知视图不适用于纯补丁对比，已显示行级差异。",
+        L10nKey::DiffContentUnsupported => "内容感知视图不支持此文件类型，已显示行级差异。",
+        L10nKey::DiffContentOverBudget => "文件过大，内容感知视图无法比较，已显示行级差异。",
+        L10nKey::DiffContentParseFailed => "无法解析此文件的内容感知结构，已显示行级差异。",
+        L10nKey::DiffContentReadFailed => "无法读取此文件的两个版本，已显示行级差异。",
+        L10nKey::DiffContentRemoteUnsupported => {
+            "此远程 Host 无法发送文件版本，内容感知视图不可用；请更新该 Host 上的 lyrel-server，或继续使用行级差异。"
+        }
+        L10nKey::DiffContentJumpSource => "跳转到原始位置",
+        L10nKey::DiffContentJumpBlock => "跳转到移动后的块",
+        L10nKey::DiffContentMoved => "已移动",
+        L10nKey::DiffContentModified => "已修改",
+        L10nKey::DiffContentAdded => "新增",
+        L10nKey::DiffContentDeleted => "已删除",
+        L10nKey::DiffContentFromLine => "来自第 {line} 行",
+        L10nKey::DiffContentToLine => "移至第 {line} 行",
+        L10nKey::DiffContentFormatting => "仅格式变化",
+        L10nKey::DiffContentElided => "{count} 行未更改",
+        L10nKey::DiffContentItemFunction => "函数",
+        L10nKey::DiffContentItemMethod => "方法",
+        L10nKey::DiffContentItemClass => "类",
+        L10nKey::DiffContentItemModule => "模块",
+        L10nKey::DiffContentItemStruct => "结构体",
+        L10nKey::DiffContentItemEnum => "枚举",
+        L10nKey::DiffContentItemTrait => "trait",
+        L10nKey::DiffContentItemImpl => "impl",
+        L10nKey::DiffContentItemType => "类型",
+        L10nKey::DiffContentItemConstant => "常量",
+        L10nKey::DiffContentItemMacro => "宏",
+        L10nKey::DiffContentItemKey => "键",
+        L10nKey::DiffContentItemSection => "节",
+        L10nKey::DiffContentItemImport => "导入",
+        L10nKey::DiffContentItemVariable => "变量",
+        L10nKey::DiffContentItemArray => "数组",
+        L10nKey::DiffContentItemSequence => "序列",
+        L10nKey::DiffContentItemItem => "条目",
+        L10nKey::DiffContentItemComment => "注释",
         L10nKey::PendingConnecting => "正在连接 {machine}…",
         L10nKey::PendingUnreachable => "无法连接到 {machine}",
         L10nKey::WorktreePromptNeedsName => "worktree 需要一个名称",
@@ -2669,6 +2807,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::StatusCaffeineFooterHolding => "正在保持本机唤醒",
         L10nKey::StatusCaffeineFooterWaiting => "等待智能体开始工作",
         L10nKey::StatusCaffeineFooterError => "无法保持本机唤醒：{error}",
+        L10nKey::StatusCaffeineAccessName => "{title}，{mode}：{state}",
         L10nKey::HomeTimeJustNow => "刚刚",
         L10nKey::HomeTimeMinutesAgo => "{count} 分钟前",
         L10nKey::HomeTimeHourAgo => "1 小时前",
@@ -2943,12 +3082,13 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::CmdRightPanelGitHub => "右侧面板：GitHub",
         L10nKey::CmdRightPanelSessions => "右侧面板：会话历史",
         L10nKey::CmdRightPanelMonitor => "右侧面板：活动监视器",
+        L10nKey::CmdRightPanelBrowser => "右侧面板：浏览器",
         L10nKey::CmdFocusRightPanelNavigation => "聚焦右侧面板导航",
         L10nKey::CmdChangeTheme => "更改主题",
         L10nKey::CmdResetFontSize => "重置字号",
         L10nKey::CmdEnterFullScreen => "进入全屏",
         L10nKey::CmdClearScrollback => "清除回滚内容",
-        L10nKey::CmdToggleDiffViewMode => "切换统一 / 并排差异视图",
+        L10nKey::CmdToggleDiffViewMode => "切换差异视图（内容感知 / 统一 / 并排）",
         L10nKey::CmdDocumentDock => "文档：停靠在终端旁",
         L10nKey::CmdDocumentFill => "文档：铺满窗口",
         L10nKey::CmdToggleDocumentFill => "切换文档铺满 / 停靠",
@@ -3082,6 +3222,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::PanePark => "停放窗格",
         L10nKey::PaneRestoreParked => "恢复已停放窗格",
         L10nKey::ParkedDeckTitle => "已停放窗格",
+        L10nKey::ParkedEntryCount => "已停放窗格：{count}",
         L10nKey::ParkedRestore => "恢复",
         L10nKey::ParkedAlive => "运行中",
         L10nKey::ParkedExited => "已退出",
@@ -3122,6 +3263,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         }
         L10nKey::AppPaneNoCodingAgent => "此窗格未运行编码 agent",
         L10nKey::AppForkNoCommand => "lyrel 没有用于 {name} 的 fork 命令",
+        L10nKey::AppForkIndependentUnavailable => "lyrel 暂时无法为 {name} 创建独立 Fork 会话",
         L10nKey::AppForkLocalOnly => "无法在 SSH 或 WSL 会话里 fork {name} 会话",
         L10nKey::AppForkNoSessionId => {
             "lyrel 尚未在此窗格中看到 {name} 的会话 ID，请在“设置 → 集成”中安装其 hook"
@@ -3184,6 +3326,9 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppAgentHooksNoLyrelHooks => "没有找到 lyrel 钩子，无需移除",
         L10nKey::AppAgentHooksInstallFailed => "无法安装钩子：{error}",
         L10nKey::AppAgentHooksRemoveFailed => "无法移除钩子：{error}",
+        L10nKey::AppAgentHooksAntigravityUpdateServer => {
+            "这台远程主机的 lyrel-server 版本过旧，无法运行 Antigravity 钩子；请更新该远程主机上的 lyrel-server 后重新安装。"
+        }
         L10nKey::AppKeybindingDisplacedNote => {
             "{action} 占用了原属于 {previous} 的快捷键，{previous} 现在没有快捷键了。"
         }

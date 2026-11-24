@@ -32,10 +32,12 @@ pub(crate) fn shown_tab(tab: RightPanelTab) -> RightPanelTab {
 /// and the pane's overview; then the project's files, its version control,
 /// local to remote (Changes, GitHub), then Session History — the saved
 /// agent conversations scoped to the context pane's directory — and the
-/// Activity Monitor watching the context pane's processes. Search is not
-/// among them — it is the Files tool's input mode, commanded through
+/// Activity Monitor watching the context pane's processes. The Browser
+/// closes the list — the workspace's web pages under one strip tab, its
+/// pages kept in the tool's own list rather than the strip (#382). Search
+/// is not among them — it is the Files tool's input mode, commanded through
 /// [`RightPanelTab::Search`] and folded to Files by [`shown_tab`].
-pub(crate) const TOOL_HOST_TOOLS: [(RightPanelTab, L10nKey, &str); 6] = [
+pub(crate) const TOOL_HOST_TOOLS: [(RightPanelTab, L10nKey, &str); 7] = [
     (
         RightPanelTab::Info,
         L10nKey::PanelInfoTitle,
@@ -66,6 +68,11 @@ pub(crate) const TOOL_HOST_TOOLS: [(RightPanelTab, L10nKey, &str); 6] = [
         L10nKey::PanelMonitorTitle,
         "icons/list-tree.svg",
     ),
+    (
+        RightPanelTab::Browser,
+        L10nKey::PanelBrowserTitle,
+        "icons/globe.svg",
+    ),
 ];
 
 // Inspector chrome stays compact and leaves the width to the tools. At the
@@ -80,12 +87,12 @@ const TOOL_DIVIDER_OPACITY: f32 = 0.09;
 
 /// What the host renders for `tab`: label key and icon path. Only ever
 /// called with the layout's identities — Search has already folded into
-/// Files — so it spells the six real tools.
+/// Files — so it spells the seven real tools.
 fn tool_spec(tab: RightPanelTab) -> (RightPanelTab, L10nKey, &'static str) {
     TOOL_HOST_TOOLS
         .into_iter()
         .find(|(tool, _, _)| *tool == tab)
-        .expect("a layout identity is one of the six tools")
+        .expect("a layout identity is one of the seven tools")
 }
 
 /// The stable element id of `tab`'s tool tab.
@@ -98,6 +105,7 @@ pub(crate) fn tool_tab_id(tab: RightPanelTab) -> &'static str {
         RightPanelTab::GitHub => "tool-tab-github",
         RightPanelTab::Sessions => "tool-tab-sessions",
         RightPanelTab::Monitor => "tool-tab-monitor",
+        RightPanelTab::Browser => "tool-tab-browser",
     }
 }
 
@@ -110,6 +118,7 @@ fn tool_tab_close_id(tab: RightPanelTab) -> &'static str {
         RightPanelTab::GitHub => "tool-tab-close-github",
         RightPanelTab::Sessions => "tool-tab-close-sessions",
         RightPanelTab::Monitor => "tool-tab-close-monitor",
+        RightPanelTab::Browser => "tool-tab-close-browser",
     }
 }
 
@@ -123,6 +132,7 @@ fn tool_name(tab: RightPanelTab) -> &'static str {
         RightPanelTab::GitHub => "github",
         RightPanelTab::Sessions => "sessions",
         RightPanelTab::Monitor => "monitor",
+        RightPanelTab::Browser => "browser",
     }
 }
 
@@ -130,8 +140,10 @@ fn tool_name(tab: RightPanelTab) -> &'static str {
 /// so the width floor is set by the body, not by the open tabs.
 pub(crate) const MIN_WIDTH: f32 = 240.;
 
-/// Height of the SFTP browser's own action band below the tool header.
-const TAB_ROW_HEIGHT: f32 = TILE_SIZE_SM + 6.;
+/// Height of the row beneath the tool header: the SFTP browser's path row
+/// (breadcrumb lane plus the fixed Refresh and More tiles) and the titles of
+/// the other tools share it.
+pub(crate) const TAB_ROW_HEIGHT: f32 = TILE_SIZE_SM + 6.;
 
 /// How wide a panel edge is to grab. Both edges a window can drag — the tab
 /// sidebar's and this panel's — are the same target, so they are one number.
@@ -369,11 +381,27 @@ pub(crate) struct RightPanelState {
     pub(crate) scroll: gpui_kit::ScrollHandle,
     /// This workspace's tool layout, keyed by the workspace it belongs to —
     /// the value #348 persists per workspace. The active workspace's layout
-    /// is mirrored onto `LyrelApp::right_panel_tab` / `right_panel_visible`
-    /// (see [`LyrelApp::fold_mirror_into_tool_layout`]) so the rest of the
-    /// panel code keeps reading the fields it always has.
+    /// is mirrored onto `LyrelApp::right_panel_tab` /
+    /// `LyrelApp::right_panel_visible` (see
+    /// [`LyrelApp::fold_mirror_into_tool_layout`]) so the rest of the panel
+    /// code keeps reading the fields it always has.
     pub(crate) tool_layouts:
         std::collections::HashMap<lyrel_ui_base::session::WorkspaceId, ToolLayout>,
+    /// Live browser pages by their durable tab ids (#391). Panel state only:
+    /// what persists is the tab identity in each workspace's layout. A page
+    /// exists from its tab's first show until the tab closes (the surface
+    /// dies with it) or its workspace is left behind.
+    pub(crate) web_pages: std::collections::HashMap<String, crate::ui::browser::WebPage>,
+    /// The Browser tool page list's keyboard state. The list is one `List`
+    /// key context — arrows move the selection, Enter raises the selected
+    /// page (#382). Created lazily on the list's first paint, like the
+    /// browser chrome.
+    pub(crate) browser_list_focus: Option<gpui_kit::FocusHandle>,
+    pub(crate) browser_list_selected: Option<usize>,
+    /// The mirror pair the in-memory layout was last derived from or
+    /// stored as. `fold_mirror_into_tool_layout` compares against it: a
+    /// render where the mirror did not move leaves the layout alone.
+    stored_mirror: Option<(RightPanelTab, bool)>,
     tool_switch: ToolSwitchMotion,
 }
 
@@ -383,24 +411,77 @@ impl RightPanelState {
         layout: ToolLayout,
     ) -> Self {
         Self {
+            stored_mirror: Some((shown_tab(layout.active), layout.open)),
             tool_layouts: std::collections::HashMap::from([(workspace, layout)]),
             ..Self::default()
         }
     }
 }
 
+/// One browser page's identity in the workspace's page list. Id, address
+/// and Host are durable — the layout persists them — and `title` is only a
+/// restore-time hint. A page created blank records its first submitted web
+/// address. Its id stays the same. `source` is live-only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WebTab {
+    /// The stable instance id: unique inside the workspace's page list,
+    /// durable across restarts. Sibling requests and restoration address
+    /// the tab by this, never by position.
+    pub(crate) id: String,
+    /// Starting address used when the page is restored.
+    pub(crate) address: String,
+    /// The last title the page reported, if any (a display hint).
+    pub(crate) title: String,
+    /// The Host the page belongs to; `None` is this machine. Remote
+    /// forwarding for a bound Host is #392's seam.
+    pub(crate) host: Option<lyrel_core::core::session::RemoteRef>,
+    /// The agent pane that asked for this preview, when one did (#393).
+    /// Live-only: never written to the layout, because a daemon-assigned pane
+    /// number cannot identify the same pane after a restart. A restored tab
+    /// has no source until a fresh agent request binds one.
+    pub(crate) source: Option<lyrel_core::core::session::PreviewSourceState>,
+}
+
+impl WebTab {
+    pub(crate) fn state(&self) -> lyrel_core::core::session::WebTabState {
+        lyrel_core::core::session::WebTabState {
+            id: self.id.clone(),
+            address: self.address.clone(),
+            host: self.host.clone(),
+            title: self.title.clone(),
+        }
+    }
+
+    pub(crate) fn from_state(state: &lyrel_core::core::session::WebTabState) -> Self {
+        Self {
+            id: state.id.clone(),
+            address: state.address.clone(),
+            title: state.title.clone(),
+            host: state.host.clone(),
+            source: None,
+        }
+    }
+}
+
 /// The tool layout rendered in the Side Panel's header and saved per Workspace.
 ///
-/// Holds the open tools in tab order, the active tool, the most recently
-/// used tool, and whether the panel column is expanded. A stored `Search`
-/// choice is not a layout identity: [`shown_tab`] folds it into `Files`,
-/// whose search field the explicit search command focuses.
+/// Holds the open tool tabs in strip order, the workspace's browser pages in
+/// their own list, the active tool, the most recently used tool, and whether
+/// the panel column is expanded. A stored `Search` choice is not a layout
+/// identity: [`shown_tab`] folds it into `Files`, whose search field the
+/// explicit search command focuses.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ToolLayout {
-    /// Open tools, left to right. One entry per tool at most.
+    /// Open tool tabs, left to right. One tab per tool at most — the strip
+    /// is tool identities only (#382); browser pages are the Browser tool's
+    /// content, not strip entries.
     pub(crate) order: Vec<RightPanelTab>,
     /// The tool whose page is showing.
     pub(crate) active: RightPanelTab,
+    /// The workspace's browser pages, in list order — the Browser tool's
+    /// content. Kept whether or not the Browser tool's tab is open: closing
+    /// the tool hides the list; the pages survive (#382).
+    pub(crate) web_tabs: Vec<WebTab>,
     /// The tool an emptied panel resumes when it is reopened.
     pub(crate) last_used: RightPanelTab,
     /// Whether the panel column is expanded.
@@ -415,6 +496,7 @@ impl Default for ToolLayout {
         Self {
             order: vec![RightPanelTab::Info],
             active: RightPanelTab::Info,
+            web_tabs: Vec::new(),
             last_used: RightPanelTab::Info,
             open: false,
         }
@@ -422,15 +504,32 @@ impl Default for ToolLayout {
 }
 
 impl ToolLayout {
-    /// The Workspace Store record written for this layout (#348): versioned,
-    /// so a future shape can migrate or be dropped instead of misread. Only
-    /// the layout goes here — tool search text, filters, expansion and
-    /// drafts stay in memory, the way they always have.
+    /// The Workspace Store record written for this layout (#348, pages
+    /// appended #382): versioned, so a future shape can migrate or be
+    /// dropped instead of misread. Only the layout goes here — tool search
+    /// text, filters, expansion and drafts stay in memory, the way they
+    /// always have; the page records persist, the pages' live runtimes do
+    /// not.
     fn to_state(&self) -> lyrel_core::core::session::ToolLayoutState {
         lyrel_core::core::session::ToolLayoutState {
             version: lyrel_core::core::session::ToolLayoutState::CURRENT_VERSION,
-            order: self.order.clone(),
-            active: self.active,
+            // Tool entries in strip position order, then the page records
+            // appended: the v3 shape. Pages are the Browser tool's list, so
+            // they are stored regardless of whether the tool's tab is open.
+            order: self
+                .order
+                .iter()
+                .map(|tab| lyrel_core::core::session::TabEntryState::Tool(*tab))
+                .chain(
+                    self.web_tabs
+                        .iter()
+                        .map(|tab| lyrel_core::core::session::TabEntryState::Web(tab.state())),
+                )
+                .collect(),
+            // The selection is always a tool identity — Browser is one since
+            // #382. Which page was raised inside the tool is live-only state
+            // and deliberately not persisted.
+            active: lyrel_core::core::session::TabSelectionState::Tool(self.active),
             last_used: self.last_used,
             open: self.open,
         }
@@ -439,10 +538,59 @@ impl ToolLayout {
     /// The layout a stored record restores. An emptied `order` is kept as
     /// written — `last_used` is what an emptied panel resumes (#348), it is
     /// not replaced by the default tab set.
+    ///
+    /// Records through version 2 mixed page records into the strip order;
+    /// version 3 appends them after the tool entries (see `to_state`).
+    /// Either way the pages become `web_tabs` — only a pre-v3 record needs
+    /// the Browser tool synthesized at the first old page position, and its
+    /// web selection restored as the Browser tool's list. A web selection
+    /// whose pages are all gone resolves to `last_used`: reopening an
+    /// emptied panel returns to Info, never revives a closed page (#391).
     fn from_state(state: &lyrel_core::core::session::ToolLayoutState) -> Self {
+        let first_page_at = state
+            .order
+            .iter()
+            .position(|entry| matches!(entry, lyrel_core::core::session::TabEntryState::Web(_)));
+        let mut order: Vec<RightPanelTab> = state
+            .order
+            .iter()
+            .filter_map(|entry| match entry {
+                lyrel_core::core::session::TabEntryState::Tool(tab) => Some(*tab),
+                lyrel_core::core::session::TabEntryState::Web(_) => None,
+            })
+            .collect();
+        let web_tabs: Vec<WebTab> = state
+            .order
+            .iter()
+            .filter_map(|entry| match entry {
+                lyrel_core::core::session::TabEntryState::Web(tab) => Some(WebTab::from_state(tab)),
+                lyrel_core::core::session::TabEntryState::Tool(_) => None,
+            })
+            .collect();
+        if state.version <= 2
+            && !web_tabs.is_empty()
+            && !order.contains(&RightPanelTab::Browser)
+            && let Some(at) = first_page_at
+        {
+            // The old strip showed pages as tabs; the new one shows the
+            // Browser tool instead. It lands where the first page sat, so a
+            // restored selection opens the page list at the old position.
+            order.insert(at.min(order.len()), RightPanelTab::Browser);
+        }
+        let active = match &state.active {
+            lyrel_core::core::session::TabSelectionState::Tool(tab) => *tab,
+            lyrel_core::core::session::TabSelectionState::Web(_) => {
+                if order.contains(&RightPanelTab::Browser) {
+                    RightPanelTab::Browser
+                } else {
+                    state.last_used
+                }
+            }
+        };
         Self {
-            order: state.order.clone(),
-            active: state.active,
+            order,
+            active,
+            web_tabs,
             last_used: state.last_used,
             open: state.open,
         }
@@ -462,11 +610,25 @@ impl ToolLayout {
         self.open = true;
     }
 
+    /// Record `tab` as one of the workspace's pages and show the Browser
+    /// tool on the list. Pages are many per workspace, so there is no
+    /// activate-in-place here; the caller reuses an existing page's id when
+    /// it wants that, and a tab whose id is already listed is not
+    /// duplicated — the original address is a tab's persistent identity.
+    pub(crate) fn show_web(&mut self, tab: WebTab) {
+        if !self.web_tabs.iter().any(|open| open.id == tab.id) {
+            self.web_tabs.push(tab);
+        }
+        self.show(RightPanelTab::Browser);
+    }
+
     /// Close `tab`, removing only its display position — the tool's search,
     /// filters, expansion and drafts survive in the panel state. Closing the
     /// active tab selects the right neighbour, otherwise the left; closing
     /// the last tab collapses the panel, remembering the tool for the next
-    /// reopen.
+    /// reopen. Closing the Browser tool never closes its pages: they are the
+    /// tool's content, not its tab (#382), and a later show reopens the list
+    /// exactly as it was.
     ///
     /// Returns the tool the selection moved to, when it moved.
     pub(crate) fn close(&mut self, tab: RightPanelTab) -> Option<RightPanelTab> {
@@ -490,20 +652,33 @@ impl ToolLayout {
             }
             None => {
                 // The last tab went away: the panel collapses rather than
-                // leaving an empty shell, and `last_used` keeps the closed
-                // tool so the next reopen resumes it.
+                // leaving an empty shell. `last_used` keeps the last tool so
+                // the next reopen resumes it.
                 self.open = false;
+                self.active = self.last_used;
                 None
             }
         }
+    }
+
+    /// Drop the page `id` from the workspace's list. Pages have no strip
+    /// selection of their own — the Browser tool tab stays exactly where it
+    /// was — so this returns only the index the page held, for the caller's
+    /// right-then-left neighbour rule over what remains (`None` when the id
+    /// was not listed).
+    pub(crate) fn close_web(&mut self, id: &str) -> Option<usize> {
+        let at = self.web_tabs.iter().position(|tab| tab.id == id)?;
+        self.web_tabs.remove(at);
+        Some(at)
     }
 
     /// Expand the panel. An emptied panel resumes `last_used` — Info when
     /// the workspace has no history.
     pub(crate) fn expand(&mut self) {
         if self.order.is_empty() {
-            self.order.push(self.last_used);
-            self.active = self.last_used;
+            let resumed = shown_tab(self.last_used);
+            self.order.push(resumed);
+            self.active = resumed;
         }
         self.open = true;
     }
@@ -513,20 +688,19 @@ impl ToolLayout {
         self.open = false;
     }
 
-    /// Move an open tool to strip slot `target`, the landing position of a
-    /// drag-reorder. Only the order changes: the selection, the last-used
-    /// tool and the open state stay exactly as they were, and the entry is
-    /// the tool's identity itself, so the per-tool state keyed by it —
-    /// search, filters, expansion, drafts — travels with the tab. `target`
-    /// is clamped to the open tabs; a tool that is not open has no slot to
-    /// move and is ignored.
-    pub(crate) fn move_tab(&mut self, tab: RightPanelTab, target: usize) {
-        let tab = shown_tab(tab);
-        let Some(from) = self.order.iter().position(|open| *open == tab) else {
+    /// Move an open tab to strip slot `target`, the landing position of a
+    /// drag-reorder. Only the order changes: the selection and the open
+    /// state stay exactly as they were, and the entry is the identity
+    /// itself, so the state keyed by it — a tool's search and drafts —
+    /// travels with the tab. `target` is clamped to the open tabs; a tool
+    /// that is not open has no slot to move.
+    pub(crate) fn move_entry(&mut self, target_entry: RightPanelTab, target: usize) {
+        let Some(from) = self.order.iter().position(|open| *open == target_entry) else {
             return;
         };
         self.order.remove(from);
-        self.order.insert(target.min(self.order.len()), tab);
+        self.order
+            .insert(target.min(self.order.len()), target_entry);
     }
 }
 
@@ -534,7 +708,8 @@ impl ToolLayout {
 #[derive(Clone, Debug)]
 struct ToolTabDrag {
     /// The tool being dragged. The strip's order holds identities, so the
-    /// tool's instance state travels with the tab no matter where it lands.
+    /// instance state keyed by it — a tool's search and drafts — travels
+    /// with the tab no matter where it lands.
     tab: RightPanelTab,
     /// Where the pointer went down (window coordinates).
     grab: gpui_kit::Point<gpui_kit::Pixels>,
@@ -590,20 +765,20 @@ const TOOL_DRAG_THRESHOLD: f32 = 3.;
 const TOOL_SCROLL_EDGE: f32 = 18.;
 const TOOL_SCROLL_STEP: f32 = 14.;
 
-/// The strip slot a dragged `tab` lands in when the pointer's content-x is
+/// The strip slot a dragged entry lands in when the pointer's content-x is
 /// `pointer_x`: one slot past every other tab's centre the pointer has
 /// crossed. `slots` are last frame's laid-out tab bounds, unscrolled, so the
 /// answer is stable for the whole frame a drag commits in.
 fn strip_target(
     slots: &[Option<gpui_kit::Bounds<gpui_kit::Pixels>>],
     order: &[RightPanelTab],
-    tab: RightPanelTab,
+    tab: &RightPanelTab,
     pointer_x: gpui_kit::Pixels,
 ) -> usize {
     order
         .iter()
         .enumerate()
-        .filter(|(_, open)| **open != tab)
+        .filter(|(_, open)| *open != tab)
         .filter(|(slot, _)| {
             slots
                 .get(*slot)
@@ -682,6 +857,10 @@ pub(crate) struct PaneForwardCtx {
     /// local daemon — which is what `query_procs` asks — has never heard of
     /// them and answers with an empty list.
     pub(crate) host: Option<lyrel_ui_base::host_ops::SharedHost>,
+    /// The durable Host binding a Side Panel preview of one of this pane's
+    /// ports uses (#392). `None` for a local pane and for a plain SSH pane,
+    /// whose connection has no Workspace identity to restore a tab against.
+    pub(crate) remote_ref: Option<lyrel_core::core::session::RemoteRef>,
 }
 
 /// What a session row draws in its value column.
@@ -900,7 +1079,10 @@ impl LyrelApp {
     /// switch (#348). The mirror fields the panel code reads and the
     /// per-workspace map the tool host renders from are both seeded from the
     /// persisted record, so the arriving workspace neither inherits the
-    /// departing one's panel nor folds it into its own layout.
+    /// departing one's panel nor folds it into its own layout. Live pages
+    /// the arriving layout does not know about are destroyed with the
+    /// departure: a closed page's surface is never revived, and neither is
+    /// a departed workspace's (#391).
     pub(crate) fn adopt_tool_layout(
         &mut self,
         id: lyrel_ui_base::session::WorkspaceId,
@@ -909,26 +1091,52 @@ impl LyrelApp {
         let layout = Self::persisted_tool_layout(id, cx);
         self.right_panel.tool_switch.direction = 0.;
         self.right_panel.tool_layouts.insert(id, layout.clone());
-        self.right_panel_visible = layout.open;
-        self.right_panel_tab = layout.active;
+        self.apply_layout_mirror(&layout);
+        self.right_panel
+            .web_pages
+            .retain(|tab_id, _| layout.web_tabs.iter().any(|tab| &tab.id == tab_id));
+    }
+
+    /// The mirror pair a layout corresponds to: the selected tool and the
+    /// panel's openness. One convention everywhere keeps the fold's
+    /// fingerprint comparison honest.
+    fn layout_mirror(layout: &ToolLayout) -> (RightPanelTab, bool) {
+        (layout.active, layout.open)
+    }
+
+    /// Points the live mirror fields at `layout` and stamps the fingerprint
+    /// the fold compares against.
+    fn apply_layout_mirror(&mut self, layout: &ToolLayout) {
+        let (tab, open) = Self::layout_mirror(layout);
+        self.right_panel_tab = tab;
+        self.right_panel_visible = open;
+        self.right_panel.stored_mirror = Some((shown_tab(tab), open));
     }
 
     /// Write the layout back: the map, the live mirror fields the panel code
     /// reads, the Workspace Store record a restart restores (#348), and the
-    /// global config, which keeps carrying the choice for an older build.
-    fn store_tool_layout(&mut self, layout: &ToolLayout, cx: &mut Context<Self>) {
+    /// global config, which keeps carrying the tool choice for an older
+    /// build (the Browser tool reads as an unknown tab there — the old
+    /// build folds it to Info, the documented cost of a new tool).
+    pub(super) fn store_tool_layout(&mut self, layout: &ToolLayout, cx: &mut Context<Self>) {
         self.remember_tool_layout(layout.clone());
-        self.right_panel_visible = layout.open;
-        self.right_panel_tab = layout.active;
+        self.apply_layout_mirror(layout);
         lyrel_ui_base::session::WorkspaceStore::record_tool_layout(
             cx,
             self.workspace,
             &layout.to_state(),
         );
+        // The tool page in the panel is GPUI-only since the browser's native
+        // surface moved to the document column (#382), so the tool-switch
+        // slide has no native child to mask; no ToolSwitch cover here.
         self.update_config(cx, |cfg| {
             cfg.right_panel_tab = layout.active;
             cfg.right_panel_visible = layout.open;
         });
+        // A selection change can move the page out of the painted tree before
+        // its next paint; hide or show its native child on this write rather
+        // than waiting for the watchdog.
+        self.sync_browser_surfaces(cx);
         cx.notify();
     }
 
@@ -942,11 +1150,17 @@ impl LyrelApp {
     /// Reconcile the layout with the live mirror fields at the panel's render
     /// choke point. Legacy open entrypoints — the file tree's reveal, the
     /// palette, GitHub navigation — write `right_panel_tab` /
-    /// `right_panel_visible` directly rather than through the layout API, and
-    /// keeping the in-panel header consistent without touching those callers.
+    /// `right_panel_visible` directly rather than through the layout API,
+    /// and keeping the in-panel header consistent without touching those
+    /// callers is what the fold is for. When the mirror did not move since
+    /// the layout was last derived from it, the layout is authoritative.
     fn fold_mirror_into_tool_layout(&mut self) {
-        let tab = shown_tab(self.right_panel_tab);
+        let current = (shown_tab(self.right_panel_tab), self.right_panel_visible);
+        if self.right_panel.stored_mirror.as_ref() == Some(&current) {
+            return;
+        }
         let mut layout = self.tool_layout();
+        let tab = shown_tab(self.right_panel_tab);
         if self.right_panel_visible {
             if !layout.order.contains(&tab) {
                 layout.order.push(tab);
@@ -966,6 +1180,7 @@ impl LyrelApp {
             layout.open = false;
         }
         self.remember_tool_layout(layout);
+        self.right_panel.stored_mirror = Some(current);
     }
 
     pub(crate) fn toggle_right_panel(&mut self, cx: &mut Context<Self>) {
@@ -988,6 +1203,27 @@ impl LyrelApp {
         let opening = layout.open;
         self.store_tool_layout(&layout, cx);
         self.begin_panel_slide(crate::ui::panel_slide::PanelBoundary::Right, opening, cx);
+    }
+
+    /// Registers or lifts one covering overlay with the surface coordinator
+    /// and pushes the new visibility into the browser surfaces straight
+    /// away, so a cover change does not wait for the watchdog tick (#391).
+    pub(crate) fn set_surface_cover(
+        &mut self,
+        source: crate::ui::surface_coordinator::CoverSource,
+        cover: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if cover {
+            self.surface_coordinator.cover(source);
+        } else {
+            self.surface_coordinator.uncover(source);
+        }
+        self.sync_browser_surfaces(cx);
+        // A page concealed for longer than the paint grace is no longer in
+        // the paint set; this frame re-anchors it and paints the still frame
+        // (or lifts it) on the same turn the cover changed.
+        cx.notify();
     }
 
     /// Enter the panel's tab list from terminal or editor content, landing on
@@ -1125,6 +1361,33 @@ impl LyrelApp {
         self.store_tool_layout(&layout, cx);
     }
 
+    /// Raises one of the workspace's pages in the Browser tool: the tool
+    /// comes to the front and the page becomes the live detail in the
+    /// document column, without switching to another tool or rerouting
+    /// anything else. The strip's page rows and Search Everywhere's page
+    /// results share this one target (#382).
+    pub(crate) fn reveal_browser_page(
+        &mut self,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.right_panel_nav_wait.get() != 0 {
+            self.leave_right_panel_navigation(window, cx);
+        }
+        let tool_in_front = self.tool_layout().active != RightPanelTab::Browser;
+        let mut layout = self.tool_layout();
+        if !layout.web_tabs.iter().any(|tab| tab.id == id) {
+            return;
+        }
+        if tool_in_front {
+            self.sftp_retire_revalidation();
+        }
+        layout.show(RightPanelTab::Browser);
+        self.store_tool_layout(&layout, cx);
+        self.reveal_browser_detail(id.to_string(), cx);
+    }
+
     /// Close `tab` in the Side Panel header. Ordinary switches
     /// never move the keyboard; closing only takes focus back when the panel
     /// collapsed under it or the closed tool owned the focus — otherwise the
@@ -1146,6 +1409,51 @@ impl LyrelApp {
             self.sftp_retire_revalidation();
         }
         self.store_tool_layout(&layout, cx);
+        self.after_tab_close(&layout, moved_to, tab_list_focused, window, cx);
+    }
+
+    /// Closes one page row. What a close destroys: the live page goes with
+    /// its tab and never revives on restore (#391). The strip is untouched —
+    /// pages are the Browser tool's content, not strip entries — so the
+    /// close never moves the tool selection. When the closed page was the
+    /// raised detail, the row's right-then-left neighbour in the page list
+    /// takes its place; with no neighbour the detail stays cleared and the
+    /// Browser tool shows its list again — never an automatic replacement
+    /// out of nowhere (#382).
+    pub(crate) fn close_right_panel_web_tab(
+        &mut self,
+        id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was_detail = self.active_browser_detail() == Some(id.as_str());
+        let mut layout = self.tool_layout();
+        let removed_at = layout.close_web(&id);
+        self.right_panel.web_pages.remove(&id);
+        self.store_tool_layout(&layout, cx);
+        // The parent clears the detail stack and focuses previous content
+        // when the cleared detail was the one in front; a neighbour reveal
+        // below then raises the replacement without stealing the keyboard.
+        self.remove_browser_detail(&id, window, cx);
+        if was_detail
+            && let Some(at) = removed_at
+            && let Some(next) = layout
+                .web_tabs
+                .get(at)
+                .or_else(|| at.checked_sub(1).and_then(|left| layout.web_tabs.get(left)))
+        {
+            self.reveal_browser_detail(next.id.clone(), cx);
+        }
+    }
+
+    fn after_tab_close(
+        &mut self,
+        layout: &ToolLayout,
+        moved_to: Option<RightPanelTab>,
+        tab_list_focused: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let focus_gone = window
             .focused(cx)
             .is_some_and(|focused| !focused.is_rendered(window));
@@ -1157,6 +1465,26 @@ impl LyrelApp {
             self.right_panel_nav_wait.set(2);
         } else if !layout.open || focus_gone {
             self.focus_previous_content(window, cx);
+        }
+    }
+
+    /// The live title a page reported, mirrored into the in-memory layout so
+    /// the list row and a later restore hint read it. Memory only: the
+    /// persisted record picks the hint up on the next real layout write,
+    /// never on every title change.
+    pub(crate) fn retitle_web_tab(&mut self, tab_id: &str, title: String) {
+        let mut layout = self.tool_layout();
+        let mut changed = false;
+        for tab in &mut layout.web_tabs {
+            if tab.id == tab_id && tab.title != title {
+                tab.title = title.clone();
+                changed = true;
+            }
+        }
+        if changed {
+            // The caller notifies (the browser event pump does); remember is
+            // memory-only, so no store and no extra notify here.
+            self.remember_tool_layout(layout);
         }
     }
 
@@ -1189,6 +1517,9 @@ impl LyrelApp {
             self.sftp_close_browser(cx);
         }
         if !panel_open {
+            // Losing the last terminal tab also unmounts the panel, without a
+            // tool layout write or another paint from the native page.
+            self.sync_browser_surfaces(cx);
             self.sftp_panel.panel_was_closed = true;
             return None;
         }
@@ -1204,16 +1535,22 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let width = self.right_panel_px(window, cx);
-        let tab = self.right_panel_tab;
         let header = self.tool_host(window, cx);
 
-        let body = match tab {
+        // The layout's selection is what renders: the mirror fields were
+        // reconciled into it at the render choke point above, so a tool
+        // selected through any entry point paints its page here. The Browser
+        // tool's body is the workspace's page list; a raised page paints in
+        // the document column, beside the panel, not inside it (#382).
+        let selected = self.tool_layout().active;
+        let body = match selected {
             RightPanelTab::Info => self.render_panel_info(window, cx),
             RightPanelTab::Scm => self.render_panel_scm(window, cx),
             RightPanelTab::Files | RightPanelTab::Search => self.render_panel_files(window, cx),
             RightPanelTab::GitHub => self.render_panel_github(window, cx),
             RightPanelTab::Sessions => self.render_panel_sessions(window, cx),
             RightPanelTab::Monitor => self.render_panel_monitor(window, cx),
+            RightPanelTab::Browser => self.render_browser_page_list(window, cx),
         };
         let body = self.with_tool_page_entrance(body);
         let (backing, handle) = self.right_panel_resize(window, cx);
@@ -1246,6 +1583,264 @@ impl LyrelApp {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         self.render_right_panel_mount(window, cx)
+    }
+
+    /// The Browser tool's body: the workspace's page list. Choosing Browser
+    /// from the `+` menu or the strip lands here — never straight on a new
+    /// blank page; the New action in the title row opens one (#382). Each
+    /// row raises the page it names into the document column beside the
+    /// panel (`reveal_browser_page` — the tool stays, nothing reroutes),
+    /// shows the page's title and its current URL in the Host's own
+    /// spelling — with the agent preview's source badge beside the URL when
+    /// one asked for the page — and carries its own close: the page goes
+    /// away, the list remains. The row of the raised page reads as current.
+    ///
+    /// The list is one keyboard scope, the same `List` context the Session
+    /// tool uses: arrows move the selection, Enter raises it, and every row
+    /// and its close button carry accessible names.
+    fn render_browser_page_list(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        use gpui_kit::base::actions::{Confirm, SelectDown, SelectUp};
+        let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
+        let fg = cx.theme().foreground;
+        let muted = cx.theme().muted_foreground;
+        use gpui_kit::MouseButton;
+        let new_page = Button::new("browser-list-new")
+            .icon(Icon::new(IconName::Plus))
+            .label(t(L10nKey::BrowserListNew))
+            .custom(
+                gpui_kit::component::button::ButtonCustomVariant::new(cx)
+                    .color(cx.theme().transparent)
+                    .foreground(muted)
+                    .hover(fg.opacity(TOOL_HOVER_OPACITY))
+                    .active(fg.opacity(TOOL_SELECTED_OPACITY)),
+            )
+            .small()
+            .h(px(HEADING_TILE))
+            .rounded(px(TOOL_TAB_RADIUS / STEP))
+            .accessibility_label(t(L10nKey::BrowserListNew))
+            .tooltip(t(L10nKey::BrowserListNew))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.open_web_page("about:blank", None, cx);
+                this.focus_browser_address(window, cx);
+            }));
+        let title = self.panel_title(
+            t(L10nKey::PanelBrowserTitle),
+            None,
+            Some(new_page.into_any_element()),
+            window,
+            cx,
+        );
+        let layout = self.tool_layout();
+        let len = layout.web_tabs.len();
+        // Clamp a selection left over from a longer list.
+        let selected = self
+            .right_panel
+            .browser_list_selected
+            .filter(|ix| *ix < len);
+        let raised = self.active_browser_detail().map(|id| id.to_string());
+        if len == 0 {
+            return self.panel_scroll(
+                self.panel_empty(
+                    t(L10nKey::BrowserListEmpty),
+                    Some(t(L10nKey::BrowserListEmptyHint)),
+                    cx,
+                ),
+                title,
+            );
+        }
+        let focus = self
+            .right_panel
+            .browser_list_focus
+            .clone()
+            .unwrap_or_else(|| {
+                let handle = cx.focus_handle().tab_stop(true);
+                self.right_panel.browser_list_focus = Some(handle.clone());
+                handle
+            });
+        let mut list = v_flex()
+            .id("browser-list")
+            .test_support()
+            .w_full()
+            .py(px(4.))
+            .track_focus(&focus)
+            .key_context("List")
+            .on_action(cx.listener(|this, _: &SelectUp, _window, cx| {
+                this.move_browser_list_selection(false, cx);
+            }))
+            .on_action(cx.listener(|this, _: &SelectDown, _window, cx| {
+                this.move_browser_list_selection(true, cx);
+            }))
+            .on_action(cx.listener(|this, _: &Confirm, window, cx| {
+                this.confirm_browser_list_selection(window, cx);
+            }));
+        for (ix, tab) in layout.web_tabs.iter().enumerate() {
+            // Two lines a row: the title reads live once the page reports
+            // one (the stored hint covers restore until then), the URL is
+            // the page's current display URL — the Host's own spelling, the
+            // forwarded endpoint is an implementation detail (#392). A page
+            // an agent preview asked for carries that pane's badge on the
+            // URL line, where it can crowd the URL without ever touching
+            // the title's layout.
+            let page = self.right_panel.web_pages.get(&tab.id);
+            let label = page.map(|page| page.display_title(tab)).unwrap_or_else(|| {
+                if tab.title.is_empty() {
+                    tab.address.clone()
+                } else {
+                    tab.title.clone()
+                }
+            });
+            let url = page
+                .map(|page| page.display_url.clone())
+                .filter(|url| !url.is_empty())
+                .unwrap_or_else(|| tab.address.clone());
+            let source = self.agent_preview_source_label(tab, cx);
+            let row_id = gpui_kit::SharedString::from(format!("browser-list-row-{}", tab.id));
+            let close_tip = t_fmt(L10nKey::ToolHostCloseWeb, &[("page", label.as_str())]);
+            let is_raised = raised.as_deref() == Some(tab.id.as_str());
+            let is_selected = selected == Some(ix);
+            let tab_id = tab.id.clone();
+            let close_id = tab.id.clone();
+            let a11y = format!("{label} — {url}");
+            list = list.child(
+                h_flex()
+                    .id(row_id)
+                    .test_support()
+                    .w_full()
+                    // Two text lines with a pixel of breathing room: one row
+                    // reads as one page, not two stacked rows.
+                    .h(px(2. * INFO_ROW_H + 4.))
+                    .px(px(TEXT_INSET))
+                    .items_center()
+                    .rounded(ROW_FILL_RADIUS)
+                    .gap(px(8.))
+                    .cursor_pointer()
+                    .role(gpui_kit::Role::ListItem)
+                    .aria_label(gpui_kit::SharedString::from(a11y))
+                    .aria_selected(is_selected)
+                    .when(is_raised, |r| r.bg(gpui_kit::rgb(sf.selected)))
+                    .when(!is_raised, |r| r.hover(|s| s.bg(gpui_kit::rgb(sf.hover))))
+                    .on_mouse_down(MouseButton::Left, {
+                        let focus = focus.clone();
+                        move |_, window, cx| {
+                            cx.stop_propagation();
+                            focus.focus(window, cx);
+                        }
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.right_panel.browser_list_selected = Some(ix);
+                        this.reveal_browser_page(&tab_id, window, cx);
+                    }))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .gap(px(1.))
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_size(rems(TEXT))
+                                    .when(is_raised, |title| {
+                                        title.font_weight(gpui_kit::FontWeight::MEDIUM)
+                                    })
+                                    .text_color(fg)
+                                    .child(label),
+                            )
+                            .child(
+                                h_flex()
+                                    .min_w_0()
+                                    .gap(px(6.))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .truncate()
+                                            .text_size(rems(META))
+                                            .text_color(muted)
+                                            .child(url),
+                                    )
+                                    .children(source.map(|source| {
+                                        div()
+                                            .flex_none()
+                                            .text_size(rems(META))
+                                            .text_color(muted)
+                                            .child(source)
+                                    })),
+                            ),
+                    )
+                    .child(
+                        crate::ui::window_chrome::chrome_tile_sized(
+                            Button::new(format!("browser-list-row-close-{}", tab.id))
+                                .icon(Icon::new(IconName::Close))
+                                .accessibility_label(close_tip.clone()),
+                            TILE_SIZE_XS,
+                            TILE_GLYPH_XS,
+                            false,
+                            cx,
+                        )
+                        .rounded(px(4.))
+                        .tooltip(gpui_kit::SharedString::from(close_tip))
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.close_right_panel_web_tab(close_id.clone(), window, cx);
+                            },
+                        )),
+                    ),
+            );
+        }
+        self.panel_scroll(list.into_any_element(), title)
+    }
+
+    /// Move the Browser list's keyboard selection one row, clamped at both
+    /// ends. Entering the list from nothing lands on the first row going
+    /// down, the last going up.
+    pub(crate) fn move_browser_list_selection(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let len = self.tool_layout().web_tabs.len();
+        if len == 0 {
+            return;
+        }
+        let next = match self.right_panel.browser_list_selected {
+            Some(ix) => {
+                let ix = ix as i64 + if forward { 1 } else { -1 };
+                (ix.clamp(0, len as i64 - 1)) as usize
+            }
+            None => {
+                if forward {
+                    0
+                } else {
+                    len - 1
+                }
+            }
+        };
+        if self.right_panel.browser_list_selected != Some(next) {
+            self.right_panel.browser_list_selected = Some(next);
+            cx.notify();
+        }
+    }
+
+    /// Raise the page under the Browser list's keyboard selection — what
+    /// Enter runs, the same target a row's click reaches.
+    pub(crate) fn confirm_browser_list_selection(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ix) = self.right_panel.browser_list_selected else {
+            return;
+        };
+        let Some(tab_id) = self
+            .tool_layout()
+            .web_tabs
+            .get(ix)
+            .map(|tab| tab.id.clone())
+        else {
+            return;
+        };
+        self.reveal_browser_page(&tab_id, window, cx);
     }
 
     /// Offset only the incoming body, clipped to the panel's content band.
@@ -1438,14 +2033,25 @@ impl LyrelApp {
         let state = strip_state.read(cx).clone();
         let layout = self.tool_layout();
 
-        // Opening or selecting a tab reveals it: `prev_active` starts `None`
-        // on a fresh mount (the keyed state is dropped with the collapsed
-        // header), so a re-expanded panel re-reveals its selection too. The
-        // handle applies the reveal while its container lays out.
-        if state.prev_active != Some(layout.active) {
-            if let Some(index) = layout.order.iter().position(|open| *open == layout.active) {
-                state.scroll.scroll_to_item(index);
-            }
+        // Reveal again once the strip has laid out its new viewport. GPUI
+        // applies scroll_to_item before refreshing the handle's viewport,
+        // so the first pass can use the previous frame's width or origin.
+        if state.prev_active.as_ref() != Some(&layout.active)
+            && let Some(index) = layout.order.iter().position(|open| *open == layout.active)
+        {
+            state.scroll.scroll_to_item(index);
+            let active = layout.active;
+            let strip = strip_state.downgrade();
+            window.defer(cx, move |window, cx| {
+                let Some(strip) = strip.upgrade() else {
+                    return;
+                };
+                let state = strip.read(cx);
+                if state.prev_active.as_ref() == Some(&active) {
+                    state.scroll.scroll_to_item(index);
+                    window.refresh();
+                }
+            });
         }
         // The slots the strip rendered last frame, in last frame's order —
         // the geometry a drag measures against for one whole frame.
@@ -1456,18 +2062,25 @@ impl LyrelApp {
         let drag = state.drag.clone().filter(|drag| drag.started);
         let rendered_order = state.rendered_order.clone();
         let tabs = layout.order.iter().enumerate().map(|(slot, open)| {
-            let tab = *open;
-            let current = layout.active == tab;
-            let (_, label_key, icon) = tool_spec(tab);
+            let entry = *open;
+            let current = entry == layout.active;
+            // Per-tab chrome: the label and icon spell from the tool
+            // registry, the close tip names the tool.
+            let element_id = gpui_kit::SharedString::from(tool_tab_id(entry));
+            let group = element_id.clone();
+            let animation_id = element_id.clone();
+            let (_, label_key, icon) = tool_spec(entry);
+            let label = t(label_key).to_string();
+            let close_tip = t_fmt(L10nKey::ToolHostClose, &[("tool", t(label_key))]);
+            let close_id = gpui_kit::SharedString::from(tool_tab_close_id(entry));
+            let is_scm = entry == RightPanelTab::Scm;
             let ink = match current {
                 true => body_ink,
                 false => muted,
             };
-            let group = gpui_kit::SharedString::from(tool_tab_id(tab));
-            let close_tip = t_fmt(L10nKey::ToolHostClose, &[("tool", t(label_key))]);
-            let el = NavTab::new(tool_tab_id(tab))
+            let el = NavTab::new(element_id)
                 .selected(current)
-                .accessibility_label(t(label_key))
+                .accessibility_label(label.clone())
                 .line_height(gpui_kit::relative(std::f32::consts::GOLDEN_RATIO))
                 // Keep content focus and arm before NavTab stops bubbling.
                 .capture_any_mouse_down({
@@ -1479,7 +2092,7 @@ impl LyrelApp {
                         }
                         strip_state.update(cx, |state, _| {
                             state.drag = Some(ToolTabDrag {
-                                tab,
+                                tab: entry,
                                 grab: event.position,
                                 pointer: event.position,
                                 started: false,
@@ -1519,10 +2132,10 @@ impl LyrelApp {
                     h_flex()
                         .min_w_0()
                         .gap_1()
-                        .child(div().min_w_0().truncate().child(t(label_key)))
+                        .child(div().min_w_0().truncate().child(label))
                         // Only Changes may show a real changed-item count,
                         // the same number its tool page headlines with.
-                        .when(tab == RightPanelTab::Scm, |label| {
+                        .when(is_scm, |label| {
                             label.when_some(changes_count.clone(), |label, count| {
                                 label.child(
                                     div()
@@ -1541,7 +2154,7 @@ impl LyrelApp {
                 // strip; the button itself paints on hover or selection.
                 .child(
                     div()
-                        .id(tool_tab_close_id(tab))
+                        .id(close_id)
                         .test_support()
                         .flex_shrink_0()
                         .size(rems(TOOL_CLOSE_SLOT))
@@ -1578,13 +2191,15 @@ impl LyrelApp {
                             }
                         })
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if window.default_prevented() {
-                                return;
-                            }
-                            cx.stop_propagation();
-                            this.close_right_panel_tab(tab, window, cx);
-                        })),
+                        .on_click({
+                            cx.listener(move |this, _, window, cx| {
+                                if window.default_prevented() {
+                                    return;
+                                }
+                                cx.stop_propagation();
+                                this.close_right_panel_tab(entry, window, cx);
+                            })
+                        }),
                 )
                 .on_click(
                     cx.listener(move |this, event: &gpui_kit::ClickEvent, window, cx| {
@@ -1598,8 +2213,8 @@ impl LyrelApp {
                             this.right_panel_navigation_pointer(window, cx);
                         }
                         let layout = this.tool_layout();
-                        if !layout.open || layout.active != tab {
-                            this.set_right_panel_tab(tab, window, cx);
+                        if !layout.open || layout.active != entry {
+                            this.set_right_panel_tab(entry, window, cx);
                         }
                     }),
                 );
@@ -1615,7 +2230,7 @@ impl LyrelApp {
                 Slide(gpui_kit::Pixels),
             }
             let visual = match drag.as_ref() {
-                Some(drag) if drag.tab == tab => ToolTabVisual::Float(
+                Some(drag) if drag.tab == *open => ToolTabVisual::Float(
                     slots
                         .get(slot)
                         .and_then(|bounds| {
@@ -1624,7 +2239,7 @@ impl LyrelApp {
                         .unwrap_or(px(0.)),
                 ),
                 Some(_) => {
-                    let from = rendered_order.iter().position(|open| *open == tab);
+                    let from = rendered_order.iter().position(|other| *other == *open);
                     match from.and_then(|from| match (slots.get(from), slots.get(slot)) {
                         (Some(Some(from)), Some(Some(to))) => Some(from.center().x - to.center().x),
                         _ => None,
@@ -1645,8 +2260,7 @@ impl LyrelApp {
                     .with_animation(
                         gpui_kit::SharedString::from(format!(
                             "tool-tab-slide-{}-{}",
-                            tool_tab_id(tab),
-                            generation
+                            animation_id, generation
                         )),
                         Animation::new(std::time::Duration::from_millis(
                             crate::ui::tab_strip::REORDER_SLIDE_MS,
@@ -1682,11 +2296,10 @@ impl LyrelApp {
                         cx.stop_propagation();
                     }
                     if event.keystroke.key == "w" && event.keystroke.modifiers.control {
-                        // The roving stop sits on the selected tab, so closing
-                        // it from the keyboard follows the same rule as the
-                        // pointer: right neighbour, otherwise left.
-                        let active = this.tool_layout().active;
-                        this.close_right_panel_tab(active, window, cx);
+                        // The roving stop sits on the selected tab, so
+                        // closing it from the keyboard follows the same rule
+                        // as the pointer: right neighbour, otherwise left.
+                        this.close_right_panel_tab(this.tool_layout().active, window, cx);
                         cx.stop_propagation();
                     }
                 }),
@@ -1804,11 +2417,11 @@ impl LyrelApp {
                                 let slots: Vec<_> = (0..order.len())
                                     .map(|slot| state.scroll.bounds_for_item(slot))
                                     .collect();
-                                let target = strip_target(&slots, order, drag.tab, pointer_x);
+                                let target = strip_target(&slots, order, &drag.tab, pointer_x);
                                 if Some(target) != order.iter().position(|open| *open == drag.tab) {
                                     app.update(cx, |this, _cx| {
                                         let mut layout = this.tool_layout();
-                                        layout.move_tab(drag.tab, target);
+                                        layout.move_entry(drag.tab, target);
                                         this.right_panel
                                             .tool_layouts
                                             .insert(this.workspace, layout);
@@ -1847,10 +2460,10 @@ impl LyrelApp {
                                         let target = strip_target(
                                             &slots,
                                             &state.rendered_order,
-                                            drag.tab,
+                                            &drag.tab,
                                             pointer_x,
                                         );
-                                        layout.move_tab(drag.tab, target);
+                                        layout.move_entry(drag.tab, target);
                                         this.store_tool_layout(&layout, cx);
                                     });
                                 }
@@ -1885,6 +2498,9 @@ impl LyrelApp {
 
     fn tool_add_button(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let app = cx.entity().downgrade();
+        // The menu builder moves its own copy; the open-state callback keeps
+        // this one.
+        let menu_app = app.clone();
         Button::new("side-panel-tool-add")
             .icon(Icon::new(IconName::Plus))
             .custom(
@@ -1900,11 +2516,18 @@ impl LyrelApp {
             .rounded(px(TOOL_TAB_RADIUS / STEP))
             .accessibility_label(t(L10nKey::ToolHostAdd))
             .tooltip(t(L10nKey::ToolHostAdd))
-            // Built when the menu opens, not when the strip draws.
+            // Built when the menu opens, not when the strip draws. While the
+            // menu is up it covers whatever the panel shows — including a
+            // native browser surface — so its open state registers with the
+            // surface coordinator (#391's first overlay seam; #403 adds the
+            // rest).
             .dropdown_menu(move |menu, _window, _cx| {
                 let mut menu = menu.min_w(px(180.));
+                // The Browser is one of the host tools: choosing it here
+                // shows the tool's page list — a new blank page comes from
+                // the list's own New action, not from the menu (#382).
                 for (tab, label_key, icon) in TOOL_HOST_TOOLS {
-                    let app = app.clone();
+                    let app = menu_app.clone();
                     let id = format!("tool-add-{}", tool_name(tab));
                     menu = menu.item(
                         gpui_kit::component::menu::PopupMenuItem::element(move |_, _| {
@@ -1927,6 +2550,20 @@ impl LyrelApp {
                     );
                 }
                 menu
+            })
+            .on_open_change({
+                let app = app.clone();
+                move |open, _window, cx| {
+                    if let Some(app) = app.upgrade() {
+                        app.update(cx, |this, cx| {
+                            this.set_surface_cover(
+                                crate::ui::surface_coordinator::CoverSource::ToolAddMenu,
+                                *open,
+                                cx,
+                            );
+                        });
+                    }
+                }
             })
     }
 
@@ -2515,6 +3152,14 @@ impl LyrelApp {
                 tiles_wide += 1;
                 let port = p.port;
                 let direct = p.authority();
+                // A managed remote Workspace opens the preview in the Side
+                // Panel, bound to its Host (#392). A socket pinned to one
+                // specific interface is not a loopback forward target, so it
+                // keeps the existing system-browser path.
+                let preview_host = ctx
+                    .remote_ref
+                    .clone()
+                    .filter(|_| lyrel_core::daemon::protocol::PortEntry::reaches_loopback(&p.addr));
                 actions = actions.child(
                     self.info_tile(
                         ("panel-port-open", i),
@@ -2523,7 +3168,7 @@ impl LyrelApp {
                         cx,
                     )
                     .on_click(cx.listener(move |this, _, _window, cx| {
-                        this.open_pane_port(port, direct.clone(), cx)
+                        this.open_pane_port(port, direct.clone(), preview_host.clone(), cx)
                     })),
                 );
             }
@@ -2699,6 +3344,7 @@ impl LyrelApp {
         &mut self,
         port: u16,
         direct_authority: String,
+        preview_host: Option<lyrel_core::core::session::RemoteRef>,
         cx: &mut Context<Self>,
     ) {
         use lyrel_terminal::view::PortRoute;
@@ -2706,6 +3352,14 @@ impl LyrelApp {
             PortRoute::Blocked => {}
             PortRoute::Direct => cx.open_url(&format!("http://{direct_authority}")),
             PortRoute::Forward => {
+                // A managed remote Workspace previews the page in the Side
+                // Panel, bound to its Host: the original `localhost:port`
+                // address stays the page's identity and the browser verifies
+                // the forward before load and external open (#392).
+                if let Some(host) = preview_host {
+                    self.open_web_page(&format!("http://localhost:{port}"), Some(host), cx);
+                    return;
+                }
                 if let Some(f) = self
                     .loopback_panel
                     .managed()
@@ -2796,6 +3450,9 @@ impl LyrelApp {
             host: (!view.host_id().is_local())
                 .then(|| view.host(cx))
                 .flatten(),
+            remote_ref: view.workspace().and_then(|workspace| {
+                lyrel_ui_base::session::WorkspaceStore::remote_ref(cx, workspace.workspace)
+            }),
         })
     }
 
@@ -3132,9 +3789,8 @@ impl LyrelApp {
 
     fn render_panel_files(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let remote = self.remote_files_pane(window, cx);
-        let host = remote.as_ref().map(|(_, host)| host.clone());
         if self.sftp_sync_pane(remote.map(|(id, _)| id), window, cx) {
-            return self.render_panel_sftp(host.unwrap_or_default(), window, cx);
+            return self.render_panel_sftp(cx);
         }
 
         if std::mem::take(&mut self.panel_search.focus_pending) {
@@ -3305,9 +3961,19 @@ fn compact_path(path: &std::path::Path, home: Option<&std::path::Path>) -> Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{InfoRow, InfoValue, ToolLayout, format_rtt, forwards_port, shown_tab};
+    use super::{InfoRow, InfoValue, ToolLayout, WebTab, format_rtt, forwards_port, shown_tab};
     use crate::daemon::protocol::{ForwardStatus, ManagedForward, SshForwardKind};
-    use lyrel_core::core::config::RightPanelTab::{Files, GitHub, Info, Scm, Search};
+    use lyrel_core::core::config::RightPanelTab::{Browser, Files, GitHub, Info, Scm, Search};
+
+    fn web(id: &str, address: &str) -> WebTab {
+        WebTab {
+            id: id.to_string(),
+            address: address.to_string(),
+            title: String::new(),
+            host: None,
+            source: None,
+        }
+    }
 
     /// A workspace's first layout: only Info prepared, behind a collapsed
     /// panel, whatever an old global config selection said (#345).
@@ -3316,6 +3982,7 @@ mod tests {
         let layout = ToolLayout::default();
         assert_eq!(layout.order, [Info]);
         assert_eq!(layout.active, Info);
+        assert!(layout.web_tabs.is_empty());
         assert_eq!(layout.last_used, Info);
         assert!(!layout.open);
     }
@@ -3450,13 +4117,13 @@ mod tests {
         assert_eq!(layout.order, [Info, Files, Scm, GitHub]);
         // Drag Info across both neighbours to the trailing end while
         // Changes stays selected.
-        layout.move_tab(Info, 3);
+        layout.move_entry(Info, 3);
         assert_eq!(layout.order, [Files, Scm, GitHub, Info]);
         assert_eq!(layout.active, Scm);
         assert_eq!(layout.last_used, Scm);
         assert!(layout.open);
         // And back to the front.
-        layout.move_tab(Info, 0);
+        layout.move_entry(Info, 0);
         assert_eq!(layout.order, [Info, Files, Scm, GitHub]);
         assert_eq!(layout.active, Scm, "reordering never reselects");
     }
@@ -3468,13 +4135,214 @@ mod tests {
     fn moving_a_tab_clamps_the_landing_and_ignores_closed_tools() {
         let mut layout = ToolLayout::default();
         layout.show(Files);
-        layout.move_tab(Info, 99);
+        layout.move_entry(Info, 99);
         assert_eq!(layout.order, [Files, Info], "the landing clamps");
         let settled = layout.clone();
-        layout.move_tab(Info, 1);
+        layout.move_entry(Info, 1);
         assert_eq!(layout.order, [Files, Info], "no neighbour crossed");
-        layout.move_tab(GitHub, 0);
+        layout.move_entry(GitHub, 0);
         assert_eq!(layout, settled, "a closed tool has no slot to move");
+    }
+
+    /// A page is the Browser tool's content, not a strip entry: opening one
+    /// lists it and shows the Browser tool (#382).
+    #[test]
+    fn showing_a_page_lists_it_and_selects_the_browser_tool() {
+        let mut layout = ToolLayout::default();
+        layout.show_web(web("a", "http://a.test"));
+        assert_eq!(layout.order, [Info, Browser], "pages never join the strip");
+        assert_eq!(layout.active, Browser);
+        assert_eq!(layout.last_used, Browser);
+        assert!(layout.open);
+        assert_eq!(layout.web_tabs, [web("a", "http://a.test")]);
+    }
+
+    /// A page's id is its identity: re-showing the same id never duplicates
+    /// the row, and the first address wins — the original address is what
+    /// the tab persists.
+    #[test]
+    fn pages_are_deduped_by_id() {
+        let mut layout = ToolLayout::default();
+        layout.show_web(web("a", "http://a.test"));
+        layout.show_web(web("a", "http://elsewhere.test"));
+        assert_eq!(layout.web_tabs.len(), 1);
+        assert_eq!(layout.web_tabs[0].address, "http://a.test");
+    }
+
+    /// Closing the Browser tool hides the list; the pages survive for the
+    /// tool's next show. Closing a page never touches the strip (#382).
+    #[test]
+    fn closing_the_browser_tool_keeps_its_pages() {
+        let mut layout = ToolLayout::default();
+        layout.show_web(web("a", "http://a.test"));
+        layout.show_web(web("b", "http://b.test"));
+        assert_eq!(layout.close(Browser), Some(Info), "strip neighbour rule");
+        assert_eq!(layout.order, [Info]);
+        assert_eq!(
+            layout.web_tabs,
+            [web("a", "http://a.test"), web("b", "http://b.test")],
+            "pages are the tool's content, not its tab"
+        );
+        layout.show(Browser);
+        assert_eq!(layout.web_tabs.len(), 2, "the list reopens as it was");
+        // Closing a page reports the row's index and leaves the strip alone.
+        assert_eq!(layout.close_web("a"), Some(0));
+        assert_eq!(layout.web_tabs, [web("b", "http://b.test")]);
+        assert_eq!(layout.order, [Info, Browser]);
+        assert_eq!(layout.active, Browser);
+        assert_eq!(layout.close_web("gone"), None);
+    }
+
+    fn page_state(id: &str, address: &str) -> lyrel_core::core::session::WebTabState {
+        lyrel_core::core::session::WebTabState {
+            id: id.to_string(),
+            address: address.to_string(),
+            host: None,
+            title: String::new(),
+        }
+    }
+
+    /// The #391 → #382 migration: a v2 record mixed pages into the strip
+    /// order. It restores with the pages as the Browser tool's list, the
+    /// Browser tool synthesized where the first page sat, and a page
+    /// selection opening the list.
+    #[test]
+    fn a_v2_layout_migrates_pages_into_the_browser_tool() {
+        use lyrel_core::core::session::{TabEntryState, TabSelectionState, ToolLayoutState};
+        let state = ToolLayoutState {
+            version: 2,
+            order: vec![
+                TabEntryState::Tool(Files),
+                TabEntryState::Web(page_state("a", "http://a.test")),
+                TabEntryState::Tool(Scm),
+                TabEntryState::Web(page_state("b", "http://b.test")),
+            ],
+            active: TabSelectionState::Web("b".into()),
+            last_used: Files,
+            open: true,
+        };
+        let layout = ToolLayout::from_state(&state);
+        assert_eq!(
+            layout.order,
+            [Files, Browser, Scm],
+            "the Browser tool lands at the first old page position"
+        );
+        assert_eq!(layout.active, Browser, "a page selection opens the list");
+        assert_eq!(
+            layout.web_tabs,
+            [web("a", "http://a.test"), web("b", "http://b.test")],
+            "the pages keep their order and addresses"
+        );
+        assert_eq!(layout.last_used, Files, "the resume target is untouched");
+        assert!(layout.open);
+    }
+
+    /// A v2 record whose selection was a tool keeps it — the Browser tool
+    /// is added for the pages, not pushed in front of the user.
+    #[test]
+    fn a_v2_tool_selection_survives_the_browser_synthesis() {
+        use lyrel_core::core::session::{TabEntryState, TabSelectionState, ToolLayoutState};
+        let state = ToolLayoutState {
+            version: 2,
+            order: vec![
+                TabEntryState::Tool(Files),
+                TabEntryState::Web(page_state("a", "http://a.test")),
+            ],
+            active: TabSelectionState::Tool(Files),
+            last_used: Files,
+            open: true,
+        };
+        let layout = ToolLayout::from_state(&state);
+        assert_eq!(layout.order, [Files, Browser]);
+        assert_eq!(layout.active, Files);
+        assert_eq!(layout.web_tabs.len(), 1);
+    }
+
+    /// A v2 record without pages gains no Browser tool.
+    #[test]
+    fn a_v2_layout_without_pages_stays_browser_free() {
+        use lyrel_core::core::session::{TabEntryState, TabSelectionState, ToolLayoutState};
+        let state = ToolLayoutState {
+            version: 2,
+            order: vec![TabEntryState::Tool(Files), TabEntryState::Tool(Scm)],
+            active: TabSelectionState::Tool(Scm),
+            last_used: Files,
+            open: true,
+        };
+        let layout = ToolLayout::from_state(&state);
+        assert_eq!(layout.order, [Files, Scm]);
+        assert_eq!(layout.active, Scm);
+        assert!(layout.web_tabs.is_empty());
+    }
+
+    /// A v2 page selection whose pages are all gone resolves to the
+    /// last-used tool: reopening an emptied panel returns to Info, never
+    /// revives a closed page (#391's rule, kept by the migration).
+    #[test]
+    fn a_dangling_v2_page_selection_resolves_to_last_used() {
+        use lyrel_core::core::session::{TabEntryState, TabSelectionState, ToolLayoutState};
+        let state = ToolLayoutState {
+            version: 2,
+            order: vec![TabEntryState::Tool(Info)],
+            active: TabSelectionState::Web("gone".into()),
+            last_used: Files,
+            open: true,
+        };
+        let layout = ToolLayout::from_state(&state);
+        assert_eq!(layout.order, [Info]);
+        assert_eq!(layout.active, Files);
+        assert!(layout.web_tabs.is_empty());
+    }
+
+    /// The v3 write: tool entries in strip position order, then the page
+    /// records appended — kept whether or not the Browser tool's tab is
+    /// open. The selection is a tool identity; the raised page is live-only
+    /// and never persisted.
+    #[test]
+    fn a_v3_layout_round_trips_tools_then_appended_pages() {
+        use lyrel_core::core::session::{TabEntryState, TabSelectionState, ToolLayoutState};
+        let mut layout = ToolLayout::default();
+        layout.show(Files);
+        layout.show(Browser);
+        layout.show(Scm);
+        layout.show(Browser);
+        layout.show_web(web("a", "http://a.test"));
+        layout.show_web(web("b", "http://b.test"));
+        let state = layout.to_state();
+        assert_eq!(state.version, ToolLayoutState::CURRENT_VERSION);
+        assert_eq!(
+            state.order,
+            [
+                TabEntryState::Tool(Info),
+                TabEntryState::Tool(Files),
+                TabEntryState::Tool(Browser),
+                TabEntryState::Tool(Scm),
+                TabEntryState::Web(page_state("a", "http://a.test")),
+                TabEntryState::Web(page_state("b", "http://b.test")),
+            ],
+            "tools keep their strip positions; pages append"
+        );
+        assert_eq!(
+            state.active,
+            TabSelectionState::Tool(Browser),
+            "the selection is the tool, not a page"
+        );
+
+        let back = ToolLayout::from_state(&state);
+        assert_eq!(back, layout, "a v3 record restores exactly");
+
+        // The Browser tool closed: the pages are stored anyway.
+        let mut closed = layout.clone();
+        closed.close(Browser);
+        let closed_state = closed.to_state();
+        assert_eq!(
+            closed_state.order.last(),
+            Some(&TabEntryState::Web(page_state("b", "http://b.test"))),
+            "pages append regardless of the tool's open state"
+        );
+        let back = ToolLayout::from_state(&closed_state);
+        assert_eq!(back.web_tabs.len(), 2);
+        assert!(!back.order.contains(&Browser));
     }
 
     fn forward(kind: SshForwardKind, target_host: &str, target_port: u16) -> ManagedForward {
@@ -3636,12 +4504,17 @@ mod persistence_tests {
     //! across a simulated restart — the store global reloaded from the pinned
     //! scratch `views.json` standing in for the process relaunch — and a
     //! workspace without a written layout starts from Info, collapsed,
-    //! whatever the old global config selection says.
+    //! whatever the old global config selection says. #382's shape joins
+    //! them: the Browser is a tool, its pages are the tool's list, and a
+    //! pre-#382 record still restores — pages and all.
 
-    use super::ToolLayout;
+    use super::{ToolLayout, WebTab};
     use gpui_kit::test::TestWindowExt as _;
     use gpui_kit::{TestAppContext, VisualTestContext};
-    use lyrel_core::core::config::RightPanelTab::{Files, GitHub, Info, Scm};
+    use lyrel_core::core::config::RightPanelTab::{Browser, Files, GitHub, Info, Scm};
+    use lyrel_core::core::session::{
+        TabEntryState, TabSelectionState, ToolLayoutState, WebTabState,
+    };
     use lyrel_ui_base::actions::{
         ShowRightPanelChanges, ShowRightPanelFiles, ShowRightPanelGitHub,
     };
@@ -3652,6 +4525,185 @@ mod persistence_tests {
     /// below each reload the store from it; the lock keeps their fixtures
     /// apart even as the suite grows more store-aware tests.
     static VIEWS_FILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// #382's consumer: pages live in the Browser tool's list, keep their
+    /// order and original addresses across a restart, and closing every page
+    /// — then the tools — reopens on Info rather than reviving a closed page.
+    #[gpui_kit::test]
+    fn browser_pages_persist_and_an_emptied_panel_reopens_on_info(cx: &mut TestAppContext) {
+        let _views = VIEWS_FILE.lock().unwrap_or_else(|e| e.into_inner());
+        cx.update(|cx| WorkspaceStore::init(cx));
+        let ws = claim_workspace(cx);
+        let (app, mut vcx) = crate::ui::app::test_window::harness_on_workspace(cx, ws);
+        app.update_in(&mut vcx, |app, _window, cx| {
+            app.open_web_page("http://one.test", None, cx);
+            app.open_web_page("https://two.test/path", None, cx);
+        });
+        settle(&mut vcx);
+        let written = app.read_with(&vcx, |app, _| app.tool_layout());
+        assert_eq!(
+            written.order,
+            [Info, Browser],
+            "pages never join the strip — the Browser tool represents them"
+        );
+        assert_eq!(written.web_tabs.len(), 2);
+        assert_eq!(written.active, Browser);
+        assert_eq!(
+            written.web_tabs[0],
+            WebTab {
+                id: written.web_tabs[0].id.clone(),
+                address: "http://one.test".into(),
+                title: String::new(),
+                host: None,
+                source: None,
+            },
+            "the original address is the tab's identity"
+        );
+        assert_eq!(
+            written.web_tabs[1].address, "https://two.test/path",
+            "the newest page lists last"
+        );
+        // The stored record is the v3 shape: tools in strip position order,
+        // then the page records appended.
+        let state = written.to_state();
+        assert_eq!(state.version, ToolLayoutState::CURRENT_VERSION);
+        assert_eq!(
+            state.order,
+            [
+                TabEntryState::Tool(Info),
+                TabEntryState::Tool(Browser),
+                TabEntryState::Web(WebTabState {
+                    id: written.web_tabs[0].id.clone(),
+                    address: "http://one.test".into(),
+                    host: None,
+                    title: String::new(),
+                }),
+                TabEntryState::Web(WebTabState {
+                    id: written.web_tabs[1].id.clone(),
+                    address: "https://two.test/path".into(),
+                    host: None,
+                    title: String::new(),
+                }),
+            ]
+        );
+        assert_eq!(
+            state.active,
+            TabSelectionState::Tool(Browser),
+            "the selection is the tool; the raised page is live-only"
+        );
+
+        // Relaunch: the tool strip, the page rows and the open state come
+        // back; the transient detail does not (it belongs to the terminal
+        // tab, like the GitHub detail's).
+        cx.update(|cx| WorkspaceStore::init(cx));
+        let (relaunched, mut vcx) = crate::ui::app::test_window::open_window_on(cx, Some(ws));
+        settle(&mut vcx);
+        let restored = relaunched.read_with(&vcx, |app, _| app.tool_layout());
+        assert_eq!(restored.order, written.order, "order survives the restart");
+        assert_eq!(
+            restored.web_tabs, written.web_tabs,
+            "the page rows survive with their addresses"
+        );
+        assert_eq!(restored.active, Browser, "the Browser tool is selected");
+        assert!(restored.open, "the panel was open, and comes back open");
+
+        // Closing the pages empties the list; the strip is untouched.
+        // Closing the Browser tool then resumes Info, closing Info collapses
+        // the panel, and reopening it resumes Info — never a closed page.
+        relaunched.update_in(&mut vcx, |app, window, cx| {
+            app.close_right_panel_web_tab(written.web_tabs[0].id.clone(), window, cx);
+            app.close_right_panel_web_tab(written.web_tabs[1].id.clone(), window, cx);
+        });
+        settle(&mut vcx);
+        let after_close = relaunched.read_with(&vcx, |app, _| app.tool_layout());
+        assert!(
+            after_close.web_tabs.is_empty(),
+            "closed pages are gone from the list"
+        );
+        assert_eq!(
+            after_close.order,
+            [Info, Browser],
+            "closing pages never touches the strip"
+        );
+        relaunched.update_in(&mut vcx, |app, window, cx| {
+            app.close_right_panel_tab(Browser, window, cx);
+            app.close_right_panel_tab(Info, window, cx);
+        });
+        settle(&mut vcx);
+        let emptied = relaunched.read_with(&vcx, |app, _| app.tool_layout());
+        assert!(emptied.order.is_empty(), "the last tab collapses the panel");
+        assert!(!emptied.open);
+        relaunched.update_in(&mut vcx, |app, _window, cx| app.toggle_right_panel(cx));
+        settle(&mut vcx);
+        let resumed = relaunched.read_with(&vcx, |app, _| app.tool_layout());
+        assert_eq!(
+            resumed.order,
+            [Info],
+            "reopening an emptied panel returns to Info"
+        );
+        assert!(resumed.open);
+    }
+
+    /// The #391 → #382 migration, end to end: a v2 record mixed pages into
+    /// the strip and could select one. It restores with the Browser tool
+    /// synthesized at the first old page position, the pages as its list,
+    /// and the selection opening that list.
+    #[gpui_kit::test]
+    fn a_v2_layout_restores_its_pages_into_the_browser_list(cx: &mut TestAppContext) {
+        let _views = VIEWS_FILE.lock().unwrap_or_else(|e| e.into_inner());
+        cx.update(|cx| WorkspaceStore::init(cx));
+        let ws = claim_workspace(cx);
+        let legacy = ToolLayoutState {
+            version: 2,
+            order: vec![
+                TabEntryState::Tool(Info),
+                TabEntryState::Web(WebTabState {
+                    id: "legacy-a".into(),
+                    address: "http://legacy.test".into(),
+                    host: None,
+                    title: "Legacy page".into(),
+                }),
+                TabEntryState::Tool(Files),
+                TabEntryState::Web(WebTabState {
+                    id: "legacy-b".into(),
+                    address: "https://legacy.test/two".into(),
+                    host: None,
+                    title: String::new(),
+                }),
+            ],
+            active: TabSelectionState::Web("legacy-b".into()),
+            last_used: Info,
+            open: true,
+        };
+        cx.update(|cx| WorkspaceStore::record_tool_layout(cx, ws, &legacy));
+        let (app, mut vcx) = crate::ui::app::test_window::harness_on_workspace(cx, ws);
+        settle(&mut vcx);
+        let restored = app.read_with(&vcx, |app, _| app.tool_layout());
+        assert_eq!(
+            restored.order,
+            [Info, Browser, Files],
+            "the Browser tool takes the first old page position"
+        );
+        assert_eq!(restored.active, Browser, "a page selection opens the list");
+        assert_eq!(
+            restored
+                .web_tabs
+                .iter()
+                .map(|tab| (tab.id.as_str(), tab.address.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("legacy-a", "http://legacy.test"),
+                ("legacy-b", "https://legacy.test/two")
+            ],
+            "the pages keep their order, addresses and title hints"
+        );
+        assert_eq!(
+            restored.web_tabs[0].title, "Legacy page",
+            "the restore-time title hint is preserved"
+        );
+        assert_eq!(restored.last_used, Info);
+        assert!(restored.open);
+    }
 
     fn settle(vcx: &mut VisualTestContext) {
         for _ in 0..4 {
@@ -3698,20 +4750,14 @@ mod persistence_tests {
                     .get(alpha)
                     .and_then(|view| view.tool_layout.clone())
             }),
-            Some(lyrel_core::core::session::ToolLayoutState {
-                version: lyrel_core::core::session::ToolLayoutState::CURRENT_VERSION,
-                order: written_alpha.order.clone(),
-                active: written_alpha.active,
-                last_used: written_alpha.last_used,
-                open: written_alpha.open,
-            }),
+            Some(written_alpha.to_state()),
             "the store record is exactly the layout — search text, filters, \
              expansion and drafts stay in memory"
         );
 
         // Switching in place takes up the other workspace's layout: beta has
         // never been given one, so it starts from Info, collapsed — alpha's
-        // open, Files-first panel is not projected onto it.
+        // Files-first panel is not projected onto it.
         let beta = claim_workspace(cx);
         app.update_in(&mut vcx, |app, window, cx| {
             app.adopt_workspace(beta, Session::default(), window, cx)
@@ -3754,11 +4800,10 @@ mod persistence_tests {
             "alpha comes back with its own order, selection and open state"
         );
         assert_eq!(
-            relaunched.read_with(&vcx, |app, _| (
-                app.right_panel_visible,
-                app.right_panel_tab
-            )),
-            (written_alpha.open, written_alpha.active),
+            relaunched.read_with(&vcx, |app, _| {
+                (app.right_panel_visible, app.right_panel_tab)
+            }),
+            (written_alpha.open, Files),
             "the live mirror fields the panel renders from agree"
         );
 
@@ -3778,11 +4823,11 @@ mod persistence_tests {
         assert_eq!(resumed.active, Scm);
         assert!(resumed.open);
 
-        // A workspace without new-format layout data starts from Info,
-        // collapsed — even though the shared config still carries the old
-        // global selection (the newest session's resumed Scm) for an older
-        // build: every stored layout keeps that legacy field current, and
-        // gamma's start does not read it.
+        // A workspace without layout data starts from Info, collapsed — even
+        // though the shared config still carries the old global selection
+        // (the newest session's resumed Scm) for an older build: every
+        // stored layout keeps that legacy field current, and gamma's start
+        // does not read it.
         assert_eq!(
             cx.update(|cx| cx.global::<Config>().right_panel_tab),
             Scm,
@@ -3798,10 +4843,9 @@ mod persistence_tests {
             ToolLayout::default()
         );
         assert_eq!(
-            relaunched.read_with(&vcx, |app, _| (
-                app.right_panel_visible,
-                app.right_panel_tab
-            )),
+            relaunched.read_with(&vcx, |app, _| {
+                (app.right_panel_visible, app.right_panel_tab)
+            }),
             (false, Info)
         );
     }

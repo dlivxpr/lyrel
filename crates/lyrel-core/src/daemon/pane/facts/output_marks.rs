@@ -1,6 +1,7 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
 
-use crate::core::osc::{OscTokenizer, TitleEffect};
+use crate::core::osc::{MAX_PENDING_NOTES, Note, OscTokenizer, TitleEffect};
 use crate::daemon::protocol::{PaneProgress, ProgressKind};
 
 /// A bounded composition of all progress marks in one read. Command completion
@@ -94,7 +95,7 @@ pub(super) struct SniffSignals {
     pub(super) title: Option<String>,
     pub(super) shell: Vec<ShellState>,
     pub(super) agent_events: Vec<crate::core::cli_agent::AgentEvent>,
-    pub(super) notification: Option<String>,
+    pub(super) notifications: VecDeque<Note>,
     pub(super) progress: ProgressChange,
 }
 
@@ -161,7 +162,10 @@ impl OscSniffer {
                 } else if let Some((title, body)) = notes.parse(payload)
                     && title.as_deref() != Some(crate::core::cli_agent::AGENT_EVENT_SENTINEL)
                 {
-                    signals.notification = Some(body);
+                    if signals.notifications.len() == MAX_PENDING_NOTES {
+                        signals.notifications.pop_front();
+                    }
+                    signals.notifications.push_back((title, body));
                 }
             });
         }

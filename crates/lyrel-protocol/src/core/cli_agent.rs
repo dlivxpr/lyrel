@@ -63,6 +63,7 @@ pub enum CLIAgent {
     Pi,
     OpenCode,
     Hermes,
+    Antigravity,
 }
 
 /// Unknown identities lose only their agent annotation, never the containing pane.
@@ -76,12 +77,13 @@ where
 }
 
 impl CLIAgent {
-    pub const ALL: [CLIAgent; 5] = [
+    pub const ALL: [CLIAgent; 6] = [
         CLIAgent::OhMyPi,
         CLIAgent::Kimi,
         CLIAgent::Pi,
         CLIAgent::OpenCode,
         CLIAgent::Hermes,
+        CLIAgent::Antigravity,
     ];
 
     /// Executable names that receive the command-scoped compatibility
@@ -101,6 +103,8 @@ impl CLIAgent {
             CLIAgent::Pi => &["pi"],
             CLIAgent::OpenCode => &["opencode", "opencode2"],
             CLIAgent::Hermes => &["hermes"],
+            // Google Antigravity CLI; `agy` is the only documented entry point.
+            CLIAgent::Antigravity => &["agy"],
         }
     }
 
@@ -114,6 +118,7 @@ impl CLIAgent {
 
             CLIAgent::OhMyPi => "omp",
             CLIAgent::Kimi => "kimi",
+            CLIAgent::Antigravity => "antigravity",
         }
     }
 
@@ -134,11 +139,23 @@ impl CLIAgent {
 
             CLIAgent::OhMyPi => "OMP",
             CLIAgent::Kimi => "Kimi Code",
+            CLIAgent::Antigravity => "Antigravity",
         }
     }
 
+    /// The workbench Fork action's label — `None` while no verified route
+    /// creates an independent conversation and leaves the source unchanged.
+    /// Antigravity's only documented fork is the interactive `/fork` (alias
+    /// `/branch`), which clones the conversation and switches the invoking
+    /// terminal; 1.5.15's `agy --help` has no non-interactive fork entry and
+    /// the two-pane contract remains unverified (#386). Advertising the action
+    /// before such a route exists would promise an operation lyrel cannot
+    /// perform.
     pub fn fork_label(self) -> Option<&'static str> {
-        Some("Fork Session")
+        match self {
+            CLIAgent::Antigravity => None,
+            _ => Some("Fork Session"),
+        }
     }
 
     /// What follows the agent's own name in `argv`, with everything that names
@@ -206,6 +223,10 @@ impl CLIAgent {
                 "--agent",
                 "--agent-file",
             ],
+            // Antigravity's conversation selectors: `--conversation` resumes
+            // one exact ID, `--continue`/`-c` the most recent. None of them
+            // belongs in a default launch.
+            CLIAgent::Antigravity => &["--conversation", "--continue", "-c"],
         };
         let mut i = 0;
         while i < tail.len() {
@@ -237,6 +258,8 @@ impl CLIAgent {
             CLIAgent::OhMyPi => 0xF97316,
             // The blue flame is Kimi's brand accent; its mark is monochrome.
             CLIAgent::Kimi => 0x027AFF,
+            // Aurora teal: distinct from Pi's sky blue on the tab ring.
+            CLIAgent::Antigravity => 0x14B8A6,
         }
     }
 
@@ -250,6 +273,7 @@ impl CLIAgent {
             CLIAgent::Kimi => "icons/agents/kimi.png",
 
             CLIAgent::Hermes => "icons/agents/hermes.png",
+            CLIAgent::Antigravity => "icons/agents/antigravity.svg",
         }
     }
 
@@ -283,6 +307,10 @@ impl CLIAgent {
     /// `prompt`. `None` for an agent whose positional prompt means a one-shot,
     /// non-interactive run, or whose form is not known. In particular, Kimi's
     /// `--prompt` must not substitute for a native-TUI initial task.
+    ///
+    /// Antigravity's `--prompt` is the non-interactive print mode; the
+    /// interactive first task is `--prompt-interactive` (or `-i`), which runs
+    /// the prompt and keeps the session open.
     pub fn prompt_args(self, prompt: &str) -> Option<Vec<String>> {
         match self {
             CLIAgent::OpenCode => Some(vec!["--prompt".to_string(), prompt.to_string()]),
@@ -293,6 +321,9 @@ impl CLIAgent {
                 prompt.to_string(),
             ]),
             CLIAgent::Hermes => Some(vec!["chat".to_string(), format!("--query={prompt}")]),
+            CLIAgent::Antigravity => {
+                Some(vec!["--prompt-interactive".to_string(), prompt.to_string()])
+            }
             _ => None,
         }
     }
@@ -316,7 +347,26 @@ impl CLIAgent {
         let mut out: Vec<String> = argv[..env].to_vec();
         out.push(self.binary().to_string());
         let mut takes_value = false;
+        let mut drops_seed_value = false;
         for t in tail {
+            if self == CLIAgent::Antigravity {
+                // A remembered default never re-submits the first task that
+                // seeded this run: `--prompt-interactive` (or `-i`) exists
+                // only to carry it, so the flag and its value drop together.
+                // This tracks the seed flag alone: `takes_value` belongs to
+                // every other option, whose value the default keeps.
+                if drops_seed_value {
+                    drops_seed_value = false;
+                    continue;
+                }
+                if t == "--prompt-interactive" || t == "-i" {
+                    drops_seed_value = true;
+                    continue;
+                }
+                if t.starts_with("--prompt-interactive=") {
+                    continue;
+                }
+            }
             let is_flag = t.starts_with('-') && t.len() > 1;
             if is_flag {
                 out.push(t.to_string());
@@ -1004,7 +1054,14 @@ impl AgentSessionState {
                     self.status = AgentStatus::Waiting;
                     return;
                 }
-                if self.status != AgentStatus::Done {
+                // `agy` invokes its Stop hook once per finished execution and
+                // carries no turn identity on the wire, so a settled Stop that
+                // arrives after Done is a later execution: an error path can
+                // end one before a fresh invocation report reaches lyrel. The
+                // generic rule — Done means this turn already settled — holds
+                // for agents whose Stop fires inside a turn, never for `agy`.
+                let later_execution = ev.agent == Some(CLIAgent::Antigravity);
+                if self.status != AgentStatus::Done || later_execution {
                     self.turns = self.turns.wrapping_add(1);
                 }
                 self.status = AgentStatus::Done;
@@ -1428,6 +1485,7 @@ mod tests {
             ("pi", CLIAgent::Pi),
             ("opencode", CLIAgent::OpenCode),
             ("hermes", CLIAgent::Hermes),
+            ("agy", CLIAgent::Antigravity),
         ] {
             assert_eq!(CLIAgent::detect_from_argv(&argv(&[command])), Some(agent));
         }
@@ -1509,6 +1567,8 @@ mod tests {
             ("pi", CLIAgent::Pi),
             ("hermes", CLIAgent::Hermes),
             ("opencode.exe", CLIAgent::OpenCode),
+            // A Windows install is really agy.exe; the stem is what names it.
+            ("agy.exe", CLIAgent::Antigravity),
         ] {
             assert_eq!(CLIAgent::detect_from_argv(&argv(&[cmd])), Some(agent));
         }
@@ -1943,6 +2003,81 @@ mod tests {
             Some(argv(&["wrapper", "--fast"]))
         );
         assert_eq!(CLIAgent::Pi.launch_argv_for_default(&[]), None);
+    }
+
+    #[test]
+    fn antigravity_default_launch_drops_conversation_selectors_and_the_seed_task() {
+        // `--conversation`/`--continue`/`-c` name one conversation; none of
+        // them belongs in a remembered default launch.
+        assert_eq!(
+            CLIAgent::Antigravity.launch_argv_for_default(&argv(&[
+                "agy",
+                "--conversation",
+                "old-id",
+                "--model",
+                "custom"
+            ])),
+            Some(argv(&["agy", "--model", "custom"]))
+        );
+        assert_eq!(
+            CLIAgent::Antigravity.launch_argv_for_default(&argv(&["agy", "-c"])),
+            Some(argv(&["agy"]))
+        );
+        // A pane seeded through `--prompt-interactive` must not turn the old
+        // first task into the default: the flag and its value drop together.
+        assert_eq!(
+            CLIAgent::Antigravity.launch_argv_for_default(&argv(&[
+                "agy",
+                "--prompt-interactive",
+                "fix the parser"
+            ])),
+            Some(argv(&["agy"]))
+        );
+        assert_eq!(
+            CLIAgent::Antigravity.launch_argv_for_default(&argv(&[
+                "agy",
+                "-i",
+                "fix the parser",
+                "--effort",
+                "high"
+            ])),
+            Some(argv(&["agy", "--effort", "high"]))
+        );
+        assert_eq!(
+            CLIAgent::Antigravity
+                .launch_argv_for_default(&argv(&["agy", "--prompt-interactive=fix the parser"])),
+            Some(argv(&["agy"]))
+        );
+    }
+
+    #[test]
+    fn antigravity_first_task_is_interactive_and_fork_stays_unadvertised() {
+        // `--prompt` would run once and exit; only `--prompt-interactive`
+        // opens the native TUI on a first message.
+        assert_eq!(
+            CLIAgent::Antigravity.prompt_args("review the diff"),
+            Some(argv(&["--prompt-interactive", "review the diff"]))
+        );
+        // No verified fork route yet: the workbench action must not appear.
+        assert_eq!(CLIAgent::Antigravity.fork_label(), None);
+        assert_eq!(CLIAgent::Pi.fork_label(), Some("Fork Session"));
+    }
+
+    #[test]
+    fn antigravity_identity_survives_the_wire_and_unknown_ones_still_decode_to_none() {
+        // What this build sends for the pane identity, and what an older
+        // peer must be able to swallow without losing the pane stream. The
+        // wire keeps the enum's existing PascalCase spelling for every
+        // provider; a slug would decode as an unknown agent.
+        let encoded = serde_json::to_string(&Some(CLIAgent::Antigravity)).unwrap();
+        assert_eq!(encoded, "\"Antigravity\"");
+        let mut decoder = serde_json::Deserializer::from_slice(encoded.as_bytes());
+        assert_eq!(
+            deserialize_optional_agent(&mut decoder).unwrap(),
+            Some(CLIAgent::Antigravity)
+        );
+        let mut legacy = serde_json::Deserializer::from_slice(b"\"future-agent\"");
+        assert_eq!(deserialize_optional_agent(&mut legacy).unwrap(), None);
     }
 
     #[test]

@@ -118,7 +118,7 @@ fn relayed_exit_status_is_not_reused_for_the_outer_prompt() {
         ForegroundProbes {
             group: Box::new(|| None),
             remote: Box::new(|| None),
-            agent: Box::new(|| None),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Unavailable),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },
@@ -407,7 +407,7 @@ fn a_prompt_mark_reprobes_the_foreground_inside_the_poll_interval() {
         ForegroundProbes {
             group: Box::new(|| None),
             remote,
-            agent: Box::new(|| None),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Unavailable),
             cwd: Box::new(|| None),
             local_group: |_| Some(true),
         },
@@ -511,7 +511,7 @@ fn reader_gates_indirect_media_before_first_ssh_bytes_and_restores_local_queries
                         }
                     })
                 }),
-                agent: Box::new(|| None),
+                agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Unavailable),
                 cwd: Box::new(|| None),
                 local_group: |_| Some(true),
             },
@@ -590,7 +590,7 @@ fn reader_poll_applies_the_probed_cwd() {
         ForegroundProbes {
             group: Box::new(|| None),
             remote: Box::new(|| None),
-            agent: Box::new(|| None),
+            agent: Box::new(|| crate::daemon::pane::facts::AgentProbe::Unavailable),
             cwd: Box::new(|| Some(PathBuf::from("/Users/alice/dev/lyrel"))),
             local_group: |_| Some(true),
         },

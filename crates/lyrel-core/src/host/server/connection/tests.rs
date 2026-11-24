@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::machine::{self, MachineStore};
 use crate::daemon::control::{
-    CONTROL_VERSION, ControlClientMsg, ControlHello, ControlReply, ControlRequest,
+    CONTROL_VERSION, ControlClientMsg, ControlEvent, ControlHello, ControlReply, ControlRequest,
     ControlServerMsg, ReplyOk, WireErrorKind,
 };
 use crate::host::local::LocalHost;
@@ -263,6 +263,153 @@ fn a_large_file_crosses_the_real_link_in_bounded_segments() {
 
     drop(host);
     served.join().unwrap().unwrap();
+}
+
+fn expect_no_preview(peer: &mut TcpStream) {
+    peer.set_read_timeout(Some(Duration::from_millis(250)))
+        .unwrap();
+    for _ in 0..16 {
+        match ControlServerMsg::read(peer) {
+            Ok(ControlServerMsg::Event(ControlEvent::PreviewOpen { .. })) => {
+                panic!("a preview reached a link that does not hold the workspace")
+            }
+            Ok(_) => continue,
+            Err(_) => break,
+        }
+    }
+    peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+}
+
+fn expect_preview(peer: &mut TcpStream) -> (String, u64, String, String) {
+    loop {
+        match ControlServerMsg::read(peer).unwrap() {
+            ControlServerMsg::Event(ControlEvent::PreviewOpen {
+                workspace,
+                pane,
+                url,
+                scratch,
+            }) => return (workspace, pane, url, scratch),
+            ControlServerMsg::Event(_) => continue,
+            other => panic!("expected a preview event, got {other:?}"),
+        }
+    }
+}
+
+fn attach_workspace(peer: &mut TcpStream, req_id: u64, workspace: &str) {
+    assert!(matches!(
+        call(
+            peer,
+            req_id,
+            ControlRequest::WorkspaceAttach {
+                id: workspace.to_string(),
+            }
+        ),
+        ControlReply::Ok(ReplyOk::Attached { .. })
+    ));
+}
+
+#[test]
+fn an_agent_preview_targets_only_the_consumer_holding_its_workspace() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = MachineStore::open(dir.path().join(machine::MACHINE_FILE));
+    let workspace = store.workspace_create(None, None, None).unwrap().id;
+    let other = store.workspace_create(None, None, None).unwrap().id;
+    store
+        .tab_create(workspace, None, machine::PaneSeed::bare(7), None, None)
+        .unwrap();
+    let services = Services::with_machine(Arc::clone(&store));
+
+    let (mut preview, preview_served) = tcp_peer(services.clone());
+    hello(
+        &mut preview,
+        ControlHello::host_rpc("preview", "desktop").with_preview(),
+    );
+    let (mut bystander, bystander_served) = tcp_peer(services.clone());
+    hello(
+        &mut bystander,
+        ControlHello::host_rpc("bystander", "desktop").with_preview(),
+    );
+    attach_workspace(&mut bystander, 1, &other.to_string());
+
+    let (mut cli, cli_served) = tcp_peer(services.clone());
+    hello(&mut cli, ControlHello::host_rpc("cli", "laptop"));
+    let ask = || ControlRequest::PreviewOpen {
+        pane: 7,
+        url: "http://localhost:5173/app".into(),
+        scratch: String::new(),
+    };
+
+    // The preview consumer is online, but no link holds the workspace.
+    assert_eq!(
+        call(&mut cli, 1, ask()),
+        ControlReply::Ok(ReplyOk::Bool(false)),
+        "an unclaimed workspace has no preview target"
+    );
+    expect_no_preview(&mut preview);
+    expect_no_preview(&mut bystander);
+
+    // The CLI holds the workspace; it did not negotiate preview, so it is
+    // not the target and the unrelated consumer still receives nothing.
+    attach_workspace(&mut cli, 2, &workspace.to_string());
+    assert_eq!(
+        call(&mut cli, 3, ask()),
+        ControlReply::Ok(ReplyOk::Bool(false)),
+        "held by a non-consumer"
+    );
+    expect_no_preview(&mut preview);
+    expect_no_preview(&mut bystander);
+
+    // The preview consumer claims the workspace: delivery is exactly here.
+    attach_workspace(&mut preview, 1, &workspace.to_string());
+    assert_eq!(
+        call(&mut cli, 4, ask()),
+        ControlReply::Ok(ReplyOk::Bool(true)),
+        "the consuming holder is the target"
+    );
+    let (got, pane, url, scratch) = expect_preview(&mut preview);
+    assert_eq!(got, workspace.to_string());
+    assert_eq!(pane, 7);
+    assert_eq!(url, "http://localhost:5173/app");
+    assert!(
+        std::path::Path::new(&scratch).is_absolute(),
+        "the daemon resolves the screenshot directory on its own machine: {scratch}"
+    );
+    expect_no_preview(&mut bystander);
+
+    // The pane is the authority, never a client-supplied workspace.
+    assert!(matches!(
+        call(
+            &mut cli,
+            5,
+            ControlRequest::PreviewOpen {
+                pane: 99,
+                url: "http://localhost:5173".into(),
+                scratch: String::new(),
+            }
+        ),
+        ControlReply::Err(_)
+    ));
+    // The URL policy is applied before anything reaches a GUI.
+    assert!(matches!(
+        call(
+            &mut cli,
+            6,
+            ControlRequest::PreviewOpen {
+                pane: 7,
+                url: "file:///etc/passwd".into(),
+                scratch: String::new(),
+            }
+        ),
+        ControlReply::Err(_)
+    ));
+    expect_no_preview(&mut preview);
+
+    drop(cli);
+    cli_served.join().unwrap().unwrap();
+    drop(preview);
+    preview_served.join().unwrap().unwrap();
+    drop(bystander);
+    bystander_served.join().unwrap().unwrap();
 }
 
 #[test]
