@@ -2284,7 +2284,18 @@ fi
                 "'pwsh'",
                 1,
             );
-            let Ok(mut child) = pwsh(home.path())
+            let mut parent = pwsh(home.path());
+            #[cfg(target_os = "macos")]
+            let script = {
+                // pwsh probes KERN_PROCARGS2 even for a non-login shell. The
+                // macOS runner can fail that probe with EIO before running any
+                // code. This fixture simulates non-login Windows PowerShell,
+                // so bypass the Unix probe in both real pwsh processes. pwsh
+                // removes the sentinel on startup, so the child needs its own.
+                parent.env("__PWSH_LOGIN_CHECKED", "1");
+                format!("$env:__PWSH_LOGIN_CHECKED='1'; {script}")
+            };
+            let Ok(mut child) = parent
                 .args(["-NoProfile", "-c", &script])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
