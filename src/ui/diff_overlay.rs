@@ -5305,6 +5305,7 @@ mod content_view_tests {
         let (_temp, backing) = foreign_repo();
         let id = foreign_id();
         let (app, mut vcx, _pane) = test_window::harness_with_tabs(cx, 1);
+        vcx.simulate_resize(gpui_kit::size(gpui_kit::px(1000.), gpui_kit::px(900.)));
         vcx.update(|_, cx| {
             HostRegistry::insert(
                 cx,
