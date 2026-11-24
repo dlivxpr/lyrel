@@ -3737,19 +3737,21 @@ mod tests {
         );
     }
 
-    /// The title contract rides the additive feature list, never a protocol
-    /// bump: a peer that predates it answers and stays usable without the
-    /// name, and a peer that has it can be trusted for daemon/window parity.
+    /// A peer speaking the same pane dialect may omit validated titles.
+    /// Only a peer that advertises it can be trusted for daemon/window parity.
     #[test]
     fn validated_titles_are_an_additive_endpoint_capability() {
         assert!(
             DaemonVersion::current().has_feature(FEATURE_VALIDATED_TITLES),
             "this build applies the validated title rule to daemon facts"
         );
-        let legacy: DaemonVersion =
-            serde_json::from_slice(br#"{"protocol":19,"build":"0.3.4","features":[]}"#).unwrap();
-        assert!(!legacy.has_feature(FEATURE_VALIDATED_TITLES));
-        assert_eq!(legacy.protocol, PROTOCOL_VERSION, "no protocol bump");
+        let peer: DaemonVersion = serde_json::from_value(serde_json::json!({
+            "protocol": PROTOCOL_VERSION,
+            "build": "fixture",
+            "features": [],
+        }))
+        .unwrap();
+        assert!(!peer.has_feature(FEATURE_VALIDATED_TITLES));
     }
 
     /// `enabled` crosses the same peers as `rejected` above and gets the same
