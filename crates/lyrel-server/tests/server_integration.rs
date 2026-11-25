@@ -8,8 +8,8 @@
 //! prefixed name (for example `client_lib::kitty_graphics::pty_sender`).
 //!
 //! `native_ssh_graphics`, `native_ssh_lifecycle` and `native_ssh_surface`
-//! remain top-level targets because `docs/remote/ssh.mdx` invokes them by
-//! `--test` name.
+//! are separate, opt-in targets. `docs/remote/ssh.mdx` invokes them by `--test`
+//! name with the `native-ssh-tests` feature.
 
 #[path = "suite/agent_hook_report.rs"]
 mod agent_hook_report;

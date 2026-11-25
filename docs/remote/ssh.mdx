@@ -117,6 +117,7 @@ lyrel 通过 [russh](https://github.com/Eugeny/russh) 自行处理 SSH 协议。
 仍保留的内容，不恢复已删除／淘汰的像素，也不新增图片磁盘持久化。
 [预算和历史提示规则 →](/getting-started/concepts)
 
+<a id="native-ssh-tests"></a>
 ### 重现真实 SSH 回归
 
 以下 opt-in 用例经过生产 SSH 引擎、原生 router、真实 Linux PTY 与同一 pane 协议，
@@ -124,6 +125,8 @@ lyrel 通过 [russh](https://github.com/Eugeny/russh) 自行处理 SSH 协议。
 预部署匹配当前版本／方言的 `lyrel-server`，并提供 Linux Node 22.19+。
 shell／control 报告的 HOME 与 SFTP `Realpath(".")` 必须同属该隔离目录；
 仅在 shell 中修改 `HOME` 不足以隔离 SFTP。不要指向真实工作账号的 HOME。
+
+`lyrel-server` 的 `native_ssh_graphics`、`native_ssh_lifecycle`、`native_ssh_surface` 需要显式启用 `native-ssh-tests` 才参与普通测试命令的编译。具备真实端点后，按下文选择目标并用 `--ignored` 执行。
 
 本机与远端必须真正满足路径隔离前提：本机创建的绝对路径哨兵在远端应不存在。Linux 客户端连接同 UID、同文件系统的 loopback SSH 时，只有隔离 HOME 并不满足这个条件；先以真实 SSH 检查哨兵的不可见性，再运行 locality 用例。本轮使用不提权的 user／mount namespace，将 propagation 设为 private，**只给新建的任务自有本机 `TMPDIR` 挂 256 MiB 有界 tmpfs**；sshd 与远端 daemon 留在 namespace 外，结束后卸载该自有挂载。不挂全局 `/tmp`，不修改 sysctl、账号、系统 sshd 或个人配置；内核不允许该方式时如实记录前提阻塞，不能关闭断言或把失败记为通过。
 
@@ -143,7 +146,7 @@ shell／control 报告的 HOME 与 SFTP `Realpath(".")` 必须同属该隔离目
 | `LYREL_TEST_SSH_LOCAL_SERVER` | rooted GPUI 用例所需的同一提交本机 `lyrel-server` 绝对路径 |
 
 ```bash
-cargo test --locked -p lyrel-server --test native_ssh_graphics native_ssh_graphics_ \
+cargo test --locked -p lyrel-server --features native-ssh-tests --test native_ssh_graphics native_ssh_graphics_ \
   -- --ignored --nocapture --test-threads=1 --skip nested_ssh
 cargo test --locked -p lyrel --lib native_ssh_consumer_ \
   -- --ignored --nocapture --test-threads=1
@@ -158,7 +161,7 @@ cargo test --locked -p lyrel --lib native_ssh_consumer_ \
 嵌套用例额外要求 Linux 主机已有专用第二层端点及 `LYREL_TEST_SSH_NESTED_HOST`、`LYREL_TEST_SSH_NESTED_PORT`、`LYREL_TEST_SSH_NESTED_IDENTITY`、`LYREL_TEST_SSH_NESTED_KNOWN_HOSTS`。后两项是 **Linux 上**的绝对路径，不能上传桌面私钥、借用个人 SSH 配置或关闭固定 pin 验证。第二层使用真实 `/usr/bin/ssh -tt -F /dev/null`，间接媒体必须返回 `ENOTSUPPORTED`，直接 RGBA 仍须成功。缺少这组前提时，先单独执行非 nested 用例；不得把过滤掉的 nested 用例记为通过。
 
 ```bash
-cargo test --locked -p lyrel-server --test native_ssh_graphics \
+cargo test --locked -p lyrel-server --features native-ssh-tests --test native_ssh_graphics \
   native_ssh_graphics_nested_ssh_refuses_indirect_and_preserves_direct \
   -- --ignored --exact --nocapture --test-threads=1
 ```
@@ -168,9 +171,9 @@ cargo test --locked -p lyrel-server --test native_ssh_graphics \
 两层前提都齐备时，完整 headless 入口不跳过 nested；Linux 不运行根桌面包或 rooted GUI 命令：
 
 ```bash
-cargo test --locked -p lyrel-server --test native_ssh_graphics \
+cargo test --locked -p lyrel-server --features native-ssh-tests --test native_ssh_graphics \
   -- --ignored --nocapture --test-threads=1
-cargo test --locked -p lyrel-server --test native_ssh_lifecycle \
+cargo test --locked -p lyrel-server --features native-ssh-tests --test native_ssh_lifecycle \
   -- --ignored --nocapture --test-threads=1
 ```
 
@@ -221,7 +224,7 @@ cargo test --locked -p lyrel --lib native_ssh_host_menu_disconnect_preserves_oth
 先取得桌面操作许可，再执行；这条命令会打开真实窗口并最多等待 1800 秒：
 
 ```bash
-cargo test --locked -p lyrel-server --test native_ssh_surface \
+cargo test --locked -p lyrel-server --features native-ssh-tests --test native_ssh_surface \
   native_ssh_graphics_standard_app_surface -- --ignored --exact --nocapture --test-threads=1
 ```
 

@@ -11,6 +11,25 @@ publish = false
 name = "lyrel-server"
 path = "src/main.rs"
 
+[features]
+# Gate only the acceptance targets that require a real SSH endpoint.
+native-ssh-tests = []
+
+[[test]]
+name = "native_ssh_graphics"
+path = "tests/native_ssh_graphics.rs"
+required-features = ["native-ssh-tests"]
+
+[[test]]
+name = "native_ssh_lifecycle"
+path = "tests/native_ssh_lifecycle.rs"
+required-features = ["native-ssh-tests"]
+
+[[test]]
+name = "native_ssh_surface"
+path = "tests/native_ssh_surface.rs"
+required-features = ["native-ssh-tests"]
+
 # One dependency, on purpose. This binary exists to prove — and keep proving —
 # that everything a lyrel session needs runs without gpui: if it ever grows a
 # second dependency that the GUI also needs, that dependency belongs in

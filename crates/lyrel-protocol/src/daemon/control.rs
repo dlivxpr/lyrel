@@ -3279,13 +3279,14 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
 
-    fn client_with_peer<F>(events: EventSink, serve: F) -> ControlClient
+    fn connect_to_peer<F, T>(serve: F) -> (TcpStream, thread::JoinHandle<T>)
     where
-        F: FnOnce(TcpStream) + Send + 'static,
+        F: FnOnce(TcpStream) -> T + Send + 'static,
+        T: Send + 'static,
     {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        thread::spawn(move || {
+        let peer = thread::spawn(move || {
             let (mut sock, _) = listener.accept().unwrap();
             match ControlClientMsg::read(&mut sock).unwrap() {
                 ControlClientMsg::Hello(h) => assert_eq!(h.control_version, CONTROL_VERSION),
@@ -3295,9 +3296,16 @@ mod tests {
                 .encode(&mut sock)
                 .unwrap();
             sock.flush().unwrap();
-            serve(sock);
+            serve(sock)
         });
-        let sock = TcpStream::connect(addr).unwrap();
+        (TcpStream::connect(addr).unwrap(), peer)
+    }
+
+    fn client_with_peer<F>(events: EventSink, serve: F) -> ControlClient
+    where
+        F: FnOnce(TcpStream) + Send + 'static,
+    {
+        let (sock, _) = connect_to_peer(serve);
         ControlClient::over_tcp(sock, &hello(), events).unwrap()
     }
 
@@ -3812,15 +3820,53 @@ mod tests {
         assert_eq!(e.kind(), io::ErrorKind::InvalidData);
     }
 
+    struct IdleReader {
+        socket: TcpStream,
+        handshake_thread: thread::ThreadId,
+        started: Option<mpsc::Sender<()>>,
+    }
+
+    impl Read for IdleReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            // HELLO_OK is read synchronously. Signal from inside the reader
+            // thread's first read, which has no data or EOF to return.
+            if thread::current().id() != self.handshake_thread
+                && let Some(started) = self.started.take()
+            {
+                started.send(()).unwrap();
+            }
+            self.socket.read(buf)
+        }
+    }
+
+    fn idle_client() -> (ControlClient, TcpStream) {
+        let (socket, peer) = connect_to_peer(std::convert::identity);
+        let (started, ready) = mpsc::channel();
+        let reader = IdleReader {
+            socket: socket.try_clone().unwrap(),
+            handshake_thread: thread::current().id(),
+            started: Some(started),
+        };
+        let shutdown = Arc::new(socket.try_clone().unwrap());
+        let client =
+            ControlClient::connect_with(reader, socket, Some(shutdown), &hello(), no_events())
+                .unwrap();
+        // Keep the silent peer open until the test has exercised shutdown.
+        let peer = peer.join().unwrap();
+        ready.recv().unwrap();
+        (client, peer)
+    }
+
     #[test]
     fn closing_an_idle_client_returns_promptly() {
-        let client = client_with_peer(no_events(), |mut sock| {
-            let _ = ControlClientMsg::read(&mut sock);
-            thread::sleep(Duration::from_secs(30));
-        });
-        assert_eq!(client.call(ControlRequest::Ping).unwrap_err().kind(), {
+        let (client, _peer) = idle_client();
+        assert_eq!(
+            client
+                .call_with_deadline(ControlRequest::Ping, &[], Duration::ZERO)
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::TimedOut
-        });
+        );
 
         let started = Instant::now();
         client.close();
@@ -3833,10 +3879,7 @@ mod tests {
 
     #[test]
     fn dropping_an_idle_client_returns_promptly() {
-        let client = client_with_peer(no_events(), |mut sock| {
-            let _ = ControlClientMsg::read(&mut sock);
-            thread::sleep(Duration::from_secs(30));
-        });
+        let (client, _peer) = idle_client();
         let started = Instant::now();
         drop(client);
         assert!(
@@ -3848,10 +3891,7 @@ mod tests {
 
     #[test]
     fn close_reaps_the_reader_when_the_link_can_be_shut_down() {
-        let client = client_with_peer(no_events(), |mut sock| {
-            let _ = ControlClientMsg::read(&mut sock);
-            thread::sleep(Duration::from_secs(30));
-        });
+        let (client, _peer) = idle_client();
         let started = Instant::now();
         client.close();
         assert!(

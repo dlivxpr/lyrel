@@ -15,7 +15,7 @@
 const { execFileSync } = require('node:child_process');
 
 const WORKFLOW_PATH = '.github/workflows/ci.yml';
-// 即使树相同，也不复用由 PR 修改门禁定义的运行：主线重新验证这些变更。
+// PR 可以改工作流，所以只接受与已测试 base 相同的门禁定义。
 const GATE_FILES = [WORKFLOW_PATH, '.github/workflows/release-build.yml'];
 const PLATFORM_JOBS = [
   'build & test (aarch64-apple-darwin)',
@@ -23,6 +23,16 @@ const PLATFORM_JOBS = [
   'build & test (x86_64-unknown-linux-gnu)',
 ];
 const REQUIRED_JOBS = ['preflight', ...PLATFORM_JOBS];
+const RELEASE_JOBS = [
+  'build (x86_64-pc-windows-msvc)',
+  'build (aarch64-apple-darwin)',
+  'pack (x86_64-pc-windows-msvc)',
+  'pack (aarch64-apple-darwin)',
+  'server-musl (x86_64-unknown-linux-musl, lyrel-server-linux-x86_64-musl)',
+  'server-musl (aarch64-unknown-linux-musl, lyrel-server-linux-aarch64-musl)',
+  'server-macos (aarch64-apple-darwin, arm64, lyrel-server-macos-aarch64)',
+  'server-windows (x86_64-pc-windows-msvc, lyrel-server-windows-x86_64.zip)',
+].map(name => `release-validation / ${name}`);
 // 有界复用近期完整门禁；这不是 runner 镜像或工具链版本相同的证明。
 const EVIDENCE_MAX_AGE_MS = 72 * 60 * 60 * 1000;
 const CLOCK_SKEW_MS = 5 * 60 * 1000;
@@ -42,7 +52,7 @@ function gitRunner(cwd) {
 }
 
 // run 本身的身份：仓库、workflow、事件、结论、PR 绑定、新鲜度。
-function verifyRunIdentity({ repository, workflow, run, now = Date.now(), maxAgeMs = EVIDENCE_MAX_AGE_MS }) {
+function verifyRunIdentity({ repository, workflow, run, event = 'pull_request', now = Date.now(), maxAgeMs = EVIDENCE_MAX_AGE_MS }) {
   requireValue(workflow?.path === WORKFLOW_PATH && positiveId(workflow?.id), 'unexpected workflow identity');
   const origin = run?.repository ?? {};
   const head = run?.head_repository ?? {};
@@ -58,8 +68,8 @@ function verifyRunIdentity({ repository, workflow, run, now = Date.now(), maxAge
     'unexpected CI run identity',
   );
   requireValue(
-    run.event === 'pull_request' && run.status === 'completed' && run.conclusion === 'success',
-    'CI run is not a completed pull request success',
+    run.event === event && run.status === 'completed' && run.conclusion === 'success',
+    `CI run is not a completed ${event} success`,
   );
   const created = Date.parse(run.created_at);
   requireValue(
@@ -87,7 +97,7 @@ function testedMergeCommit({ repository, run, request }) {
 
 // 每个 job 都必须完成；允许 skipped（矩阵按 scope 裁剪时的正常状态），
 // 但 preflight 与三个平台的 build & test 必须各出现一次且成功。
-function verifyJobs({ run, jobs }) {
+function verifyJobs({ run, jobs, required = REQUIRED_JOBS }) {
   requireValue(Array.isArray(jobs) && jobs.length > 0, 'CI run has no job records');
   for (const job of jobs) {
     requireValue(
@@ -99,10 +109,17 @@ function verifyJobs({ run, jobs }) {
       `CI job is from another attempt: ${job.name}`,
     );
   }
-  for (const name of REQUIRED_JOBS) {
+  for (const name of required) {
     const matches = jobs.filter(job => job.name === name);
     requireValue(matches.length === 1 && matches[0].conclusion === 'success', `missing successful gate job: ${name}`);
   }
+}
+
+function completedJobs(jobs, names) {
+  return names.every(name => {
+    const matches = jobs.filter(job => job.name === name);
+    return matches.length === 1 && matches[0].conclusion === 'success';
+  });
 }
 
 // 相同 tree、双 parents 与相同门禁都必须由不可变 commit 对象证明。
@@ -129,7 +146,7 @@ function verifyRun({ repository, sourceTree, gate, workflow, run, request, jobs,
 }
 
 // REST 按 GitHub 记录的解析 SHA 读取 merge 对象，不重新抓取临时 refs/pull/N/merge。
-async function readMerge({ github, repo, git, commit }) {
+async function readMerge({ github, repo, git, commit, sourceGate }) {
   requireValue(SHA.test(commit ?? ''), 'tested merge SHA is missing');
   const object = (await github.rest.git.getCommit({ ...repo, commit_sha: commit })).data;
   requireValue(object.sha === commit && object.parents?.length === 2, 'tested commit is not the expected two-parent merge');
@@ -138,8 +155,14 @@ async function readMerge({ github, repo, git, commit }) {
   git('merge-base', '--is-ancestor', base, 'HEAD');
   const baseGate = {};
   for (const file of GATE_FILES) {
+    // 文件首部注释与门禁无关。保留 YAML 正文的每个字节，包括块字符串。
     try {
-      baseGate[file] = git('rev-parse', `${base}:${file}`).trim();
+      const blob = git('rev-parse', `${base}:${file}`).trim();
+      const source = sourceGate?.[file];
+      const withoutComments = text => text.replace(/^(?:#[^\r\n]*\r?\n)+/, '');
+      baseGate[file] = source && blob !== source &&
+        withoutComments(git('cat-file', 'blob', blob)) === withoutComments(git('cat-file', 'blob', source))
+        ? source : blob;
     } catch (error) {
       throw Error(`gate definition missing at the tested base: ${file}`);
     }
@@ -147,45 +170,85 @@ async function readMerge({ github, repo, git, commit }) {
   return { commit, base, head, tree: object.tree.sha, baseGate };
 }
 
+async function verifyParentGate({ github, repo, workflow, parent, now, maxAgeMs }) {
+  const { workflow_runs: [run] } = (await github.rest.actions.listWorkflowRuns({
+    ...repo, workflow_id: workflow.id, event: 'push', branch: 'main', head_sha: parent, per_page: 1,
+  })).data;
+  requireValue(run?.head_sha === parent && run.head_branch === 'main', 'no CI run for the immediate main parent');
+  verifyRunIdentity({ repository: `${repo.owner}/${repo.repo}`, workflow, run, event: 'push', now, maxAgeMs });
+  const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+    ...repo, run_id: run.id, filter: 'latest', per_page: 100,
+  });
+  verifyJobs({ run, jobs });
+  for (const name of PLATFORM_JOBS) {
+    const job = jobs.find(entry => entry.name === name);
+    const testStep = name.endsWith('x86_64-unknown-linux-gnu)') ? 'Test Linux headless' : 'Test desktop library and headless';
+    requireValue(job.steps?.some(step => step.name === testStep &&
+      step.status === 'completed' && step.conclusion === 'success'), `parent tests were not executed: ${name}`);
+  }
+  return String(run.id);
+}
+
 async function discoverComparableRun({
-  github, repo, sourceSha, log = console.log, now = Date.now(),
+  github, repo, sourceSha, versionParent, log = console.log, now = Date.now(),
   git = gitRunner(process.env.GITHUB_WORKSPACE || process.cwd()), maxAgeMs = EVIDENCE_MAX_AGE_MS,
 }) {
   try {
     requireValue(SHA.test(sourceSha ?? ''), 'source SHA is not immutable');
     requireValue(git('rev-parse', 'HEAD').trim() === sourceSha, 'checkout does not match the event SHA');
-    const sourceTree = git('rev-parse', 'HEAD^{tree}').trim();
+    const target = versionParent || sourceSha;
+    if (versionParent) {
+      requireValue(SHA.test(versionParent) && git('show', '-s', '--format=%P', sourceSha).trim() === versionParent,
+        'version evidence must target the immediate single parent');
+    }
+    const sourceTree = git('rev-parse', `${target}^{tree}`).trim();
     const gate = {};
-    for (const file of GATE_FILES) gate[file] = git('rev-parse', `HEAD:${file}`).trim();
+    for (const file of GATE_FILES) gate[file] = git('rev-parse', `${target}:${file}`).trim();
     const workflow = (await github.rest.actions.getWorkflow({ ...repo, workflow_id: 'ci.yml' })).data;
+    if (versionParent) {
+      try {
+        const runId = await verifyParentGate({ github, repo, workflow, parent: versionParent, now, maxAgeMs });
+        log(`Using completed main test gate ${runId} for the version-only push`);
+        return { reuse: true, versionReuse: true, runId };
+      } catch (error) {
+        log(`No complete main parent gate: ${error.message}`);
+      }
+    }
     const runs = (await github.rest.actions.listWorkflowRuns({
       ...repo, workflow_id: workflow.id, event: 'pull_request', status: 'success', per_page: MAX_CANDIDATE_RUNS,
     })).data.workflow_runs ?? [];
+    const associatedRequests = sha => github.paginate(github.rest.repos.listPullRequestsAssociatedWithCommit, {
+      ...repo, commit_sha: sha, per_page: 100,
+    });
+    const squashedRequests = (await associatedRequests(target))
+      .filter(request => request.merge_commit_sha === target);
     for (const run of runs) {
       try {
         verifyRunIdentity({ repository: `${repo.owner}/${repo.repo}`, workflow, run, now, maxAgeMs });
-        const requests = await github.paginate(github.rest.repos.listPullRequestsAssociatedWithCommit, {
-          ...repo, commit_sha: run.head_sha, per_page: 100,
-        });
-        const candidates = requests.filter(request => {
+        const associatedWithRun = requests => requests.filter(request => {
           try {
             testedMergeCommit({ repository: `${repo.owner}/${repo.repo}`, run, request });
             return true;
           } catch { return false; }
         });
+        const squashed = associatedWithRun(squashedRequests);
+        const candidates = squashed.length > 0 ? squashed : associatedWithRun(await associatedRequests(run.head_sha));
         requireValue(candidates.length === 1, 'missing unique merged pull request association');
         const request = candidates[0];
         const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
           ...repo, run_id: run.id, filter: 'latest', per_page: 100,
         });
-        verifyJobs({ run, jobs });
+        verifyJobs({ run, jobs, required: ['preflight'] });
+        const reuse = completedJobs(jobs, PLATFORM_JOBS);
+        const releaseReuse = !versionParent && completedJobs(jobs, RELEASE_JOBS);
+        requireValue(reuse || releaseReuse, 'no complete test or release gate');
         const commit = testedMergeCommit({ repository: `${repo.owner}/${repo.repo}`, run, request });
-        const merge = await readMerge({ github, repo, git, commit });
-        const accepted = verifyRun({
-          repository: `${repo.owner}/${repo.repo}`, sourceTree, gate, workflow, run, request, jobs, merge, now, maxAgeMs,
-        });
+        const merge = await readMerge({ github, repo, git, commit, sourceGate: gate });
+        verifyMerge({ repository: `${repo.owner}/${repo.repo}`, sourceTree, gate, run, request, merge });
+        const accepted = { runId: String(run.id), runAttempt: String(run.run_attempt), pullRequest: request.number };
         log(`Reusing completed pull request gate ${accepted.runId} (pull request #${accepted.pullRequest}) for the same tree`);
-        return { reuse: true, ...accepted, tree: sourceTree };
+        if (versionParent) return { reuse: true, versionReuse: true, ...accepted };
+        return { reuse, releaseReuse, ...accepted, tree: sourceTree };
       } catch (error) {
         log(`skip CI run ${run.id}: ${error.message}`);
       }
