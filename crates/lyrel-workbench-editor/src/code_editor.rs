@@ -1170,47 +1170,6 @@ pub fn is_program(path: &Path) -> bool {
     }
 }
 
-/// A file a browser renders rather than showing its source. SVG is not one:
-/// it opens as a source document with its own native preview, so a corrupt or
-/// remote SVG never falls through to the system browser or its network access.
-pub fn opens_in_browser(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "html" | "htm" | "xhtml"))
-}
-
-/// Opens a local file in the default web browser. On macOS that is asked
-/// for by name: what `.html` is associated with is as often an editor. The
-/// other desktops go by the association.
-pub fn open_in_browser(path: &Path) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
-    if let Some(bundle) = default_browser_bundle_id() {
-        std::process::Command::new("open")
-            .arg("-b")
-            .arg(bundle)
-            .arg(path)
-            .spawn()?;
-        return Ok(());
-    }
-    lyrel_ui_base::desktop_file::open_file_path(path)
-}
-
-/// The app that handles `https:` links — the default browser.
-#[cfg(target_os = "macos")]
-fn default_browser_bundle_id() -> Option<String> {
-    use core_foundation::base::TCFType as _;
-    use core_foundation::string::{CFString, CFStringRef};
-
-    #[link(name = "CoreServices", kind = "framework")]
-    unsafe extern "C" {
-        fn LSCopyDefaultHandlerForURLScheme(scheme: CFStringRef) -> CFStringRef;
-    }
-    let scheme = CFString::new("https");
-    let handler = unsafe { LSCopyDefaultHandlerForURLScheme(scheme.as_concrete_TypeRef()) };
-    // A Copy function: the string is ours to release, which the wrapper does.
-    (!handler.is_null()).then(|| unsafe { CFString::wrap_under_create_rule(handler) }.to_string())
-}
-
 /// The lines a selection covers, 1-based and inclusive. One that ends at the
 /// very start of a line — a whole-line selection — does not take that line.
 fn selected_lines(
