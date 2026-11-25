@@ -349,7 +349,7 @@ impl LyrelApp {
         Self::watch_pane_focus(&handle, view.entity_id(), window, cx);
     }
 
-    pub(super) fn watch_terminal_scm(view: &Entity<TerminalView>, cx: &mut Context<Self>) {
+    pub(crate) fn watch_terminal_scm(view: &Entity<TerminalView>, cx: &mut Context<Self>) {
         cx.subscribe(
             view,
             |_app, _view, ev: &lyrel_terminal::view::ScmRepoChanged, cx| {
@@ -521,7 +521,7 @@ impl LyrelApp {
     /// Every leaf is watched, connecting slots included: a pane can be focused
     /// while it is still coming up, and if the tab is left in that moment the
     /// answer has to already be written down.
-    pub(super) fn watch_pane_focus(
+    pub(crate) fn watch_pane_focus(
         handle: &gpui_kit::FocusHandle,
         leaf: gpui_kit::EntityId,
         window: &mut Window,

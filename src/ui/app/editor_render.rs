@@ -9,8 +9,6 @@
 //! through one `editor.update` per frame step, so the entity lease is never
 //! held across a shell call.
 
-use std::path::Path;
-
 use gpui_kit::component::button::Button;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{Icon, IconName, Sizable as _, h_flex, v_flex};
@@ -379,6 +377,12 @@ impl LyrelApp {
             .map(|c| c.strip_split(cap))
             .unwrap_or_default();
         let active_id = self.tab_code().and_then(TabCode::active_id);
+        let html_preview_target = active_id.and_then(|id| {
+            let editor = self.editor.read(cx);
+            let f = editor.buffers().get(id)?;
+            (!f.path.as_os_str().is_empty() && lyrel_core::core::web::is_html_preview_path(&f.path))
+                .then(|| (f.host.id(), f.path.clone()))
+        });
         // The cells the strip actually draws, in strip order — the group's
         // remembered focus target is clamped to these, so closing a document
         // or a group switch never leaves the keyboard on a cell that is gone.
@@ -496,6 +500,23 @@ impl LyrelApp {
             )
             // Whatever is left of the bar stays a place to drag the window by.
             .child(div().flex_1().h_full())
+            .children(html_preview_target.map(|(host_id, path)| {
+                div().occlude().flex_none().mr(px(4.)).child(
+                    crate::ui::window_chrome::chrome_tile_sized(
+                        Button::new("editor-html-preview").icon(Icon::new(IconName::Globe)),
+                        tile,
+                        glyph,
+                        false,
+                        cx,
+                    )
+                    .rounded(px(crate::ui::tab_strip::RAIL_TILE_RADIUS))
+                    .tooltip(t(L10nKey::PanelOpenInBrowser))
+                    .accessibility_label(t(L10nKey::PanelOpenInBrowser))
+                    .on_click(cx.listener(move |this, _, _window, cx| {
+                        this.open_html_preview(host_id, &path, cx);
+                    })),
+                )
+            }))
             .child(self.document_layout_switch(chrome, cx))
             .child(
                 div().occlude().flex_none().ml(px(4.)).child(
@@ -568,6 +589,7 @@ impl LyrelApp {
             });
         div()
             .id(("editor-file-tab", id.as_u64()))
+            .test_support()
             .role(gpui_kit::Role::Tab)
             .aria_label(match dirty {
                 true => format!("{name}, {}", t(L10nKey::SettingsUnsaved)),
@@ -1240,27 +1262,54 @@ impl LyrelApp {
             return menu;
         };
         let path = f.path.clone();
-        // Only this machine's desktop can open or show a file, and only a
-        // file that is on this machine — the same rule as the file tree.
-        let local = f.host.id().is_local();
+        let host_id = f.host.id();
+        // Only this machine's desktop can reveal or open a non-HTML file with
+        // its default app — the same rule as the file tree. HTML preview paths
+        // route both local and remote files through the Host-backed loopback
+        // server.
+        let local = host_id.is_local();
         let mut menu = menu.separator();
-        if local && self.can_spawn_locally(cx) && !code_editor::is_program(&path) {
-            let browser = code_editor::opens_in_browser(&path);
-            let label = match browser {
-                true => t(L10nKey::PanelOpenInBrowser),
-                false => t(L10nKey::AppMenuOpenLinkWithDefaultApp),
-            };
-            let opener: fn(&Path) -> std::io::Result<()> = match browser {
-                true => code_editor::open_in_browser,
-                false => lyrel_ui_base::desktop_file::open_file_path,
-            };
-            menu = menu.item(PopupMenuItem::new(label).on_click({
-                let app = app.clone();
-                let path = path.clone();
-                move |_, window, cx| {
-                    let _ = app.update(cx, |_, cx| Self::open_with(&path, opener, window, cx));
-                }
-            }));
+        if lyrel_core::core::web::is_html_preview_path(&path) {
+            menu = menu
+                .item(
+                    PopupMenuItem::new(t(L10nKey::PanelOpenInBrowser)).on_click({
+                        let app = app.clone();
+                        let path = path.clone();
+                        move |_, _window, cx| {
+                            let _ = app.update(cx, |this, cx| {
+                                this.open_html_preview(host_id, &path, cx);
+                            });
+                        }
+                    }),
+                )
+                .item(
+                    PopupMenuItem::new(t(L10nKey::BrowserOpenExternal)).on_click({
+                        let app = app.clone();
+                        let path = path.clone();
+                        move |_, _window, cx| {
+                            let _ = app.update(cx, |this, cx| {
+                                this.open_html_in_system_browser(host_id, &path, cx);
+                            });
+                        }
+                    }),
+                );
+        } else if local && self.can_spawn_locally(cx) && !code_editor::is_program(&path) {
+            menu = menu.item(
+                PopupMenuItem::new(t(L10nKey::AppMenuOpenLinkWithDefaultApp)).on_click({
+                    let app = app.clone();
+                    let path = path.clone();
+                    move |_, window, cx| {
+                        let _ = app.update(cx, |_, cx| {
+                            Self::open_with(
+                                &path,
+                                lyrel_ui_base::desktop_file::open_file_path,
+                                window,
+                                cx,
+                            )
+                        });
+                    }
+                }),
+            );
         }
         if local {
             menu = menu.item(

@@ -48,6 +48,10 @@ mod overlay_tests;
 #[path = "browser/terminal_html_tests.rs"]
 mod terminal_html_tests;
 
+#[cfg(test)]
+#[path = "browser/editor_scm_html_tests.rs"]
+mod editor_scm_html_tests;
+
 pub(crate) use surface::{BrowserCommand, BrowserEvent, BrowserParentWindow, BrowserSurfaceHost};
 
 use gpui_kit::TestSupportExt as _;

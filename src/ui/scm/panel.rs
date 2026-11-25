@@ -1698,23 +1698,50 @@ impl LyrelApp {
     ) -> PopupMenu {
         let danger = cx.theme().danger;
         let rel = entry.path.as_str().to_string();
-        let absolute = repo.root.join(&rel);
+        let host = repo.host;
+        let absolute = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host)
+            .map(|h| h.join(&repo.root, &rel))
+            .unwrap_or_else(|| repo.root.join(&rel));
         let source = group_diff_source(group);
         let staged = group == ScmGroup::Staged;
 
+        let mut menu = menu.min_w(px(200.)).item(
+            PopupMenuItem::new(t(L10nKey::FileTreeContextOpen)).on_click({
+                let app = app.clone();
+                let absolute = absolute.clone();
+                move |_, window, cx| {
+                    let _ = app.update(cx, |this, cx| {
+                        this.open_file_in_editor(&absolute, window, cx)
+                    });
+                }
+            }),
+        );
+        if lyrel_core::core::web::is_html_preview_path(&absolute) {
+            menu = menu
+                .item(
+                    PopupMenuItem::new(t(L10nKey::PanelOpenInBrowser)).on_click({
+                        let app = app.clone();
+                        let absolute = absolute.clone();
+                        move |_, _window, cx| {
+                            let _ = app.update(cx, |this, cx| {
+                                this.open_html_preview(host, &absolute, cx);
+                            });
+                        }
+                    }),
+                )
+                .item(
+                    PopupMenuItem::new(t(L10nKey::BrowserOpenExternal)).on_click({
+                        let app = app.clone();
+                        let absolute = absolute.clone();
+                        move |_, _window, cx| {
+                            let _ = app.update(cx, |this, cx| {
+                                this.open_html_in_system_browser(host, &absolute, cx);
+                            });
+                        }
+                    }),
+                );
+        }
         let mut menu = menu
-            .min_w(px(200.))
-            .item(
-                PopupMenuItem::new(t(L10nKey::FileTreeContextOpen)).on_click({
-                    let app = app.clone();
-                    let absolute = absolute.clone();
-                    move |_, window, cx| {
-                        let _ = app.update(cx, |this, cx| {
-                            this.open_file_in_editor(&absolute, window, cx)
-                        });
-                    }
-                }),
-            )
             .item(PopupMenuItem::new(t(L10nKey::ScmOpenChanges)).on_click({
                 let app = app.clone();
                 let repo = repo.clone();
