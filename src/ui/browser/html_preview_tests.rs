@@ -1,18 +1,24 @@
+use std::collections::HashSet;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{Entity, TestAppContext, VisualTestContext};
 use lyrel_core::core::config::RightPanelTab;
-use lyrel_core::core::session::{RemoteRef, RemoteTarget, WorkspaceId};
+use lyrel_core::core::session::{
+    RemoteRef, RemoteTarget, TabEntryState, TabSelectionState, ToolLayoutState, WebTabState,
+    WindowView, WindowViews, WorkspaceId,
+};
 use lyrel_core::host::local::LocalHost;
 use lyrel_core::host::{
     ContentLimits, ContentQuery, ContentResults, Entry, Host, HostId, Meta, Output, SearchHit,
     SharedHost, ShellInventory, WatchSub,
 };
 use lyrel_ui_base::host_registry::HostRegistry;
+use lyrel_ui_base::i18n::{L10nKey, t};
 use lyrel_ui_base::session::WorkspaceStore;
 
 use super::html_preview::HtmlPreviewService;
@@ -20,11 +26,13 @@ use super::surface::RouteGuard;
 use super::{BrowserCommand, BrowserEvent, PageStatus, policy};
 use crate::ui::app::LyrelApp;
 use crate::ui::app::test_window::harness_with_tabs;
+use crate::ui::file_tree::FileTreeEvent;
 
 struct RemotePosixTestHost {
     id: HostId,
     root: PathBuf,
     local: SharedHost,
+    connected: AtomicBool,
 }
 
 impl RemotePosixTestHost {
@@ -34,6 +42,17 @@ impl RemotePosixTestHost {
             id,
             root: canonical_root,
             local: LocalHost::new(),
+            connected: AtomicBool::new(true),
+        })
+    }
+
+    fn new_disconnected(id: HostId, root: PathBuf) -> SharedHost {
+        let canonical_root = LocalHost::new().canonicalize(&root).unwrap_or(root);
+        Arc::new(Self {
+            id,
+            root: canonical_root,
+            local: LocalHost::new(),
+            connected: AtomicBool::new(false),
         })
     }
 
@@ -153,7 +172,7 @@ impl Host for RemotePosixTestHost {
     }
 
     fn is_connected(&self) -> bool {
-        true
+        self.connected.load(Ordering::SeqCst)
     }
 }
 
@@ -199,6 +218,42 @@ fn wait_for_commands(
         commands.len() >= min_len
     });
     commands
+}
+
+fn wait_for_reload_count(
+    app: &Entity<LyrelApp>,
+    vcx: &mut VisualTestContext,
+    tab_id: &str,
+    min_reloads: usize,
+) -> Vec<BrowserCommand> {
+    let mut commands = Vec::new();
+    wait_until(vcx, "browser reload commands", |vcx| {
+        commands = app.read_with(vcx, |app, _| app.browser_surface_commands(tab_id));
+        commands
+            .iter()
+            .filter(|cmd| matches!(cmd, BrowserCommand::Reload))
+            .count()
+            >= min_reloads
+    });
+    commands
+}
+
+fn attach_quiet_tab(
+    app: &Entity<LyrelApp>,
+    vcx: &mut VisualTestContext,
+) -> crate::daemon::transport::Stream {
+    use crate::ui::pane::{Pane, PaneSlot};
+    use lyrel_terminal::view::quiet_test_pane;
+
+    app.update_in(vcx, |app, window, cx| {
+        let (view, stream) = quiet_test_pane(1, window, cx);
+        LyrelApp::watch_terminal(&view, window, cx);
+        app.tabs
+            .push(crate::ui::tab::Tab::new(Pane::leaf(PaneSlot::Ready(view))));
+        app.tabs.select(0);
+        cx.notify();
+        stream
+    })
 }
 
 fn http_get(url: &str) -> (u16, String) {
@@ -455,4 +510,519 @@ fn remote_html_preview_and_system_browser_actions_work_and_purge_on_disconnect(
         assert_eq!(service.active_mount_count(), 0);
         assert!(!service.is_running());
     });
+}
+
+#[gpui_kit::test]
+fn persisted_html_preview_layout_stores_only_html_path_and_host_never_loopback(
+    cx: &mut TestAppContext,
+) {
+    lyrel_ui_base::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let local_dir = tempfile::tempdir().unwrap();
+    let local_html = LocalHost::new()
+        .canonicalize(local_dir.path())
+        .unwrap()
+        .join("local.html");
+    std::fs::write(&local_html, "<h1>Local</h1>").unwrap();
+
+    let remote_dir = tempfile::tempdir().unwrap();
+    let remote_proj = remote_dir.path().join("site");
+    std::fs::create_dir_all(&remote_proj).unwrap();
+    std::fs::write(remote_proj.join("remote.html"), "<h1>Remote</h1>").unwrap();
+
+    let target = RemoteTarget::Direct {
+        user: "dev".into(),
+        host: "persist.test".into(),
+        port: 22,
+    };
+    let remote_ref = RemoteRef::new(target, WorkspaceId::new());
+    let host_id = remote_ref.host_id();
+    let remote_host = RemotePosixTestHost::new(host_id, remote_dir.path().to_path_buf());
+
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    cx.update(|cx| {
+        WorkspaceStore::init(cx);
+        HostRegistry::insert(cx, remote_host);
+    });
+    let (local_id, remote_id) = app.update_in(&mut vcx, |app, _window, cx| {
+        app.open_html_preview(HostId::LOCAL, &local_html, cx);
+        let local_id = app.active_browser_detail().unwrap().to_string();
+        let remote_ws = WorkspaceStore::claim_remote(cx, remote_ref.clone());
+        let client_ws = WorkspaceStore::claim(cx, Some(remote_ws));
+        app.workspace = client_ws;
+        app.adopt_tool_layout(client_ws, cx);
+        app.open_html_preview(host_id, Path::new("/site/remote.html"), cx);
+        let remote_id = app.active_browser_detail().unwrap().to_string();
+        (local_id, remote_id)
+    });
+    wait_for_commands(&app, &mut vcx, &remote_id, 2);
+
+    let json = app.read_with(&vcx, |app, cx| {
+        let state = app.tool_layout().to_state();
+        let serialized = serde_json::to_string(&state).unwrap();
+        assert!(!serialized.contains("127.0.0.1"));
+        assert!(!serialized.contains("/p/"));
+        assert!(serialized.contains("/site/remote.html"));
+        assert!(serialized.contains("persist.test"));
+        let view = WorkspaceStore::all(cx)
+            .get(app.workspace)
+            .and_then(|v| v.tool_layout.as_ref())
+            .cloned()
+            .expect("persisted layout");
+        let view_json = serde_json::to_string(&view).unwrap();
+        assert!(!view_json.contains("127.0.0.1"));
+        assert!(!view_json.contains("/p/"));
+        let _ = local_id;
+        serialized
+    });
+    assert!(json.contains("html_path"));
+}
+
+#[gpui_kit::test]
+fn restored_html_preview_lazily_mounts_and_recovers_missing_file_via_retry(
+    cx: &mut TestAppContext,
+) {
+    lyrel_ui_base::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    let site = LocalHost::new().canonicalize(dir.path()).unwrap();
+    let html_file = site.join("restored.html");
+    std::fs::write(&html_file, "<h1>Restored</h1>").unwrap();
+    let clean_path = lyrel_core::core::path_spelling::spelling_on(HostId::LOCAL, &html_file)
+        .to_string_lossy()
+        .into_owned();
+
+    let workspace = WorkspaceId::new();
+    let tab_id = "web-restored-html".to_string();
+    let state = ToolLayoutState {
+        version: ToolLayoutState::CURRENT_VERSION,
+        order: vec![
+            TabEntryState::Tool(RightPanelTab::Info),
+            TabEntryState::Tool(RightPanelTab::Browser),
+            TabEntryState::Web(WebTabState {
+                id: tab_id.clone(),
+                address: clean_path.clone(),
+                host: None,
+                title: "restored.html".into(),
+                html_path: Some(clean_path.clone()),
+            }),
+        ],
+        active: TabSelectionState::Tool(RightPanelTab::Browser),
+        last_used: RightPanelTab::Info,
+        open: true,
+    };
+    cx.update(|cx| {
+        WorkspaceStore::install_for_test(
+            cx,
+            WindowViews {
+                views: vec![WindowView {
+                    id: workspace,
+                    tool_layout: Some(state),
+                    ..WindowView::default()
+                }],
+                active: Some(workspace),
+            },
+        );
+    });
+    let (app, mut vcx) = crate::ui::app::test_window::harness_on_workspace(cx, workspace);
+    let _stream = attach_quiet_tab(&app, &mut vcx);
+    settle(&mut vcx);
+
+    // Restoring does not eagerly start the server or mount anything until the tab is prepared.
+    cx.update(|cx| {
+        let service = cx.default_global::<HtmlPreviewService>();
+        assert!(!service.is_running());
+        assert_eq!(service.active_mount_count(), 0);
+    });
+
+    // Remove the file before selecting the restored tab -> missing-file overlay + Retry button.
+    std::fs::remove_file(&html_file).unwrap();
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.reveal_browser_page(&tab_id, window, cx);
+    });
+    wait_until(&mut vcx, "missing html overlay", |vcx| {
+        app.read_with(vcx, |app, _| {
+            app.right_panel
+                .web_pages
+                .get(&tab_id)
+                .is_some_and(|page| matches!(page.status, PageStatus::Failed(_)))
+        })
+    });
+    app.read_with(&vcx, |app, _| {
+        let page = &app.right_panel.web_pages[&tab_id];
+        assert_eq!(
+            page.status,
+            PageStatus::Failed(t(L10nKey::BrowserHtmlMissing).to_string())
+        );
+        assert_eq!(page.display_url, clean_path);
+        assert!(page.html_mount.is_none());
+    });
+    vcx.update(|window, _| {
+        assert!(window.find(format!("browser-overlay-{tab_id}")).visible());
+        assert!(
+            window
+                .find(format!("browser-overlay-retry-{tab_id}"))
+                .visible()
+        );
+        assert!(
+            window
+                .try_find(format!("browser-overlay-open-{tab_id}"))
+                .is_none()
+        );
+    });
+
+    // Restore the file and click Retry -> lazily mounts and navigates without leaking loopback URL.
+    std::fs::write(&html_file, "<h1>Back Online</h1>").unwrap();
+    vcx.update(|window, cx| {
+        window.click(format!("browser-overlay-retry-{tab_id}"), cx);
+    });
+    let cmds = wait_for_commands(&app, &mut vcx, &tab_id, 2);
+    let mount_url = match &cmds[1] {
+        BrowserCommand::Navigate { url } => url.clone(),
+        other => panic!("expected Navigate, got {other:?}"),
+    };
+    assert!(mount_url.ends_with("/restored.html"));
+    let (status, body) = http_get(&mount_url);
+    assert_eq!(status, 200);
+    assert_eq!(body, "<h1>Back Online</h1>");
+    app.read_with(&vcx, |app, _| {
+        let page = &app.right_panel.web_pages[&tab_id];
+        assert_eq!(page.display_url, clean_path);
+        assert!(page.html_mount.is_some());
+    });
+}
+
+#[gpui_kit::test]
+fn restored_remote_html_preview_shows_disconnected_overlay_and_recovers_on_reconnect(
+    cx: &mut TestAppContext,
+) {
+    lyrel_ui_base::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let remote_dir = tempfile::tempdir().unwrap();
+    let proj = remote_dir.path().join("app");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("index.html"), "<h1>Remote Restored</h1>").unwrap();
+
+    let target = RemoteTarget::Direct {
+        user: "dev".into(),
+        host: "restore-remote.test".into(),
+        port: 22,
+    };
+    let remote_ref = RemoteRef::new(target, WorkspaceId::new());
+    let host_id = remote_ref.host_id();
+    let workspace = WorkspaceId::new();
+    let tab_id = "web-restored-remote".to_string();
+    let state = ToolLayoutState {
+        version: ToolLayoutState::CURRENT_VERSION,
+        order: vec![
+            TabEntryState::Tool(RightPanelTab::Info),
+            TabEntryState::Tool(RightPanelTab::Browser),
+            TabEntryState::Web(WebTabState {
+                id: tab_id.clone(),
+                address: "/app/index.html".into(),
+                host: Some(remote_ref.clone()),
+                title: "index.html".into(),
+                html_path: Some("/app/index.html".into()),
+            }),
+        ],
+        active: TabSelectionState::Tool(RightPanelTab::Browser),
+        last_used: RightPanelTab::Info,
+        open: true,
+    };
+    cx.update(|cx| {
+        WorkspaceStore::install_for_test(
+            cx,
+            WindowViews {
+                views: vec![WindowView {
+                    id: workspace,
+                    host: Some(remote_ref),
+                    tool_layout: Some(state),
+                    ..WindowView::default()
+                }],
+                active: Some(workspace),
+            },
+        );
+    });
+    let (app, mut vcx) = crate::ui::app::test_window::harness_on_workspace(cx, workspace);
+    let _stream = attach_quiet_tab(&app, &mut vcx);
+    settle(&mut vcx);
+
+    // First select with Host absent from HostRegistry -> disconnected overlay + Reconnect button.
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.reveal_browser_page(&tab_id, window, cx);
+    });
+    settle(&mut vcx);
+    app.read_with(&vcx, |app, _| {
+        let page = &app.right_panel.web_pages[&tab_id];
+        assert_eq!(
+            page.status,
+            PageStatus::RouteUnverified(t(L10nKey::BrowserHtmlHostDisconnected).to_string())
+        );
+        assert_eq!(page.display_url, "/app/index.html");
+        assert!(page.html_mount.is_none());
+    });
+    vcx.update(|window, _| {
+        assert!(
+            window
+                .find(format!("browser-overlay-reconnect-{tab_id}"))
+                .visible()
+        );
+        assert!(
+            window
+                .try_find(format!("browser-overlay-open-{tab_id}"))
+                .is_none()
+        );
+    });
+
+    // Also test a Host registered in HostRegistry whose is_connected() == false.
+    let disconnected_host =
+        RemotePosixTestHost::new_disconnected(host_id, remote_dir.path().to_path_buf());
+    cx.update(|cx| HostRegistry::insert(cx, disconnected_host));
+    vcx.update(|window, cx| {
+        window.click(format!("browser-overlay-reconnect-{tab_id}"), cx);
+    });
+    settle(&mut vcx);
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(
+            app.right_panel.web_pages[&tab_id].status,
+            PageStatus::RouteUnverified(t(L10nKey::BrowserHtmlHostDisconnected).to_string())
+        );
+    });
+
+    // Now connect the real Host and click Reconnect -> mounts and loads cleanly.
+    let live_host = RemotePosixTestHost::new(host_id, remote_dir.path().to_path_buf());
+    cx.update(|cx| HostRegistry::insert(cx, live_host));
+    vcx.update(|window, cx| {
+        window.click(format!("browser-overlay-reconnect-{tab_id}"), cx);
+    });
+    let cmds = wait_for_commands(&app, &mut vcx, &tab_id, 2);
+    let mount_url = match &cmds[1] {
+        BrowserCommand::Navigate { url } => url.clone(),
+        other => panic!("expected Navigate, got {other:?}"),
+    };
+    let (status, body) = http_get(&mount_url);
+    assert_eq!(status, 200);
+    assert_eq!(body, "<h1>Remote Restored</h1>");
+    app.read_with(&vcx, |app, _| {
+        let page = &app.right_panel.web_pages[&tab_id];
+        assert_eq!(page.display_url, "/app/index.html");
+        assert!(page.html_mount.is_some());
+    });
+}
+
+#[gpui_kit::test]
+fn remote_host_disconnect_marks_html_preview_disconnected_and_reconnect_remounts_on_new_host(
+    cx: &mut TestAppContext,
+) {
+    lyrel_ui_base::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let remote_dir_v1 = tempfile::tempdir().unwrap();
+    let proj_v1 = remote_dir_v1.path().join("workspace");
+    std::fs::create_dir_all(&proj_v1).unwrap();
+    std::fs::write(proj_v1.join("live.html"), "<p>v1</p>").unwrap();
+
+    let remote_dir_v2 = tempfile::tempdir().unwrap();
+    let proj_v2 = remote_dir_v2.path().join("workspace");
+    std::fs::create_dir_all(&proj_v2).unwrap();
+    std::fs::write(proj_v2.join("live.html"), "<p>v2</p>").unwrap();
+
+    let target = RemoteTarget::Direct {
+        user: "dev".into(),
+        host: "reconnect.test".into(),
+        port: 22,
+    };
+    let remote_ref = RemoteRef::new(target, WorkspaceId::new());
+    let host_id = remote_ref.host_id();
+    let host_v1 = RemotePosixTestHost::new(host_id, remote_dir_v1.path().to_path_buf());
+
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    let client_ws = cx.update(|cx| {
+        WorkspaceStore::init(cx);
+        HostRegistry::insert(cx, host_v1);
+        let id = WorkspaceStore::claim_remote(cx, remote_ref.clone());
+        WorkspaceStore::claim(cx, Some(id))
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.workspace = client_ws;
+        app.adopt_tool_layout(client_ws, cx);
+        let weak = cx.entity().downgrade();
+        crate::ui::windows::WindowRegistry::register(cx, client_ws, window.window_handle(), weak);
+    });
+
+    let remote_path = PathBuf::from("/workspace/live.html");
+    let tab_id = app.update_in(&mut vcx, |app, _window, cx| {
+        app.open_html_preview(host_id, &remote_path, cx);
+        app.active_browser_detail().unwrap().to_string()
+    });
+    let cmds = wait_for_commands(&app, &mut vcx, &tab_id, 2);
+    let v1_url = match &cmds[1] {
+        BrowserCommand::Navigate { url } => url.clone(),
+        other => panic!("expected Navigate, got {other:?}"),
+    };
+    assert_eq!(http_get(&v1_url).1, "<p>v1</p>");
+
+    // Also create an external mount to confirm HostLinks::remove purges both.
+    app.update_in(&mut vcx, |app, _window, cx| {
+        app.browser_open_external(&tab_id, cx);
+    });
+    wait_until(&mut vcx, "external mount", |vcx| {
+        vcx.update(|_, cx| cx.global::<HtmlPreviewService>().active_mount_count() >= 2)
+    });
+
+    // Disconnect the remote Host via HostLinks::remove.
+    cx.update(|cx| {
+        crate::ui::desktop_lookups::HostLinks::remove(cx, host_id);
+        let service = cx.global::<HtmlPreviewService>();
+        assert_eq!(service.active_mount_count(), 0);
+        assert!(!service.is_running());
+    });
+    settle(&mut vcx);
+
+    app.read_with(&vcx, |app, _| {
+        let page = &app.right_panel.web_pages[&tab_id];
+        assert!(page.html_mount.is_none());
+        assert_eq!(
+            page.status,
+            PageStatus::RouteUnverified(t(L10nKey::BrowserHtmlHostDisconnected).to_string())
+        );
+        assert_eq!(page.display_url, "/workspace/live.html");
+        let cmds = app.browser_surface_commands(&tab_id);
+        assert_eq!(
+            cmds.last(),
+            Some(&BrowserCommand::SetRouteGuard {
+                guard: RouteGuard::DenyLoopback,
+            })
+        );
+    });
+    vcx.update(|window, _| {
+        assert!(
+            window
+                .find(format!("browser-overlay-reconnect-{tab_id}"))
+                .visible()
+        );
+    });
+
+    // Reconnect with a new SharedHost instance -> clicking Reconnect mounts fresh token on v2.
+    let host_v2 = RemotePosixTestHost::new(host_id, remote_dir_v2.path().to_path_buf());
+    cx.update(|cx| HostRegistry::insert(cx, host_v2));
+    vcx.update(|window, cx| {
+        window.click(format!("browser-overlay-reconnect-{tab_id}"), cx);
+    });
+    let cmds_after = wait_for_commands(&app, &mut vcx, &tab_id, 5);
+    let v2_url = match &cmds_after[cmds_after.len() - 1] {
+        BrowserCommand::Navigate { url } => url.clone(),
+        other => panic!("expected Navigate, got {other:?}"),
+    };
+    assert_ne!(v1_url, v2_url);
+    assert_eq!(http_get(&v2_url).1, "<p>v2</p>");
+    app.read_with(&vcx, |app, _| {
+        let page = &app.right_panel.web_pages[&tab_id];
+        assert!(page.html_mount.is_some());
+        assert_eq!(page.display_url, "/workspace/live.html");
+    });
+}
+
+#[gpui_kit::test]
+fn html_preview_auto_reloads_on_editor_save_and_fs_events(cx: &mut TestAppContext) {
+    lyrel_ui_base::config::pin_test_config_dir();
+    cx.executor().allow_parking();
+    let dir = tempfile::tempdir().unwrap();
+    let site = LocalHost::new().canonicalize(dir.path()).unwrap();
+    let html_file = site.join("auto.html");
+    let other_file = site.join("other.html");
+    std::fs::write(&html_file, "<p>initial</p>").unwrap();
+    std::fs::write(&other_file, "<p>other</p>").unwrap();
+
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    let tab_id = app.update_in(&mut vcx, |app, _window, cx| {
+        app.open_html_preview(HostId::LOCAL, &html_file, cx);
+        app.active_browser_detail().unwrap().to_string()
+    });
+    let cmds = wait_for_commands(&app, &mut vcx, &tab_id, 2);
+    let mount_url = match &cmds[1] {
+        BrowserCommand::Navigate { url } => url.clone(),
+        other => panic!("expected Navigate, got {other:?}"),
+    };
+    app.update_in(&mut vcx, |app, _window, cx| {
+        app.on_browser_event(
+            &tab_id,
+            BrowserEvent::Navigated {
+                url: mount_url.clone(),
+                can_back: false,
+                can_forward: false,
+            },
+            cx,
+        );
+    });
+    settle(&mut vcx);
+
+    // Open the same HTML file in the built-in editor, modify it, and save it.
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.open_file_in_editor(&html_file, window, cx);
+    });
+    let editor_input = {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            vcx.run_until_parked();
+            if let Some(file) = app.read_with(&vcx, |app, cx| app.editor_active_local_file(cx)) {
+                break file.into_input();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "editor file load timeout"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    };
+    app.update_in(&mut vcx, |app, window, cx| {
+        editor_input.update(cx, |input, cx| {
+            input.set_value("<p>edited-in-editor</p>", window, cx);
+        });
+        app.editor_save_active(window, cx);
+    });
+    let cmds_after_save = wait_for_reload_count(&app, &mut vcx, &tab_id, 1);
+    assert_eq!(cmds_after_save.last(), Some(&BrowserCommand::Reload));
+    assert_eq!(http_get(&mount_url).1, "<p>edited-in-editor</p>");
+
+    // Unrelated file or directory FsEvents must NOT trigger reload.
+    let reload_count_before_unrelated = cmds_after_save
+        .iter()
+        .filter(|c| matches!(c, BrowserCommand::Reload))
+        .count();
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.on_file_tree_event(
+            &FileTreeEvent::FsEvents {
+                host: HostId::LOCAL,
+                paths: HashSet::from([other_file.clone(), site.clone()]),
+            },
+            window,
+            cx,
+        );
+    });
+    settle(&mut vcx);
+    assert_eq!(
+        app.read_with(&vcx, |app, _| {
+            app.browser_surface_commands(&tab_id)
+                .iter()
+                .filter(|c| matches!(c, BrowserCommand::Reload))
+                .count()
+        }),
+        reload_count_before_unrelated
+    );
+
+    // External modification + FileTreeEvent::FsEvents for html_file triggers Reload & serves fresh bytes.
+    std::fs::write(&html_file, "<p>external-edit</p>").unwrap();
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.on_file_tree_event(
+            &FileTreeEvent::FsEvents {
+                host: HostId::LOCAL,
+                paths: HashSet::from([html_file.clone()]),
+            },
+            window,
+            cx,
+        );
+    });
+    let cmds_after_fs = wait_for_reload_count(&app, &mut vcx, &tab_id, 2);
+    assert_eq!(cmds_after_fs.last(), Some(&BrowserCommand::Reload));
+    assert_eq!(http_get(&mount_url).1, "<p>external-edit</p>");
 }

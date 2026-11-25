@@ -79,6 +79,15 @@ impl HostLinks {
         {
             service.purge_host(id);
         }
+        if !id.is_local() && cx.has_global::<crate::ui::windows::WindowRegistry>() {
+            for (_, weak_app) in crate::ui::windows::WindowRegistry::open_windows(cx) {
+                if let Some(app) = weak_app.upgrade() {
+                    let _ = app.update(cx, |app, cx| {
+                        app.on_html_host_disconnected(id, cx);
+                    });
+                }
+            }
+        }
     }
 
     pub fn len(cx: &mut App) -> usize {

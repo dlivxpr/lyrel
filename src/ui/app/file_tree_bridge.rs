@@ -60,6 +60,8 @@ impl LyrelApp {
             }
             FileTreeEvent::FsEvents { host, paths } => {
                 self.file_tree_apply_fs_events(*host, paths, cx);
+                let changed: Vec<PathBuf> = paths.iter().cloned().collect();
+                self.reload_html_previews_for_paths(*host, &changed, cx);
             }
             FileTreeEvent::CdHere { dir } => self.file_tree_cd(dir, window, cx),
             FileTreeEvent::AttachToAgent { path } => self.attach_path_to_agent(path, "", cx),

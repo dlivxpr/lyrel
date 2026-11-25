@@ -516,7 +516,7 @@ impl ToolLayout {
     /// text, filters, expansion and drafts stay in memory, the way they
     /// always have; the page records persist, the pages' live runtimes do
     /// not.
-    fn to_state(&self) -> lyrel_core::core::session::ToolLayoutState {
+    pub(crate) fn to_state(&self) -> lyrel_core::core::session::ToolLayoutState {
         lyrel_core::core::session::ToolLayoutState {
             version: lyrel_core::core::session::ToolLayoutState::CURRENT_VERSION,
             // Tool entries in strip position order, then the page records
@@ -1702,6 +1702,7 @@ impl LyrelApp {
             let url = page
                 .map(|page| page.display_url.clone())
                 .filter(|url| !url.is_empty())
+                .or_else(|| tab.html_path.clone())
                 .unwrap_or_else(|| tab.address.clone());
             let source = self.agent_preview_source_label(tab, cx);
             let row_id = gpui_kit::SharedString::from(format!("browser-list-row-{}", tab.id));
