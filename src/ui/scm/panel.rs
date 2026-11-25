@@ -951,8 +951,31 @@ impl LyrelApp {
     ) -> Option<(SharedHost, PathBuf)> {
         let leaf = self.context_pane(window, cx)?;
         let view = leaf.read(cx);
-        let cwd = view.effective_host_cwd()?;
-        Some((view.host(cx)?, cwd))
+        if let Some(cwd) = view.effective_host_cwd() {
+            return Some((view.host(cx)?, cwd));
+        }
+        // Native-SSH panes live inside a local workspace (`host_id == LOCAL`)
+        // while their shell and working directory live on the remote server.
+        // Route SCM git probes through `SftpHost` on that pane's SSH link so
+        // the Changes panel works without requiring a full remote workspace.
+        if view
+            .remote_context()
+            .is_some_and(|ctx| ctx.kind == crate::daemon::protocol::RemoteKind::NativeSsh)
+        {
+            let cwd = view.cwd()?;
+            let route =
+                lyrel_ui_base::route::SftpRoute::new(view.pane_id, view.workspace().cloned());
+            let id = lyrel_ui_base::host_ops::HostId::from_connection_key(&route.connection_key());
+            let host =
+                lyrel_ui_base::host_registry::HostRegistry::get(cx, id).unwrap_or_else(|| {
+                    let host: SharedHost =
+                        std::sync::Arc::new(crate::ui::sftp_host::SftpHost::new(route));
+                    lyrel_ui_base::host_registry::HostRegistry::insert(cx, host.clone());
+                    host
+                });
+            return Some((host, cwd));
+        }
+        None
     }
 
     /// Turn the pane's directory into the repository root every write has to
@@ -3559,6 +3582,50 @@ mod render_idle_gpui_tests {
         assert!(!drawn(&mut vcx, src_ui));
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[gpui_kit::test]
+    fn native_ssh_pane_resolves_sftp_host_target_for_scm(cx: &mut TestAppContext) {
+        let _guard = serial();
+        let (app, mut vcx, mut pane) = test_window::harness_with_pane(cx);
+        DaemonMsg::RemoteContext(Some(crate::daemon::protocol::RemoteContext {
+            kind: crate::daemon::protocol::RemoteKind::NativeSsh,
+            target: "A100".into(),
+            argv: Vec::new(),
+        }))
+        .encode(&mut pane)
+        .expect("the pane's socket takes remote context");
+        DaemonMsg::Cwd(PathBuf::from("/home/xyz/pycode/intenter-api"))
+            .encode(&mut pane)
+            .expect("the pane's socket takes the remote cwd");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let target = loop {
+            vcx.background_executor.run_until_parked();
+            if let Some(target) =
+                app.update_in(&mut vcx, |app, window, cx| app.scm_pane_target(window, cx))
+            {
+                break target;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "native-SSH pane with a reported cwd must resolve an SftpHost SCM target"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+
+        let (host, cwd) = target;
+        assert_eq!(cwd, PathBuf::from("/home/xyz/pycode/intenter-api"));
+        assert!(
+            !host.id().is_local(),
+            "native-SSH SCM target must use a non-local SftpHost"
+        );
+        app.update_in(&mut vcx, |_, _, cx| {
+            assert!(
+                lyrel_ui_base::host_registry::HostRegistry::get(cx, host.id()).is_some(),
+                "native-SSH SftpHost must be registered in HostRegistry for ScmData probes"
+            );
+        });
     }
 }
 

@@ -394,6 +394,7 @@ pub struct InstallPlan {
 
 impl InstallPlan {
     pub const COMMAND: &'static str = "install";
+    pub const ELEVATED_COMMAND: &'static str = "install-elevated";
 
     /// The seven positional arguments after the verb and the parent pid:
     /// the shape the GUI persists in its on-disk plan.
@@ -411,9 +412,18 @@ impl InstallPlan {
 
     /// `install <parent-pid> <setup.exe> <checksums.txt> <asset-name> <install-dir> <version> <log-path> <stage-dir> [--config-dir <dir>] [--result-file <path>]`
     pub fn argv(&self) -> Vec<OsString> {
+        self.argv_with(Self::COMMAND)
+    }
+
+    /// `install-elevated <parent-pid> <setup.exe> <checksums.txt> <asset-name> <install-dir> <version> <log-path> <stage-dir> --expected-sha256 <hex> [--config-dir <dir>] [--result-file <path>]`
+    pub fn elevated_argv(&self) -> Vec<OsString> {
+        self.argv_with(Self::ELEVATED_COMMAND)
+    }
+
+    fn argv_with(&self, command: &str) -> Vec<OsString> {
         let rest = self.rest();
         let mut argv = Vec::with_capacity(rest.len() + 7);
-        argv.push(OsString::from(Self::COMMAND));
+        argv.push(OsString::from(command));
         argv.push(OsString::from(self.parent_pid.to_string()));
         argv.extend(rest.iter().map(|arg| arg.as_os_str().to_os_string()));
         argv.extend(self.tail().argv());
@@ -872,16 +882,17 @@ fn install_inner(plan: &InstallPlan, completion: Completion) -> Result<(), Strin
             &plan.log,
             "the Windows update completed; the watcher relaunches lyrel",
         );
-        // The watcher hands the outcome to the next GUI launch, so it is
-        // written before the guard comes off and anything can start.
+        // Clear the daemon spawn guard before writing the outcome file: the
+        // watcher relaunches `lyrel-app.exe` as soon as the outcome lands, and
+        // a guard still on disk would make that launch fail to start its daemon.
+        lyrel_core::daemon::update_guard::clear();
         report_outcome(
             plan.result_file.as_deref(),
             &plan.log,
             &plan.expected_version,
             &Ok(()),
         );
-        lyrel_core::daemon::update_guard::clear();
-        queue_cleanup(&plan.install_dir, &plan.stage);
+        queue_elevated_cleanup(&plan.install_dir, &plan.stage);
         return Ok(());
     }
     log_line(&plan.log, "the Windows update completed; relaunching lyrel");
@@ -916,16 +927,16 @@ fn recover_from_failed_update(
         // installation is no longer being replaced.
         log_line(&plan.log, &error);
         let result = Err(error);
-        // Before the guard comes off: the watcher hands this to the next
-        // GUI launch, and the guard is what holds that launch back.
+        // Clear the guard before writing the outcome so the watcher's relaunch
+        // does not race a still-active `update.lock`.
+        lyrel_core::daemon::update_guard::clear();
         report_outcome(
             plan.result_file.as_deref(),
             &plan.log,
             &plan.expected_version,
             &result,
         );
-        lyrel_core::daemon::update_guard::clear();
-        queue_cleanup(&plan.install_dir, &plan.stage);
+        queue_elevated_cleanup(&plan.install_dir, &plan.stage);
         return result;
     }
     recover_without_replacement(
@@ -1005,11 +1016,17 @@ fn elevated_stage_inner(plan: &ElevatedStagePlan) -> Result<(), String> {
     pin_helper_to_installed(&plan.stage.join("lyrel-updater.exe"), &install_dir)?;
 
     let staging = create_protected_staging()?;
-    let result = run_install_stage(plan, &install_dir, &staging);
-    // Whatever happened, the admin-only staging goes with this process. A
-    // removal failure strands it for the next elevated run to clear.
-    let _ = fs::remove_dir_all(&staging);
-    result
+    if let Err(error) = run_install_stage(plan, &install_dir, &staging) {
+        // `install-elevated` never took ownership of the protected staging,
+        // so clear it immediately before returning.
+        let _ = fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+    // `elevated-stage` runs from `{install_dir}\lyrel-updater.exe`. Exit
+    // immediately once `install-elevated` is running from `%ProgramData%` and
+    // recorded in `status_file`, so `{install_dir}\lyrel-updater.exe` is no
+    // longer locked when `stop_for_update` and Inno Setup replace it.
+    Ok(())
 }
 
 /// The installation this process was started from. UAC pointed the prompt
@@ -1061,18 +1078,11 @@ fn run_install_stage(
     )?;
     pin_helper_to_installed(&staged_updater, install_dir)?;
 
-    // Name this process to the watcher as late as possible: it waits on
-    // the install stage below, so its one pid covers the whole chain.
-    if let Some(parent) = plan.status_file.parent() {
-        let _ = fs::create_dir_all(parent);
-    }
-    fs::write(&plan.status_file, std::process::id().to_string())
-        .map_err(|error| format!("writing {}: {error}", plan.status_file.display()))?;
-
     log_line(&plan.log, "running the elevated install stage");
     // The same InstallPlan shape the GUI persists, with the GUI pid as the
     // process to wait on and the command-line digest as the trust anchor;
-    // InstallPlan::argv owns the exact layout this stage is parsed with.
+    // `elevated_argv` selects the `install-elevated` verb so stage 2 reports
+    // to the de-elevated watcher instead of relaunching the app elevated.
     let stage_plan = InstallPlan {
         parent_pid: plan.gui_pid,
         installer: staged_installer,
@@ -1086,17 +1096,23 @@ fn run_install_stage(
         result_file: plan.result_file.clone(),
         expected_sha256: Some(plan.expected_sha256.clone()),
     };
-    let status = Command::new(&staged_updater)
-        .args(stage_plan.argv())
+    let child = Command::new(&staged_updater)
+        .args(stage_plan.elevated_argv())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .and_then(|mut child| child.wait())
         .map_err(|error| format!("running the elevated install stage: {error}"))?;
-    if !status.success() {
-        return Err(format!("the elevated install stage exited with {status}"));
+
+    // Name stage 2's pid — NOT this process's — to the watcher. This process
+    // runs from `{install_dir}\lyrel-updater.exe` and exits right away so
+    // `stop_for_update` and Inno Setup can replace that image; stage 2 runs
+    // from `%ProgramData%` and stays alive for the entire install.
+    if let Some(parent) = plan.status_file.parent() {
+        let _ = fs::create_dir_all(parent);
     }
+    fs::write(&plan.status_file, child.id().to_string())
+        .map_err(|error| format!("writing {}: {error}", plan.status_file.display()))?;
     Ok(())
 }
 
@@ -2694,6 +2710,19 @@ fn wide_string(value: &str) -> Vec<u16> {
         .encode_wide()
         .chain(std::iter::once(0))
         .collect()
+}
+
+fn queue_elevated_cleanup(install_dir: &Path, stage: &Path) {
+    queue_cleanup(install_dir, stage);
+    // Stage 2 runs from the admin-only `%ProgramData%\lyrel\update-<pid>`
+    // directory; queue its removal once this process exits.
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(protected_stage) = exe.parent()
+        && !same_directory(protected_stage, install_dir)
+        && !same_directory(protected_stage, stage)
+    {
+        queue_cleanup(install_dir, protected_stage);
+    }
 }
 
 fn queue_cleanup(install_dir: &Path, stage: &Path) {

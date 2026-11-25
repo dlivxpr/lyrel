@@ -130,7 +130,8 @@ mod windows_contract {
     fn install_plan_carries_the_elevation_digest_when_set() {
         let mut plan = install_plan();
         plan.expected_sha256 = Some("ab".repeat(32));
-        let argv = plan.argv();
+        let argv = plan.elevated_argv();
+        assert_eq!(argv[0], OsString::from("install-elevated"));
         let parsed = InstallPlan::parse(argv.into_iter().skip(1)).unwrap();
         assert_eq!(parsed, plan);
     }

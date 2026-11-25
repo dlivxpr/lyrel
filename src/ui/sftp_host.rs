@@ -231,12 +231,36 @@ impl Host for SftpHost {
         }
     }
 
-    fn repo_root(&self, _p: &Path) -> io::Result<Option<PathBuf>> {
-        Ok(None)
+    fn repo_root(&self, p: &Path) -> io::Result<Option<PathBuf>> {
+        let output = self.git(p, &["rev-parse", "--show-toplevel"])?;
+        if output.status != Some(0) {
+            return Ok(None);
+        }
+        let root = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(PathBuf::from);
+        Ok(root)
     }
 
-    fn git(&self, _cwd: &Path, _args: &[&str]) -> io::Result<Output> {
-        Err(unsupported("git"))
+    fn git(&self, cwd: &Path, args: &[&str]) -> io::Result<Output> {
+        match self.op(SftpOp::Git {
+            cwd: rpath(cwd),
+            args: args.iter().map(|arg| (*arg).to_string()).collect(),
+        })? {
+            SftpOpResult::Git {
+                status,
+                stdout,
+                stderr,
+            } => Ok(Output {
+                status: Some(status),
+                stdout,
+                stderr,
+            }),
+            _ => Err(unexpected("Git")),
+        }
     }
 
     fn shells(&self) -> io::Result<ShellInventory> {

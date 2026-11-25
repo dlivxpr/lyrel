@@ -657,6 +657,13 @@ pub enum SftpOp {
         #[serde(with = "crate::host::b64")]
         bytes: Vec<u8>,
     },
+    /// Run a non-interactive `git` command in `cwd` over an SSH exec channel
+    /// on the pane's native-SSH connection, powering the SCM panel without a
+    /// full remote workspace server.
+    Git {
+        cwd: String,
+        args: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -675,6 +682,14 @@ pub enum SftpOpResult {
         entry: SftpEntry,
         #[serde(with = "crate::host::b64")]
         bytes: Vec<u8>,
+    },
+    /// Reply to [`SftpOp::Git`]: process exit code and raw stdout/stderr.
+    Git {
+        status: i32,
+        #[serde(with = "crate::host::b64")]
+        stdout: Vec<u8>,
+        #[serde(with = "crate::host::b64")]
+        stderr: Vec<u8>,
     },
 }
 
@@ -2723,6 +2738,13 @@ mod tests {
                     bytes: vec![0x00, 0xff, b'h', b'i'],
                 },
             },
+            ClientMsg::SftpOp {
+                pane_id: 4,
+                op: SftpOp::Git {
+                    cwd: "/home/xyz/pycode/intenter-api".into(),
+                    args: vec!["status".into(), "--porcelain=v2".into()],
+                },
+            },
             ClientMsg::SftpTransferStart(SftpTransferSpec {
                 pane_id: 4,
                 kind: SftpTransferKind::Upload,
@@ -2909,6 +2931,11 @@ mod tests {
                     target_is_dir: false,
                 },
                 bytes: vec![0x00, 0xff, 0x80, b'!'],
+            }),
+            DaemonMsg::SftpOpResult(SftpOpResult::Git {
+                status: 0,
+                stdout: b"# branch.head main\n".to_vec(),
+                stderr: Vec::new(),
             }),
             DaemonMsg::SftpTransferStarted { job_id: 3 },
             DaemonMsg::SftpTransferProgress(vec![SftpJobProgress {
