@@ -7,6 +7,7 @@ use lyrel_terminal::test_support::*;
 use lyrel_terminal::view::*;
 use lyrel_test_support::graphics_fixture::GraphicsDaemonProcess;
 use lyrel_ui_base::desktop_file::OpenFileRequested;
+use lyrel_ui_base::web_preview::{OpenWebPageRequested, WebOpenDestination};
 
 // Manual escape hatch only: normal consumer tests spawn the lightweight
 // `lyrel-graphics-fixture` process. Running this binary directly with one of
@@ -140,12 +141,31 @@ fn reading_copy_links_theme_and_ime_use_the_painted_semantic_rows(cx: &mut TestA
             });
         })
         .unwrap();
+    let opened_web = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen_web = opened_web.clone();
+    window
+        .update(cx, |_, _, cx| {
+            cx.subscribe(&view, move |_, ev: &OpenWebPageRequested, _| {
+                seen_web
+                    .borrow_mut()
+                    .push((ev.address.clone(), ev.destination));
+            })
+            .detach();
+        })
+        .unwrap();
     window
         .update(cx, |_, window, cx| {
             view.update(cx, |view, cx| assert!(view.open_link_at(2, 6, window, cx)));
         })
         .unwrap();
-    assert_eq!(cx.opened_url().as_deref(), Some("https://old.example/"));
+    cx.run_until_parked();
+    assert_eq!(
+        &*opened_web.borrow(),
+        &[(
+            "https://old.example/".to_string(),
+            WebOpenDestination::Browser
+        )]
+    );
     let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let seen = opened.clone();
     view.update(cx, |_, cx| {
