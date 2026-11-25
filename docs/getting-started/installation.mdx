@@ -481,7 +481,7 @@ node scripts/rerun-failed-ci.cjs <run-id>
 
 可信 main push 在三个独立 server 构建及平台断言成功后上传 `ci-server-<target>`，保存 7 天。Release 可复用同仓库、同 SHA、已完整成功的 main CI 产物；PR、fork 和手动 CI 产物不作为发布来源。下载固定 artifact ID，核验来源 run、目标、文件 SHA-256、Cargo 输入及 Rust／Zig／SDK 构建契约，再执行原有静态链接／Mach-O／签名检查。缺失、过期、下载失败或契约不匹配时正常重新构建，不放宽校验；Windows server 不参与此复用。该机制不是字节级可重现构建声明。路径裁剪未生成该 SHA 的 server artifact 时，同样由 Release 正常构建。
 
-CI 与 Release 使用独立的稳定 Rust 缓存键，保留 toolchain、target、flags 和依赖哈希隔离。Rust 归档仅在 `main` 上成功时写回。Linux CI 可读取 sccache 共享缓存，仅在 `main` 写入。macOS CI 仅在 `main` 启用 sccache，其余 ref 使用 rust-cache。启用 sccache 的 job 在测试结束后报告命中和缺失。标签和 PR 可读取默认分支缓存，见 [GitHub 缓存访问规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)。可用 `gh api repos/dlivxpr/lyrel/actions/cache/usage` 观察仓库的实际占用，核对 10 GB 配额。冷缓存仍需完整编译，可在 `main` 手动预热发行依赖。
+CI 与 Release 使用独立的稳定 Rust 缓存键，保留 toolchain、target、flags 和依赖哈希隔离。Rust 归档仅在 `main` 上成功时写回。Linux 和 macOS 的 CI 在 `main` 写入 sccache 编译产物，其余 ref 只读共享缓存。sccache 在测试期间保留统计，并在 job 结束时报告命中、缺失和写入。标签和 PR 可读取默认分支缓存，见 [GitHub 缓存访问规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)。可用 `gh api repos/dlivxpr/lyrel/actions/cache/usage` 观察仓库的实际占用，核对 10 GB 配额。冷缓存仍需完整编译，可在 `main` 手动预热发行依赖：
 
 ```bash
 gh workflow run release.yml --repo dlivxpr/lyrel --ref main
