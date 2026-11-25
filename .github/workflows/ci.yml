@@ -250,12 +250,12 @@ jobs:
       # 特性不会再随命令漂移，GPUI/编辑器栈只编一次。--workspace 覆盖全部成员
       # （含 lyrel-protocol、lyrel-document 与桌面 lyrel-updater）。
       #
-      # 分两步防止普通 library 与大型 libtest 并发争用。44152381769 的冷
-      # library 编译到第 22 分钟才进入根包，30 分钟仍在根包 codegen/link；
-      # 给这一编译阶段 45 分钟，第二步复用同图，逐例测试超时不变。
+      # 分两步防止普通 library 与大型 libtest 并发争用。Windows 保留 45 分钟。
+      # macOS 在 45610762980 中恢复依赖归档后仍重编了多数 crate，第 30 分钟
+      # 仍在启动新编译单元，45 分钟时被取消。给 macOS 留出 60 分钟。
       - name: Compile desktop library unit tests
         if: runner.os != 'Linux' && needs.preflight.outputs.reuse != 'true'
-        timeout-minutes: 45
+        timeout-minutes: ${{ runner.os == 'macOS' && 60 || 45 }}
         run: ${{ runner.os == 'Windows' && 'pwsh -NoProfile -File scripts/cargo-windows.ps1' || 'cargo' }} test --locked --workspace --features native-markdown-tests,test-support --target ${{ matrix.target }} --lib --no-run
       - name: Compile desktop library and headless tests
         id: desktop_tests_compile
