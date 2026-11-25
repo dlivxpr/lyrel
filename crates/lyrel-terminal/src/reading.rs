@@ -441,9 +441,11 @@ impl ReadingView {
         self.needs = Some(needs);
     }
 
-    /// Re-read retained rows that were captured from the active screen and
-    /// have since scrolled into history. The grid line is immutable from then
-    /// on, so this is the last time its content can differ from the snapshot.
+    /// Re-read retained rows that were captured from the active screen once
+    /// they settle into history OR once new output advances `live_start` past
+    /// their capture point (e.g. an inline agent TUI erasing its old input bar
+    /// and streaming output while the user is scrolled up). In-place rewrites
+    /// with no scrolling keep the captured snapshot stable.
     fn refresh_settled<T: EventListener>(
         &mut self,
         term: &Crosswords<T>,
@@ -455,19 +457,29 @@ impl ReadingView {
         let store = Arc::clone(&self.glyphs);
         let glyphs = (!store.is_empty()).then_some(&*store);
         let live = live_start(term);
+        let screen_end = live + term.screen_lines() as i64;
         let mut changed = false;
         for (&row, retained) in self.rows.iter_mut() {
-            if !retained.provisional || row >= live {
+            if !retained.provisional || row >= screen_end {
+                continue;
+            }
+            let settled = row < live;
+            if !settled && live <= retained.captured_live_start {
                 continue;
             }
             // A row that carried an image keeps the captured placeholder
             // identity its lease was taken for; its text stays frozen with it.
             if !retained.images.is_empty() {
-                retained.provisional = false;
+                if settled {
+                    retained.provisional = false;
+                }
                 continue;
             }
             retained.cells = read_cells(term, presentation, grid_line(live, row), glyphs);
-            retained.provisional = false;
+            retained.captured_live_start = live;
+            if settled {
+                retained.provisional = false;
+            }
             changed = true;
         }
         if changed {
@@ -646,6 +658,59 @@ mod tests {
                 .any(|(_, row)| text(row).contains("BAR-INPUT")),
             "a row that settled into history must show its final content, not the \
              mutable frame captured while it was still active"
+        );
+    }
+
+    #[test]
+    fn a_provisional_active_screen_row_refreshes_when_output_advances_live_start() {
+        let size = crate::size::TermSize::new(20, 8);
+        let mut term = crate::remote::test_term(size);
+        let mut parser = Processor::default();
+        // Fill history so the user can scroll up, and draw an agent input bar
+        // on the bottom rows of the active screen.
+        for i in 0..10 {
+            parser.advance(&mut term, format!("hist-{i:02}\r\n").as_bytes());
+        }
+        parser.advance(&mut term, b"\x1b[7;1H\x1b[2K> AGENT-INPUT");
+        parser.advance(&mut term, b"\x1b[8;1H\x1b[2KSTATUS-BAR");
+
+        let images = ImageStore::new();
+        let presentation = super::super::presentation::ParsePresentation::new(20);
+        let mut reading = ReadingView::capture(
+            &term,
+            &images,
+            &presentation,
+            Arc::new(crate::glyph::GlyphStore::new()),
+        );
+        assert!(
+            reading
+                .rows()
+                .any(|(_, row)| text(row).contains("AGENT-INPUT")),
+            "initial capture includes the active screen's input bar"
+        );
+
+        // The agent erases the input bar, writes streaming output into those
+        // rows, and scrolls live_start forward by 2 lines — NOT enough to push
+        // rows 7-8 into history (they are still >= live_start).
+        parser.advance(
+            &mut term,
+            b"\x1b[7;1H\x1b[2KSTREAM-LINE-1\x1b[8;1H\x1b[2KSTREAM-LINE-2\r\nSTREAM-LINE-3\r\n> NEW-INPUT",
+        );
+        reading.refresh_settled(&term, &presentation);
+
+        assert!(
+            !reading
+                .rows()
+                .any(|(_, row)| text(row).contains("AGENT-INPUT")
+                    || text(row).contains("STATUS-BAR")),
+            "once output advances live_start, provisional active-screen rows must \
+             refresh so an agent's erased input bar does not ghost mid-transcript"
+        );
+        assert!(
+            reading
+                .rows()
+                .any(|(_, row)| text(row).contains("STREAM-LINE-1")),
+            "refreshed provisional rows should show the agent's streaming output"
         );
     }
 

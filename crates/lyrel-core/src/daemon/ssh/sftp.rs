@@ -307,6 +307,9 @@ impl SftpManager {
     }
 
     pub fn op(&self, conn: &Arc<SshConnection>, op: &SftpOp) -> SftpOpResult {
+        if let SftpOp::Git { cwd, args } = op {
+            return run_git(conn, cwd, args);
+        }
         let result = SshManager::global().handle().block_on(async {
             self.with_session(conn, |sftp| async move { run_op(&sftp, op).await })
                 .await
@@ -757,6 +760,90 @@ async fn run_op(sftp: &SftpSession, op: &SftpOp) -> Result<SftpOpResult, String>
                 .await
                 .map_err(|e| format!("written, but stat after failed: {e}"))?;
             SftpOpResult::Stat(entry_from_attrs(&remote_basename(path), &attrs))
+        }
+        SftpOp::Git { .. } => {
+            return Err("git op is handled outside SFTP subsystem".to_string());
+        }
+    })
+}
+
+const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
+const GIT_MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
+
+fn posix_shell_quote(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('\'');
+    for ch in value.chars() {
+        if ch == '\'' {
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(ch);
+        }
+    }
+    quoted.push('\'');
+    quoted
+}
+
+fn build_git_command(cwd: &str, args: &[String]) -> String {
+    let mut cmd = String::from(
+        "GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false \
+         GIT_OPTIONAL_LOCKS=0 git -C ",
+    );
+    cmd.push_str(&posix_shell_quote(cwd));
+    for arg in args {
+        cmd.push(' ');
+        cmd.push_str(&posix_shell_quote(arg));
+    }
+    cmd
+}
+
+fn run_git(conn: &Arc<SshConnection>, cwd: &str, args: &[String]) -> SftpOpResult {
+    let cmd = build_git_command(cwd, args);
+    let conn = conn.clone();
+    SshManager::global().handle().block_on(async move {
+        let exchange = async move {
+            let mut channel = conn
+                .open_command_channel()
+                .await
+                .map_err(|e| format!("opening SSH exec channel: {e}"))?;
+            channel
+                .exec(true, cmd.as_str())
+                .await
+                .map_err(|e| format!("executing remote git: {e}"))?;
+            let _ = channel.eof().await;
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let mut status: i32 = -1;
+            while let Some(msg) = channel.wait().await {
+                match msg {
+                    russh::ChannelMsg::Data { data } => {
+                        if stdout.len().saturating_add(data.len()) > GIT_MAX_OUTPUT_BYTES {
+                            return Err("remote git stdout exceeded output limit".to_string());
+                        }
+                        stdout.extend_from_slice(&data);
+                    }
+                    russh::ChannelMsg::ExtendedData { data, .. } => {
+                        if stderr.len().saturating_add(data.len()) > GIT_MAX_OUTPUT_BYTES {
+                            return Err("remote git stderr exceeded output limit".to_string());
+                        }
+                        stderr.extend_from_slice(&data);
+                    }
+                    russh::ChannelMsg::ExitStatus { exit_status } => {
+                        status = exit_status as i32;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(SftpOpResult::Git {
+                status,
+                stdout,
+                stderr,
+            })
+        };
+        match tokio::time::timeout(GIT_COMMAND_TIMEOUT, exchange).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => SftpOpResult::Error(error),
+            Err(_) => SftpOpResult::Error("remote git command timed out".to_string()),
         }
     })
 }
@@ -1342,5 +1429,22 @@ mod tests {
         job.finish();
         assert_eq!(job.snapshot().state, SftpJobState::Done);
         assert!(!job.is_expired(), "just-finished job is not yet expired");
+    }
+
+    #[test]
+    fn git_command_single_quotes_cwd_and_arguments_safely() {
+        let cmd = build_git_command(
+            "/home/xyz/my 'repo'/$dir",
+            &[
+                "status".into(),
+                "--porcelain=v2".into(),
+                "--".into(),
+                "a'b `c`".into(),
+            ],
+        );
+        assert!(cmd.starts_with(
+            "GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/bin/false SSH_ASKPASS=/bin/false GIT_OPTIONAL_LOCKS=0 git -C '/home/xyz/my '\\''repo'\\''/$dir'"
+        ));
+        assert!(cmd.ends_with(" 'status' '--porcelain=v2' '--' 'a'\\''b `c`'"));
     }
 }
