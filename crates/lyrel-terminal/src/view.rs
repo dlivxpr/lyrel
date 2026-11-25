@@ -45,9 +45,9 @@ use lyrel_core::daemon::protocol::{RemoteContext, ShellSpec};
 use lyrel_ui_base::actions::{
     CloseActiveTab, CopyLinkPathUnderPointer, CopyLinkUrlUnderPointer, DecreaseFontSize,
     ForkAgentSessionDown, ForkAgentSessionLeft, ForkAgentSessionRight, ForkAgentSessionUp,
-    IncreaseFontSize, NewTab, OpenLinkInBrowser, OpenLinkInSystemBrowser, OpenLinkUnderPointer,
-    OpenLinkWithDefaultApp, RevealLinkUnderPointer, SaveAgentLaunchArgs, SendBackTab, SendTab,
-    SplitDown, SplitRight, ToggleMaximizePane,
+    IncreaseFontSize, NewTab, OpenLinkInBrowser, OpenLinkInEditor, OpenLinkInSystemBrowser,
+    OpenLinkUnderPointer, OpenLinkWithDefaultApp, RevealLinkUnderPointer, SaveAgentLaunchArgs,
+    SendBackTab, SendTab, SplitDown, SplitRight, ToggleMaximizePane,
 };
 use lyrel_ui_base::config::Config;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
@@ -147,6 +147,10 @@ impl gpui_kit::EventEmitter<lyrel_ui_base::desktop_file::OpenFileRequested> for 
 /// the Side Panel browser (#392). The terminal keeps the Host's spelling of
 /// the address; the app owns the tab and verifies the forward.
 impl gpui_kit::EventEmitter<lyrel_ui_base::web_preview::OpenWebPageRequested> for TerminalView {}
+
+/// A workspace HTML file link clicked or chosen from the context menu (#422),
+/// on its way to the Side Panel Browser or System Browser.
+impl gpui_kit::EventEmitter<lyrel_ui_base::web_preview::OpenHtmlPreviewRequested> for TerminalView {}
 
 /// A command boundary may have changed a known repository. The shell bumps
 /// its epoch without scheduling a second read alongside the badge refresh.
