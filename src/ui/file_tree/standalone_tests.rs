@@ -642,7 +642,7 @@ fn remote_html_row_context_menu_emits_dual_browser_events_with_remote_host(
     let (tree, mut vcx) = setup(cx, host.clone());
     let harness = cx.update(|cx| install_harness(cx, &tree));
     let root = PathBuf::from("/");
-    present(&tree, &mut vcx, &host, &[root.clone()], "");
+    present(&tree, &mut vcx, &host, std::slice::from_ref(&root), "");
 
     wait_until(&mut vcx, "remote tree listing", |vcx| {
         vcx.update(|_, cx| {

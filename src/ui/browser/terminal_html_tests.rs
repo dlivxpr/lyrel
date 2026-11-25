@@ -31,7 +31,7 @@ struct RemotePosixTestHost {
 }
 
 impl RemotePosixTestHost {
-    fn new(id: HostId, root: PathBuf) -> SharedHost {
+    fn shared(id: HostId, root: PathBuf) -> SharedHost {
         let canonical_root = LocalHost::new().canonicalize(&root).unwrap_or(root);
         Arc::new(Self {
             id,
@@ -387,7 +387,7 @@ fn remote_terminal_html_links_and_context_menu_open_in_browser_and_system_browse
     };
     let remote_ref = RemoteRef::new(target, WorkspaceId::new());
     let host_id = remote_ref.host_id();
-    let remote_host = RemotePosixTestHost::new(host_id, remote_dir.path().to_path_buf());
+    let remote_host = RemotePosixTestHost::shared(host_id, remote_dir.path().to_path_buf());
 
     cx.update(|cx| {
         WorkspaceStore::init(cx);

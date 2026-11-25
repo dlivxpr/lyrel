@@ -30,7 +30,7 @@ struct RemotePosixTestHost {
 }
 
 impl RemotePosixTestHost {
-    fn new(id: HostId, root: PathBuf) -> SharedHost {
+    fn shared(id: HostId, root: PathBuf) -> SharedHost {
         let canonical_root = std::fs::canonicalize(&root)
             .map(lyrel_core::core::path_spelling::local_spelling_buf)
             .unwrap_or(root);
@@ -434,7 +434,7 @@ fn remote_agent_html_preview_uses_verified_host_shares_through_remote_host_and_f
     };
     let remote_ref = RemoteRef::new(target.clone(), WorkspaceId::new());
     let host_id = remote_ref.host_id();
-    let remote_host = RemotePosixTestHost::new(host_id, remote_dir.path().to_path_buf());
+    let remote_host = RemotePosixTestHost::shared(host_id, remote_dir.path().to_path_buf());
 
     cx.update(|cx| {
         WorkspaceStore::init(cx);
@@ -551,7 +551,7 @@ fn remote_agent_html_preview_uses_verified_host_shares_through_remote_host_and_f
     );
 
     // Replacing the Host connection invalidates the PreviewBinding and fails closed.
-    let replacement_host = RemotePosixTestHost::new(host_id, remote_dir.path().to_path_buf());
+    let replacement_host = RemotePosixTestHost::shared(host_id, remote_dir.path().to_path_buf());
     cx.update(|cx| {
         HostRegistry::insert(cx, replacement_host);
     });

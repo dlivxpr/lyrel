@@ -33,7 +33,7 @@ struct RemotePosixTestHost {
 }
 
 impl RemotePosixTestHost {
-    fn new(id: HostId, root: PathBuf) -> SharedHost {
+    fn shared(id: HostId, root: PathBuf) -> SharedHost {
         let canonical_root = lyrel_core::core::path_spelling::local_spelling_buf(
             std::fs::canonicalize(&root).unwrap_or(root),
         );
@@ -442,7 +442,7 @@ fn editor_tab_context_menu_offers_dual_html_browser_actions_for_local_and_remote
     };
     let remote_ref = RemoteRef::new(target, WorkspaceId::new());
     let host_id = remote_ref.host_id();
-    let remote_host = RemotePosixTestHost::new(host_id, remote_dir.path().to_path_buf());
+    let remote_host = RemotePosixTestHost::shared(host_id, remote_dir.path().to_path_buf());
 
     let (remote_app, mut remote_vcx, _rstreams) = harness_with_tabs(cx, 1);
     remote_vcx.simulate_resize(size(px(1440.), px(900.)));
@@ -841,7 +841,7 @@ fn scm_changes_context_menu_offers_open_and_dual_html_browser_actions_for_local_
     };
     let remote_ref = RemoteRef::new(target, WorkspaceId::new());
     let host_id = remote_ref.host_id();
-    let remote_host = RemotePosixTestHost::new(host_id, remote_dir.path().to_path_buf());
+    let remote_host = RemotePosixTestHost::shared(host_id, remote_dir.path().to_path_buf());
     cx.update(|cx| {
         WorkspaceStore::init(cx);
         HostRegistry::insert(cx, remote_host);

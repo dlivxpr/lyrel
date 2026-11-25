@@ -607,11 +607,11 @@ impl LyrelApp {
             return;
         }
         let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
-            self.notify_html_preview_error(&t(L10nKey::BrowserHtmlHostDisconnected), cx);
+            self.notify_html_preview_error(t(L10nKey::BrowserHtmlHostDisconnected), cx);
             return;
         };
         if !host.is_connected() {
-            self.notify_html_preview_error(&t(L10nKey::BrowserHtmlHostDisconnected), cx);
+            self.notify_html_preview_error(t(L10nKey::BrowserHtmlHostDisconnected), cx);
             return;
         }
         let service = cx

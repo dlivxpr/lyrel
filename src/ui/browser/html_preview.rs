@@ -51,6 +51,7 @@ pub(crate) struct HtmlPreviewService {
 impl gpui_kit::Global for HtmlPreviewService {}
 
 impl HtmlPreviewService {
+    #[cfg(test)]
     pub(crate) fn is_running(&self) -> bool {
         self.inner
             .lock()
@@ -59,6 +60,7 @@ impl HtmlPreviewService {
             .is_some()
     }
 
+    #[cfg(test)]
     pub(crate) fn bound_addr(&self) -> Option<SocketAddr> {
         self.inner
             .lock()
@@ -68,6 +70,7 @@ impl HtmlPreviewService {
             .map(|server| server.addr)
     }
 
+    #[cfg(test)]
     pub(crate) fn active_mount_count(&self) -> usize {
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         inner.in_app.len() + inner.external.len()
@@ -855,7 +858,7 @@ mod tests {
     }
 
     impl PosixSandboxHost {
-        fn new(name: &str, root: PathBuf) -> SharedHost {
+        fn shared(name: &str, root: PathBuf) -> SharedHost {
             Arc::new(Self {
                 id: HostId::from_connection_key(name),
                 root: LocalHost::new().canonicalize(&root).unwrap_or(root),
@@ -1230,7 +1233,8 @@ mod tests {
         std::fs::write(assets_dir.join("app.css"), "h1 { margin: 0; }").unwrap();
         std::fs::write(outside_dir.join("leak.txt"), "nope").unwrap();
 
-        let remote = PosixSandboxHost::new("ssh-direct:dev@box:22", sandbox.path().to_path_buf());
+        let remote =
+            PosixSandboxHost::shared("ssh-direct:dev@box:22", sandbox.path().to_path_buf());
         let service = HtmlPreviewService::default();
         let mount = service
             .mount_in_app(remote, Path::new("/project/dist/index.html"))
@@ -1262,7 +1266,7 @@ mod tests {
         let local = LocalHost::new();
         let remote_dir = tempfile::tempdir().unwrap();
         let remote =
-            PosixSandboxHost::new("ssh-direct:dev@remote:22", remote_dir.path().to_path_buf());
+            PosixSandboxHost::shared("ssh-direct:dev@remote:22", remote_dir.path().to_path_buf());
 
         let mut files = Vec::new();
         for i in 0..=EXTERNAL_MOUNT_CAP {

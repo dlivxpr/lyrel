@@ -36,7 +36,7 @@ struct RemotePosixTestHost {
 }
 
 impl RemotePosixTestHost {
-    fn new(id: HostId, root: PathBuf) -> SharedHost {
+    fn shared(id: HostId, root: PathBuf) -> SharedHost {
         let canonical_root = std::fs::canonicalize(&root)
             .map(lyrel_core::core::path_spelling::local_spelling_buf)
             .unwrap_or(root);
@@ -449,7 +449,7 @@ fn remote_html_preview_and_system_browser_actions_work_and_purge_on_disconnect(
     };
     let remote_ref = RemoteRef::new(target.clone(), WorkspaceId::new());
     let host_id = remote_ref.host_id();
-    let remote_host = RemotePosixTestHost::new(host_id, remote_dir.path().to_path_buf());
+    let remote_host = RemotePosixTestHost::shared(host_id, remote_dir.path().to_path_buf());
 
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     let client_ws = cx.update(|cx| {
@@ -541,7 +541,7 @@ fn persisted_html_preview_layout_stores_only_html_path_and_host_never_loopback(
     };
     let remote_ref = RemoteRef::new(target, WorkspaceId::new());
     let host_id = remote_ref.host_id();
-    let remote_host = RemotePosixTestHost::new(host_id, remote_dir.path().to_path_buf());
+    let remote_host = RemotePosixTestHost::shared(host_id, remote_dir.path().to_path_buf());
 
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     cx.update(|cx| {
@@ -794,7 +794,7 @@ fn restored_remote_html_preview_shows_disconnected_overlay_and_recovers_on_recon
     });
 
     // Now connect the real Host and click Reconnect -> mounts and loads cleanly.
-    let live_host = RemotePosixTestHost::new(host_id, remote_dir.path().to_path_buf());
+    let live_host = RemotePosixTestHost::shared(host_id, remote_dir.path().to_path_buf());
     cx.update(|cx| HostRegistry::insert(cx, live_host));
     vcx.update(|window, cx| {
         window.click(format!("browser-overlay-reconnect-{tab_id}"), cx);
@@ -837,7 +837,7 @@ fn remote_host_disconnect_marks_html_preview_disconnected_and_reconnect_remounts
     };
     let remote_ref = RemoteRef::new(target, WorkspaceId::new());
     let host_id = remote_ref.host_id();
-    let host_v1 = RemotePosixTestHost::new(host_id, remote_dir_v1.path().to_path_buf());
+    let host_v1 = RemotePosixTestHost::shared(host_id, remote_dir_v1.path().to_path_buf());
 
     let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
     let client_ws = cx.update(|cx| {
@@ -907,7 +907,7 @@ fn remote_host_disconnect_marks_html_preview_disconnected_and_reconnect_remounts
     });
 
     // Reconnect with a new SharedHost instance -> clicking Reconnect mounts fresh token on v2.
-    let host_v2 = RemotePosixTestHost::new(host_id, remote_dir_v2.path().to_path_buf());
+    let host_v2 = RemotePosixTestHost::shared(host_id, remote_dir_v2.path().to_path_buf());
     cx.update(|cx| HostRegistry::insert(cx, host_v2));
     vcx.update(|window, cx| {
         window.click(format!("browser-overlay-reconnect-{tab_id}"), cx);
