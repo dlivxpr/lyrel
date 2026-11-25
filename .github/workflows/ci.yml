@@ -27,18 +27,16 @@ on:
 permissions:
   contents: read
 
-# A superseded PR run is dead weight the moment the next push lands, and a run
-# left going is not free: the account's concurrent-job budget is shared, and
-# macOS slots are the scarce ones. A zombie Windows job (see the `Test` step's
-# timeout below) once held a slot for the full six-hour job limit while an
-# unrelated PR's macOS job queued behind it for two and a half hours.
-#
-# Pushes to main are exempt: each commit's own run is the record of whether that
-# commit was green, and cancelling one to start the next would erase it.
-# 无关标签不改变代码，取消正在跑的完整门禁只会丢掉已付过费的证据，因此这类
-# 事件既不取消在跑运行，也不启动重型 job（ci-changes.cjs 只留 preflight）。
+# 只允许可取代旧结果的 PR 事件占用 PR ref 组。无关标签和 main push 各自保留记录。
+# Dispatch 先在独立组执行 preflight，不能取代同提交 PR 已在等待的运行。
+# 重型 job 通过 preflight 提供的分支 + head SHA 分目标排队。
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: >-
+    ${{ github.workflow }}-run-${{
+      github.event_name == 'pull_request' && (github.event.action != 'labeled' || github.event.label.name == 'ci:full') && github.ref ||
+      github.event_name == 'workflow_dispatch' && format('dispatch-{0}-{1}-{2}', github.ref, github.sha, inputs.scope) ||
+      github.run_id
+    }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && (github.event.action != 'labeled' || github.event.label.name == 'ci:full') }}
 
 jobs:
@@ -47,11 +45,11 @@ jobs:
     name: preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 15
-    # 只在 main push 上多要一项 actions: read，用于核对 PR 运行与 job 结论；
-    # 不读 artifact，也不下载 PR 侧任何内容。
+    # 只读查询：main push 核对 PR 与 job 结论，dispatch 查开放 PR 的 head。
     permissions:
       contents: read
       actions: read
+      pull-requests: read
     outputs:
       desktop: ${{ steps.diff.outputs.desktop }}
       linux: ${{ steps.diff.outputs.linux }}
@@ -59,13 +57,15 @@ jobs:
       release: ${{ steps.diff.outputs.release }}
       tier: ${{ steps.diff.outputs.tier }}
       production: ${{ steps.diff.outputs.production }}
+      heavy_key: ${{ steps.diff.outputs.heavy_key }}
+      fail_fast: ${{ steps.diff.outputs.fail_fast }}
       matrix: ${{ steps.diff.outputs.matrix }}
       reuse: ${{ steps.reuse.outputs.reuse }}
       release-reuse: ${{ steps.reuse.outputs.release-reuse }}
     steps:
       - uses: actions/checkout@v7
         with:
-          # 完整 push 的 before 可能不在最后两个提交内；PR 检查合并结果对 base 的差异。
+          # Push 需完整 before，PR 需双父 merge，dispatch 需 origin/main 的 merge-base。
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v7
@@ -73,6 +73,8 @@ jobs:
           node-version: '22'
           package-manager-cache: false
       - id: diff
+        env:
+          GITHUB_TOKEN: ${{ github.event_name == 'workflow_dispatch' && github.token || '' }}
         run: node .github/scripts/ci-changes.cjs
       # squash 后只复用 GitHub 记录的完整成功门禁：commit-associated PR 恢复
       # 合并后关系，referenced_workflows 定位不可变测试 merge SHA，REST 核对
@@ -98,7 +100,8 @@ jobs:
       - name: Validate workflow syntax
         uses: docker://rhysd/actionlint:1.7.12
         with:
-          args: -color -shellcheck= -pyflakes=
+          # 固定版尚不识别 queue；上游支持后移除此项：https://github.com/rhysd/actionlint/blob/v1.7.12/parse.go#L815-L837
+          args: -color -shellcheck= -pyflakes= -ignore ^unexpected\x20key\x20\x22queue\x22\x20for\x20\x22concurrency\x22\x20section[.]
       - name: Check release shell syntax
         run: |
           for script in .github/scripts/*.sh; do bash -n "$script"; done
@@ -125,10 +128,13 @@ jobs:
   build:
     name: build & test (${{ matrix.target }})
     strategy:
-      fail-fast: false
+      fail-fast: ${{ needs.preflight.outputs.fail_fast == 'true' }}
       matrix: ${{ fromJSON(needs.preflight.outputs.matrix) }}
     needs: preflight
     if: needs.preflight.outputs.desktop == 'true' || needs.preflight.outputs.linux == 'true'
+    concurrency:
+      group: ${{ github.workflow }}-head-${{ needs.preflight.outputs.heavy_key || github.run_id }}-build-${{ matrix.target }}
+      queue: max
     runs-on: ${{ matrix.runner }}
     # Line tables keep file:line in backtraces but shrink the cached target dir.
     env:
@@ -414,6 +420,9 @@ jobs:
   server-musl:
     needs: preflight
     if: needs.preflight.outputs.server == 'true' && needs.preflight.outputs.tier == 'full'
+    concurrency:
+      group: ${{ github.workflow }}-head-${{ needs.preflight.outputs.heavy_key || github.run_id }}-server-musl-${{ matrix.target }}
+      queue: max
     name: lyrel-server musl (${{ matrix.target }})
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -498,6 +507,9 @@ jobs:
   server-macos:
     needs: preflight
     if: needs.preflight.outputs.server == 'true' && needs.preflight.outputs.tier == 'full'
+    concurrency:
+      group: ${{ github.workflow }}-head-${{ needs.preflight.outputs.heavy_key || github.run_id }}-server-macos-${{ matrix.target }}
+      queue: max
     name: lyrel-server macOS (${{ matrix.target }})
     runs-on: macos-15
     timeout-minutes: 45
@@ -555,6 +567,9 @@ jobs:
   release-validation:
     needs: preflight
     if: needs.preflight.outputs.release == 'true' && needs.preflight.outputs.tier == 'full' && needs.preflight.outputs.release-reuse != 'true'
+    concurrency:
+      group: ${{ github.workflow }}-head-${{ needs.preflight.outputs.heavy_key || github.run_id }}-release-validation
+      queue: max
     permissions:
       contents: read
       actions: read
