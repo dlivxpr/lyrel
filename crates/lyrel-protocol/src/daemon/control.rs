@@ -3839,8 +3839,12 @@ mod tests {
         }
     }
 
-    fn idle_client() -> (ControlClient, TcpStream) {
-        let (socket, peer) = connect_to_peer(std::convert::identity);
+    fn idle_client() -> (ControlClient, thread::JoinHandle<()>) {
+        let (socket, peer) = connect_to_peer(|mut socket| {
+            // Keep receiving without replying. The client's shutdown sends EOF,
+            // and closing this end wakes any pending read on the client socket.
+            io::copy(&mut socket, &mut io::sink()).unwrap();
+        });
         let (started, ready) = mpsc::channel();
         let reader = IdleReader {
             socket: socket.try_clone().unwrap(),
@@ -3851,15 +3855,13 @@ mod tests {
         let client =
             ControlClient::connect_with(reader, socket, Some(shutdown), &hello(), no_events())
                 .unwrap();
-        // Keep the silent peer open until the test has exercised shutdown.
-        let peer = peer.join().unwrap();
         ready.recv().unwrap();
         (client, peer)
     }
 
     #[test]
     fn closing_an_idle_client_returns_promptly() {
-        let (client, _peer) = idle_client();
+        let (client, peer) = idle_client();
         assert_eq!(
             client
                 .call_with_deadline(ControlRequest::Ping, &[], Duration::ZERO)
@@ -3875,11 +3877,12 @@ mod tests {
             "close() took {:?}; it must not wait on a peer that will never speak",
             started.elapsed()
         );
+        peer.join().unwrap();
     }
 
     #[test]
     fn dropping_an_idle_client_returns_promptly() {
-        let (client, _peer) = idle_client();
+        let (client, peer) = idle_client();
         let started = Instant::now();
         drop(client);
         assert!(
@@ -3887,11 +3890,12 @@ mod tests {
             "drop took {:?}",
             started.elapsed()
         );
+        peer.join().unwrap();
     }
 
     #[test]
     fn close_reaps_the_reader_when_the_link_can_be_shut_down() {
-        let (client, _peer) = idle_client();
+        let (client, peer) = idle_client();
         let started = Instant::now();
         client.close();
         assert!(
@@ -3900,6 +3904,7 @@ mod tests {
             started.elapsed()
         );
         assert!(!client.is_connected());
+        peer.join().unwrap();
     }
 
     #[test]
