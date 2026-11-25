@@ -191,11 +191,17 @@ jobs:
       - name: Install sccache (POSIX)
         if: runner.os != 'Windows'
         uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.20.1
       - name: Enable sccache (POSIX)
         if: runner.os != 'Windows'
         run: |
           echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          # PR 合并 ref 写入的缓存只能供该 PR 使用。只在 main 预热共享缓存。
+          echo "SCCACHE_GHA_RW_MODE=${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}" >> "$GITHUB_ENV"
+          # 桌面测试可能超过默认 10 分钟空闲期，保留统计供 action 的 post 步骤读取。
+          echo "SCCACHE_IDLE_TIMEOUT=0" >> "$GITHUB_ENV"
 
       # nextest 提供每个用例的超时与更快的调度；只跑 libtest 目标，见下方 -E。
       - uses: taiki-e/install-action@v2
