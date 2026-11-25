@@ -1534,6 +1534,19 @@ impl LyrelApp {
                 if let Some(directory) = directory {
                     self.scm_invalidate_cwd(*host, directory, cx);
                 }
+                if let Some(path) = self
+                    .editor
+                    .read(cx)
+                    .buffers()
+                    .get(*id)
+                    .map(|buffer| buffer.path.clone())
+                    .filter(|path| {
+                        !path.as_os_str().is_empty()
+                            && lyrel_core::core::web::is_html_preview_path(path)
+                    })
+                {
+                    self.reload_html_previews_for_paths(*host, &[path], cx);
+                }
             }
             EditorPanelEvent::IdentityChanged => self.editor_rebuild_watcher(cx),
             EditorPanelEvent::RenameRequested { id, offset, name } => {
