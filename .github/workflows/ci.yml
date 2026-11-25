@@ -181,20 +181,20 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: false
 
-      # sccache 只在 POSIX runner 启用。Windows 上把 rustc 包进 sccache 已经实测
-      # 触发 os error 206（文件名/扩展名太长，cargo 1.100 的
-      # build/<pkg>/<hash>/out 布局进一步加长命令），会在编译真正的 crate 时失败；
-      # 该路径尚未证明可用，因此 Windows 继续走已经验证过的 rust-cache + 包装器。
+      # Linux 可在 PR 命中共享缓存。macOS PR 的只读样本只命中 38 次，
+      # 另有 1334 次缺失。macOS 在其他 ref 使用 Cargo 与 rust-cache。
+      # Windows 使用 rust-cache 与包装器，避免 sccache 路径触发 os error 206。
       # action 安装二进制并导出 ACTIONS_RUNTIME_TOKEN/ACTIONS_RESULTS_URL
       # （runner 掩码）；wrapper 变量只通过 $GITHUB_ENV 注入后续步骤，
       # 不写自定义 token、凭据或本地缓存路径。
       - name: Install sccache (POSIX)
-        if: runner.os != 'Windows'
+        id: sccache
+        if: runner.os == 'Linux' || (runner.os == 'macOS' && github.ref == 'refs/heads/main')
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: v0.20.1
       - name: Enable sccache (POSIX)
-        if: runner.os != 'Windows'
+        if: steps.sccache.outcome == 'success'
         run: |
           echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
