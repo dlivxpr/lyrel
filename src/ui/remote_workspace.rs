@@ -1223,6 +1223,22 @@ impl RemoteLinks {
         RemoteLinks::ensure_running(cx);
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_attached_for_test(cx: &mut gpui_kit::App, host: HostId) {
+        cx.default_global::<RemoteLinks>().machines.insert(
+            host,
+            MachineLink {
+                state: LinkState::Attached,
+                backoff: Backoff::default(),
+                next_attempt: None,
+                attempting: false,
+                last_error: None,
+                dismissed_error: None,
+                attach_sent: std::collections::HashSet::new(),
+            },
+        );
+    }
+
     pub(crate) fn status_of(cx: &gpui_kit::App, workspace: WorkspaceId) -> Option<RemoteStatus> {
         let host = WorkspaceStore::remote_ref(cx, workspace)?;
         let Some(links) = cx.try_global::<RemoteLinks>() else {
@@ -1825,6 +1841,7 @@ fn deliver_preview_event(
     workspace: &str,
     pane: u64,
     url: String,
+    file: Option<String>,
     scratch: String,
 ) {
     let source_workspace: WorkspaceId = match workspace.parse() {
@@ -1853,7 +1870,9 @@ fn deliver_preview_event(
         return;
     };
     let _ = app.update(cx, |app, cx| {
-        if let Err(error) = app.reveal_agent_preview(source_workspace, pane, &url, &scratch, cx) {
+        if let Err(error) =
+            app.reveal_agent_preview(source_workspace, pane, &url, file.as_deref(), &scratch, cx)
+        {
             log::warn!("preview from {host:?} for pane %{pane} was refused: {error}");
         }
     });
@@ -1914,8 +1933,9 @@ pub(crate) fn drain_events(cx: &mut gpui_kit::App) {
                 pane,
                 url,
                 scratch,
+                file,
             } => {
-                deliver_preview_event(cx, host, &workspace, pane, url, scratch);
+                deliver_preview_event(cx, host, &workspace, pane, url, file, scratch);
             }
             other => log::debug!("unhandled control event from {host:?}: {other:?}"),
         }

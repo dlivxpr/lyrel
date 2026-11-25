@@ -37,6 +37,10 @@ mod tests;
 mod html_preview_tests;
 
 #[cfg(test)]
+#[path = "browser/agent_html_preview_tests.rs"]
+mod agent_html_preview_tests;
+
+#[cfg(test)]
 #[path = "browser/overlay_tests.rs"]
 mod overlay_tests;
 
@@ -726,7 +730,7 @@ impl LyrelApp {
         }
     }
 
-    /// Reveals one agent-requested preview in its own workspace (#393).
+    /// Reveals one agent-requested preview in its own workspace (#393, #424).
     ///
     /// Called only for the window that holds `source_workspace`. The Host
     /// binding is read from this window's own `WorkspaceStore` record, never
@@ -740,13 +744,31 @@ impl LyrelApp {
         source_workspace: WorkspaceId,
         pane: u64,
         address: &str,
+        file: Option<&str>,
         scratch: &str,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let address = address.trim();
-        if !lyrel_core::core::web::is_preview_address(address) {
-            return Err("an agent preview needs an absolute http(s) URL".to_string());
+        enum Target {
+            Url(String),
+            Html(String),
         }
+
+        let target = if let Some(raw_html) = file {
+            let trimmed = raw_html.trim();
+            if trimmed.is_empty() || !lyrel_core::core::web::is_html_preview_str(trimmed) {
+                return Err(
+                    "an agent HTML preview requires a .html, .htm, or .xhtml file path".to_string(),
+                );
+            }
+            Target::Html(trimmed.to_string())
+        } else {
+            let address = address.trim();
+            if !lyrel_core::core::web::is_preview_address(address) {
+                return Err("an agent preview needs an absolute http(s) URL".to_string());
+            }
+            Target::Url(address.to_string())
+        };
+
         let host = lyrel_ui_base::session::WorkspaceStore::remote_ref(cx, self.workspace);
         let expected = match &host {
             Some(host) if host.workspace == source_workspace => Some(host.clone()),
@@ -756,6 +778,28 @@ impl LyrelApp {
             None if source_workspace == self.workspace => None,
             None => {
                 return Err("the requested preview belongs to another workspace".to_string());
+            }
+        };
+        let host_id = expected
+            .as_ref()
+            .map(|remote| remote.host_id())
+            .unwrap_or(HostId::LOCAL);
+        let (tab_address, tab_title, tab_html_path) = match target {
+            Target::Url(url) => (url, String::new(), None),
+            Target::Html(raw_html) => {
+                let clean_path = lyrel_core::core::path_spelling::spelling_on(
+                    host_id,
+                    std::path::Path::new(&raw_html),
+                )
+                .to_string_lossy()
+                .into_owned();
+                let file_name = clean_path
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(&clean_path)
+                    .to_string();
+                (clean_path.clone(), file_name, Some(clean_path))
             }
         };
         let source = PreviewSourceState {
@@ -771,15 +815,18 @@ impl LyrelApp {
         });
         if let Some(at) = existing_ix {
             let existing = layout.web_tabs[at].clone();
-            let address_changed = existing.address != address;
             let host_changed = existing.host != expected;
+            let was_html = existing.html_path.is_some();
+            let is_html = tab_html_path.is_some();
+            let address_changed =
+                existing.address != tab_address || existing.html_path != tab_html_path;
             let tab = WebTab {
                 id: existing.id.clone(),
-                address: address.to_string(),
-                title: String::new(),
+                address: tab_address.clone(),
+                title: tab_title,
                 host: expected,
                 source: Some(source),
-                html_path: None,
+                html_path: tab_html_path,
             };
             let binding = self.preview_binding_for(&tab, cx);
             layout.web_tabs[at] = tab.clone();
@@ -801,11 +848,26 @@ impl LyrelApp {
                 .entry(tab.id.clone())
                 .or_insert_with(WebPage::new);
             page.preview = binding;
-            page.display_url = address.to_string();
-            if address_changed || host_changed {
+            page.display_url = tab_address.clone();
+            let has_surface = page.surface.is_some();
+            let had_html_mount = page.html_mount.is_some();
+            if is_html {
+                page.html_mount = None;
                 page.load_error = None;
                 page.live_title.clear();
                 page.status = PageStatus::Starting;
+                page.route = RouteState::Local;
+                if !has_surface {
+                    page.surface_attempted = false;
+                    page.surface_pending = false;
+                }
+            } else if address_changed || host_changed || was_html || had_html_mount {
+                page.html_mount = None;
+                page.load_error = None;
+                page.live_title.clear();
+                page.status = PageStatus::Starting;
+                page.surface_attempted = false;
+                page.surface_pending = false;
                 page.route = if bound {
                     RouteState::Unverified
                 } else {
@@ -816,20 +878,25 @@ impl LyrelApp {
             // after the reveal finds the document front.
             self.reveal_browser_detail(tab.id.clone(), cx);
             self.store_tool_layout(&layout, cx);
-            if address_changed || host_changed {
-                self.navigate_web_tab(&tab.id, address, cx);
+            if is_html {
+                if has_surface {
+                    self.begin_web_load(&tab.id, PageLoad::Navigate { url: tab_address }, cx);
+                }
+            } else if address_changed || host_changed || was_html || had_html_mount {
+                self.navigate_web_tab(&tab.id, &tab_address, cx);
             }
             cx.notify();
             return Ok(());
         }
         let bound = expected.is_some();
+        let is_html = tab_html_path.is_some();
         let tab = WebTab {
             id: self.new_web_tab_id(),
-            address: address.to_string(),
-            title: String::new(),
+            address: tab_address.clone(),
+            title: tab_title,
             host: expected,
             source: Some(source),
-            html_path: None,
+            html_path: tab_html_path,
         };
         let binding = self.preview_binding_for(&tab, cx);
         let tab_id = tab.id.clone();
@@ -844,11 +911,11 @@ impl LyrelApp {
             .entry(tab_id)
             .or_insert_with(WebPage::new);
         page.preview = binding;
-        page.display_url = address.to_string();
-        page.route = if bound {
-            RouteState::Unverified
-        } else {
+        page.display_url = tab_address;
+        page.route = if is_html || !bound {
             RouteState::Local
+        } else {
+            RouteState::Unverified
         };
         self.store_tool_layout(&layout, cx);
         cx.notify();

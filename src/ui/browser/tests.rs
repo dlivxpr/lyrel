@@ -397,8 +397,15 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(cx: &mut T
     let (focused, first) = app.update_in(&mut vcx, |app, window, cx| {
         app.focus_active(window, cx);
         let focused = window.focused(cx).expect("terminal content owns focus");
-        app.reveal_agent_preview(app.workspace, 1, "http://localhost:5173/app", &scratch, cx)
-            .expect("a local preview is eligible");
+        app.reveal_agent_preview(
+            app.workspace,
+            1,
+            "http://localhost:5173/app",
+            None,
+            &scratch,
+            cx,
+        )
+        .expect("a local preview is eligible");
         let first = active_web(app).expect("the preview is the front detail");
         assert!(app.right_panel_visible, "the panel reveals for the preview");
         (focused, first)
@@ -436,8 +443,15 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(cx: &mut T
     // A second request from the same agent pane reuses its preview tab and
     // moves that page rather than piling up tabs.
     app.update_in(&mut vcx, |app, _window, cx| {
-        app.reveal_agent_preview(app.workspace, 1, "http://localhost:5173/next", &scratch, cx)
-            .expect("the same pane may move its preview");
+        app.reveal_agent_preview(
+            app.workspace,
+            1,
+            "http://localhost:5173/next",
+            None,
+            &scratch,
+            cx,
+        )
+        .expect("the same pane may move its preview");
     });
     app.read_with(&vcx, |app, _| {
         let layout = app.tool_layout();
@@ -475,6 +489,7 @@ fn an_explicit_share_writes_the_screenshot_and_prompts_the_original_pane(cx: &mu
             app.workspace,
             1,
             "http://localhost:5173/app",
+            None,
             &scratch.path().to_string_lossy(),
             cx,
         )
@@ -550,6 +565,7 @@ fn a_stale_capture_answer_never_consumes_a_newer_share(cx: &mut TestAppContext) 
             app.workspace,
             1,
             "http://localhost:5173/app",
+            None,
             &scratch_path,
             cx,
         )
@@ -631,6 +647,7 @@ fn a_cancelled_share_never_reaches_the_pane_after_its_write(cx: &mut TestAppCont
             app.workspace,
             1,
             "http://localhost:5173/app",
+            None,
             &scratch_path,
             cx,
         )
@@ -808,6 +825,7 @@ fn a_missing_source_pane_refuses_the_share_visibly(cx: &mut TestAppContext) {
             app.workspace,
             9,
             "http://localhost:5173/app",
+            None,
             &scratch.path().to_string_lossy(),
             cx,
         )
@@ -875,6 +893,7 @@ fn a_same_numbered_pane_on_another_route_never_steals_the_share(cx: &mut TestApp
             app.workspace,
             1,
             "http://localhost:5173/app",
+            None,
             &scratch_path,
             cx,
         )
@@ -942,6 +961,7 @@ fn a_remote_preview_inherits_the_windows_verified_host_binding(cx: &mut TestAppC
             host.workspace,
             7,
             "http://localhost:3000/app",
+            None,
             &scratch.path().to_string_lossy(),
             cx,
         )
@@ -971,6 +991,7 @@ fn a_preview_url_that_breaks_the_surface_policy_never_opens(cx: &mut TestAppCont
                 app.workspace,
                 1,
                 "file:///etc/passwd",
+                None,
                 "/tmp/lyrel/previews",
                 cx,
             )

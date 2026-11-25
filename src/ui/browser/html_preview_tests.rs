@@ -37,7 +37,9 @@ struct RemotePosixTestHost {
 
 impl RemotePosixTestHost {
     fn new(id: HostId, root: PathBuf) -> SharedHost {
-        let canonical_root = LocalHost::new().canonicalize(&root).unwrap_or(root);
+        let canonical_root = std::fs::canonicalize(&root)
+            .map(lyrel_core::core::path_spelling::local_spelling_buf)
+            .unwrap_or(root);
         Arc::new(Self {
             id,
             root: canonical_root,
@@ -293,7 +295,9 @@ fn file_scheme_remains_denied_while_local_html_preview_renders_via_loopback(
 
     cx.executor().allow_parking();
     let dir = tempfile::tempdir().unwrap();
-    let site = LocalHost::new().canonicalize(dir.path()).unwrap();
+    let site = lyrel_core::core::path_spelling::local_spelling_buf(
+        std::fs::canonicalize(dir.path()).unwrap(),
+    );
     let html_file = site.join("index.html");
     let sub_dir = site.join("sub");
     std::fs::create_dir_all(&sub_dir).unwrap();

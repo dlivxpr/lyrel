@@ -115,6 +115,8 @@ pub mod mock {
         pub events: Vec<ControlEvent>,
         /// Set to make `hello` fail — doctor's unreachable-server branch.
         pub unreachable: bool,
+        /// Whether `hello().features` advertises `feature::PREVIEW_HTML`.
+        pub preview_html_supported: bool,
         pub execs: Vec<(u64, Vec<u8>, Option<std::time::Duration>)>,
         pub exec_run: ExecRun,
     }
@@ -141,6 +143,7 @@ pub mod mock {
                 run_exit: Some(0),
                 events: Vec::new(),
                 unreachable: false,
+                preview_html_supported: true,
                 execs: Vec::new(),
                 exec_run: ExecRun {
                     end: ExecEnd::Finished {
@@ -183,6 +186,10 @@ pub mod mock {
             if self.unreachable {
                 anyhow::bail!("connect: no server is listening");
             }
+            let mut features = vec![feature::CONTROL.into(), feature::MACHINE_TREE.into()];
+            if self.preview_html_supported {
+                features.push(feature::PREVIEW_HTML.into());
+            }
             Ok(ControlHelloOk {
                 control_version: CONTROL_VERSION,
                 protocol_version: PROTOCOL_VERSION,
@@ -190,7 +197,7 @@ pub mod mock {
                 separator: '\\',
                 home: "C:\\Users\\mock".into(),
                 agent_environment: None,
-                features: vec![feature::CONTROL.into(), feature::MACHINE_TREE.into()],
+                features,
                 instance: "mock-instance".into(),
             })
         }

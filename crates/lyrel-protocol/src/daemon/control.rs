@@ -250,6 +250,9 @@ pub mod feature {
     pub const SESSION_BATCH: &str = "session-batch-v1";
     /// Whole-host samples include receive and transmit rates when available.
     pub const HOST_NETWORK_METRICS: &str = "host-network-metrics-v1";
+    /// The peer accepts workspace HTML file paths in [`ControlRequest::PreviewOpen`]
+    /// and delivers them to GUI links that negotiated `preview_html` (#424).
+    pub const PREVIEW_HTML: &str = "preview-html-v1";
 }
 
 pub use crate::host::{
@@ -445,6 +448,10 @@ pub enum ControlRequest {
         pane: u64,
         url: String,
         scratch: String,
+        /// Workspace-local or absolute HTML file path resolved and
+        /// canonicalized by the owning daemon (#424). Additive on v24.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
     },
 
     MachineGet,
@@ -1097,6 +1104,9 @@ pub enum ControlEvent {
         pane: u64,
         url: String,
         scratch: String,
+        /// Canonical HTML file path on the owning Host (#424). Additive on v24.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
     },
     Layout {
         workspace: String,
@@ -1143,6 +1153,11 @@ pub struct ControlHello {
     /// Additive on the wire — an older daemon ignores it.
     #[serde(default)]
     pub preview: bool,
+    /// This connection accepts workspace HTML file previews (`file` field in
+    /// [`ControlEvent::PreviewOpen`]) (#424). Additive on the wire — an older
+    /// daemon ignores it.
+    #[serde(default)]
+    pub preview_html: bool,
 }
 
 impl ControlHello {
@@ -1154,6 +1169,7 @@ impl ControlHello {
             client_hostname: client_hostname.into(),
             gui: false,
             preview: false,
+            preview_html: false,
         }
     }
 
@@ -1161,6 +1177,7 @@ impl ControlHello {
         ControlHello {
             gui: true,
             preview: true,
+            preview_html: true,
             ..Self::host_rpc(client_token, client_hostname)
         }
     }
@@ -1169,6 +1186,7 @@ impl ControlHello {
     /// this machine's GUI launcher. Used by the remote workspace link.
     pub fn with_preview(mut self) -> Self {
         self.preview = true;
+        self.preview_html = true;
         self
     }
 }
@@ -2291,6 +2309,13 @@ mod tests {
                 pane: 7,
                 url: "http://localhost:5173/app".into(),
                 scratch: "/tmp/lyrel-preview".into(),
+                file: None,
+            },
+            ControlRequest::PreviewOpen {
+                pane: 7,
+                url: String::new(),
+                scratch: "/tmp/lyrel-preview".into(),
+                file: Some("/workspace/index.html".into()),
             },
             ControlRequest::AgentStates,
             ControlRequest::PaneProcs { pane_id: 7 },
@@ -2541,6 +2566,14 @@ mod tests {
                 pane: 7,
                 url: "http://localhost:5173/app".into(),
                 scratch: "/tmp/lyrel-preview".into(),
+                file: None,
+            },
+            ControlEvent::PreviewOpen {
+                workspace: WorkspaceId::new().to_string(),
+                pane: 7,
+                url: String::new(),
+                scratch: "/tmp/lyrel-preview".into(),
+                file: Some("/workspace/index.html".into()),
             },
         ]
     }
@@ -2553,6 +2586,7 @@ mod tests {
             client_hostname: "laptop".into(),
             gui: false,
             preview: false,
+            preview_html: false,
         }
     }
 
@@ -2585,6 +2619,40 @@ mod tests {
                        "client_hostname":"laptop"}"#;
         let hello: ControlHello = serde_json::from_str(json).expect("decodes without gui role");
         assert!(!hello.gui);
+        assert!(!hello.preview);
+        assert!(!hello.preview_html);
+    }
+
+    #[test]
+    fn preview_open_without_file_decodes_from_earlier_v24_wire() {
+        let req: ControlRequest = serde_json::from_str(
+            r#"{"preview_open":{"pane":7,"url":"http://localhost:5173","scratch":"/tmp/s"}}"#,
+        )
+        .expect("decodes without file field");
+        assert_eq!(
+            req,
+            ControlRequest::PreviewOpen {
+                pane: 7,
+                url: "http://localhost:5173".into(),
+                scratch: "/tmp/s".into(),
+                file: None,
+            }
+        );
+
+        let event: ControlEvent = serde_json::from_str(
+            r#"{"preview_open":{"workspace":"w1","pane":7,"url":"http://localhost:5173","scratch":"/tmp/s"}}"#,
+        )
+        .expect("decodes event without file field");
+        assert_eq!(
+            event,
+            ControlEvent::PreviewOpen {
+                workspace: "w1".into(),
+                pane: 7,
+                url: "http://localhost:5173".into(),
+                scratch: "/tmp/s".into(),
+                file: None,
+            }
+        );
     }
 
     fn hello_ok() -> ControlHelloOk {
