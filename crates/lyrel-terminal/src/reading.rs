@@ -442,10 +442,16 @@ impl ReadingView {
     }
 
     /// Re-read retained rows that were captured from the active screen once
-    /// they settle into history OR once new output advances `live_start` past
-    /// their capture point (e.g. an inline agent TUI erasing its old input bar
-    /// and streaming output while the user is scrolled up). In-place rewrites
-    /// with no scrolling keep the captured snapshot stable.
+    /// they settle into immutable history, OR when they are currently off-screen
+    /// (outside `self.visible`) and new output has advanced `live_start` past
+    /// their capture point.
+    ///
+    /// Rows currently visible in the viewport stay frozen while still on the
+    /// active screen (`row >= live`), preserving selection, search, links, and
+    /// reading stability. Off-screen active-screen rows (such as an inline agent
+    /// TUI's bottom input bar while the user reads earlier output above) refresh
+    /// once output advances `live_start`, so scrolling back down does not reveal
+    /// a stale input-bar ghost sandwiched inside newer output.
     fn refresh_settled<T: EventListener>(
         &mut self,
         term: &Crosswords<T>,
@@ -464,7 +470,9 @@ impl ReadingView {
                 continue;
             }
             let settled = row < live;
-            if !settled && live <= retained.captured_live_start {
+            let offscreen_stale =
+                !self.visible.contains(&row) && live > retained.captured_live_start;
+            if !settled && !offscreen_stale {
                 continue;
             }
             // A row that carried an image keeps the captured placeholder
@@ -662,17 +670,22 @@ mod tests {
     }
 
     #[test]
-    fn a_provisional_active_screen_row_refreshes_when_output_advances_live_start() {
+    fn offscreen_provisional_active_screen_rows_refresh_while_visible_rows_stay_frozen() {
         let size = crate::size::TermSize::new(20, 8);
         let mut term = crate::remote::test_term(size);
         let mut parser = Processor::default();
-        // Fill history so the user can scroll up, and draw an agent input bar
-        // on the bottom rows of the active screen.
+        // Fill history so the user can scroll up, draw a visible active-screen
+        // row near the top and an agent input bar at the bottom of the screen.
         for i in 0..10 {
             parser.advance(&mut term, format!("hist-{i:02}\r\n").as_bytes());
         }
+        parser.advance(&mut term, b"\x1b[4;1H\x1b[2KVISIBLE-FROZEN");
         parser.advance(&mut term, b"\x1b[7;1H\x1b[2K> AGENT-INPUT");
         parser.advance(&mut term, b"\x1b[8;1H\x1b[2KSTATUS-BAR");
+
+        // Scroll up 4 rows so row 4 ("VISIBLE-FROZEN") is inside the viewport
+        // while rows 7-8 (the bottom input bar) are off-screen below it.
+        term.scroll_display(Scroll::Delta(4));
 
         let images = ImageStore::new();
         let presentation = super::super::presentation::ParsePresentation::new(20);
@@ -686,31 +699,43 @@ mod tests {
             reading
                 .rows()
                 .any(|(_, row)| text(row).contains("AGENT-INPUT")),
-            "initial capture includes the active screen's input bar"
+            "initial capture includes the active screen's bottom input bar"
         );
 
-        // The agent erases the input bar, writes streaming output into those
-        // rows, and scrolls live_start forward by 2 lines — NOT enough to push
-        // rows 7-8 into history (they are still >= live_start).
+        // The agent rewrites visible row 4 in place, erases the off-screen
+        // input bar on rows 7-8, writes streaming output there, and advances
+        // live_start by 2 rows (neither row 4 nor rows 7-8 have settled into
+        // history yet).
         parser.advance(
             &mut term,
-            b"\x1b[7;1H\x1b[2KSTREAM-LINE-1\x1b[8;1H\x1b[2KSTREAM-LINE-2\r\nSTREAM-LINE-3\r\n> NEW-INPUT",
+            b"\x1b[4;1H\x1b[2KVISIBLE-REPLACED\x1b[7;1H\x1b[2KSTREAM-LINE-1\x1b[8;1H\x1b[2KSTREAM-LINE-2\r\nSTREAM-LINE-3\r\n> NEW-INPUT",
         );
         reading.refresh_settled(&term, &presentation);
 
         assert!(
+            reading
+                .rows()
+                .any(|(_, row)| text(row).contains("VISIBLE-FROZEN")),
+            "a visible active-screen row that has not settled must stay frozen"
+        );
+        assert!(
             !reading
                 .rows()
-                .any(|(_, row)| text(row).contains("AGENT-INPUT")
-                    || text(row).contains("STATUS-BAR")),
-            "once output advances live_start, provisional active-screen rows must \
+                .any(|(_, row)| text(row).contains("VISIBLE-REPLACED")),
+            "live rewrites on a visible active-screen row must not leak into reading mode"
+        );
+        assert!(
+            !reading.rows().any(|(_, row)| {
+                text(row).contains("AGENT-INPUT") || text(row).contains("STATUS-BAR")
+            }),
+            "once output advances live_start, off-screen provisional rows must \
              refresh so an agent's erased input bar does not ghost mid-transcript"
         );
         assert!(
             reading
                 .rows()
                 .any(|(_, row)| text(row).contains("STREAM-LINE-1")),
-            "refreshed provisional rows should show the agent's streaming output"
+            "refreshed off-screen provisional rows should show the agent's streaming output"
         );
     }
 
