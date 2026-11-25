@@ -267,7 +267,8 @@ fn windows_ownership(
 ) -> Option<bool> {
     parent_of(child)?;
     let mut ancestor = child;
-    for _ in 0..64 {
+    let mut checkpoint = ancestor;
+    for step in 1_u32..=64 {
         if ancestor == root {
             parent_of(root)?;
             // Only a chain that reaches this pane needs birth-time checks.
@@ -287,10 +288,16 @@ fn windows_ownership(
         let Some(parent) = parent_of(ancestor).filter(|&parent| parent > 1) else {
             return Some(false);
         };
-        if parent == ancestor {
-            return None;
+        if parent == ancestor || parent == checkpoint {
+            // Windows retains numeric parent IDs after exit. A cycle that
+            // repeats before reaching this pane cannot lead to its root.
+            return Some(false);
         }
         ancestor = parent;
+        // Exponential checkpoints detect cycles without saving the path.
+        if step.is_power_of_two() {
+            checkpoint = ancestor;
+        }
     }
     None
 }

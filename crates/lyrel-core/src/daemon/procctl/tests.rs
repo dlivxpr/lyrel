@@ -61,6 +61,23 @@ fn a_reused_parent_pid_does_not_own_the_older_child() {
     );
 }
 
+#[cfg(windows)]
+#[test]
+fn a_cycle_outside_the_pane_proves_the_process_is_not_owned() {
+    let parent_of = |pid| match pid {
+        23 => Some(1),
+        25 => Some(24),
+        24 => Some(26),
+        26 => Some(24),
+        _ => None,
+    };
+    assert_eq!(
+        windows_ownership(23, 25, 15, parent_of, |_| None),
+        Some(false)
+    );
+    assert_eq!(windows_ownership(23, 99, 15, parent_of, |_| None), None);
+}
+
 /// When re-run as a fixture child, live in that role and never return.
 fn fixture_role() -> bool {
     let Some(role) = std::env::var_os(ROLE) else {
