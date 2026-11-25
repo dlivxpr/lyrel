@@ -281,7 +281,7 @@ impl TerminalElement {
                 let link_modifier = mods.secondary(cx) || v.link_modifier_down();
                 if link_modifier
                     && button == MouseButton::Left
-                    && v.open_link_at(col, row, window, cx)
+                    && v.open_link_at_with_modifiers(col, row, mods.shift, window, cx)
                 {
                     return;
                 }

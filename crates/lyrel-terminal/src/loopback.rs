@@ -134,11 +134,17 @@ pub fn loopback_url_span_at(text: &str, col: usize) -> Option<(usize, usize, Str
 fn trim_wrapped_token(start: usize, end: usize, chars: &[char]) -> (usize, usize, String) {
     let mut start = start;
     let mut end = end;
-    while start <= end && matches!(chars[start], '(' | '[' | '<' | '\'' | '"' | '{') {
-        start += 1;
-    }
     while start <= end && matches!(chars[end], ')' | ']' | '>' | '\'' | '"' | '}' | ',' | ';') {
         end = end.saturating_sub(1);
+    }
+    while start <= end && matches!(chars[start], '(' | '[' | '<' | '\'' | '"' | '{') {
+        if chars[start] == '['
+            && start + 4 <= end
+            && chars[start..=start + 4] == ['[', ':', ':', '1', ']']
+        {
+            break;
+        }
+        start += 1;
     }
     let token = if start <= end {
         chars[start..=end].iter().collect()
@@ -215,10 +221,18 @@ mod tests {
 
     #[test]
     fn detects_loopback_url_span_in_text() {
-        let text = "open (localhost:3000/path), now";
+        let text = "open (localhost:3000/path), ([::1]:5173) [::1]:5173 now";
         let (start, end, url) = loopback_url_span_at(text, 8).unwrap();
         assert_eq!((start, end), (6, 24));
         assert_eq!(url, "http://localhost:3000/path");
         assert!(loopback_url_span_at(text, 5).is_none());
+
+        let (v6_wrap_start, v6_wrap_end, v6_wrap_url) = loopback_url_span_at(text, 29).unwrap();
+        assert_eq!((v6_wrap_start, v6_wrap_end), (29, 38));
+        assert_eq!(v6_wrap_url, "http://[::1]:5173");
+
+        let (v6_start, v6_end, v6_url) = loopback_url_span_at(text, 41).unwrap();
+        assert_eq!((v6_start, v6_end), (41, 50));
+        assert_eq!(v6_url, "http://[::1]:5173");
     }
 }

@@ -43,10 +43,11 @@ use super::typeahead::RawInput;
 use lyrel_core::core::config::BellMode;
 use lyrel_core::daemon::protocol::{RemoteContext, ShellSpec};
 use lyrel_ui_base::actions::{
-    CloseActiveTab, CopyLinkPathUnderPointer, DecreaseFontSize, ForkAgentSessionDown,
-    ForkAgentSessionLeft, ForkAgentSessionRight, ForkAgentSessionUp, IncreaseFontSize, NewTab,
-    OpenLinkUnderPointer, OpenLinkWithDefaultApp, RevealLinkUnderPointer, SaveAgentLaunchArgs,
-    SendBackTab, SendTab, SplitDown, SplitRight, ToggleMaximizePane,
+    CloseActiveTab, CopyLinkPathUnderPointer, CopyLinkUrlUnderPointer, DecreaseFontSize,
+    ForkAgentSessionDown, ForkAgentSessionLeft, ForkAgentSessionRight, ForkAgentSessionUp,
+    IncreaseFontSize, NewTab, OpenLinkInBrowser, OpenLinkInSystemBrowser, OpenLinkUnderPointer,
+    OpenLinkWithDefaultApp, RevealLinkUnderPointer, SaveAgentLaunchArgs, SendBackTab, SendTab,
+    SplitDown, SplitRight, ToggleMaximizePane,
 };
 use lyrel_ui_base::config::Config;
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};

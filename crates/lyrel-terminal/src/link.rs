@@ -65,10 +65,16 @@ impl CapturedLink {
     pub fn target(&self) -> &LinkTarget {
         &self.target
     }
-    pub fn path(&self) -> &Path {
+    pub fn path(&self) -> Option<&Path> {
         match &self.target {
-            LinkTarget::File { path, .. } => path,
-            LinkTarget::Url(_) => unreachable!("only file links are captured"),
+            LinkTarget::File { path, .. } => Some(path),
+            LinkTarget::Url(_) => None,
+        }
+    }
+    pub fn url(&self) -> Option<&str> {
+        match &self.target {
+            LinkTarget::Url(url) => Some(url),
+            LinkTarget::File { .. } => None,
         }
     }
     pub fn open_mode(&self, configured: LinkFileOpen) -> LinkFileOpen {
@@ -172,7 +178,7 @@ impl LinkInteraction {
     }
     pub fn capture_menu(&mut self, result: LinkAt) {
         self.menu = match result {
-            LinkAt::Found(target @ LinkTarget::File { .. }, _) => Some(CapturedLink {
+            LinkAt::Found(target, _) => Some(CapturedLink {
                 host: self.location.as_ref().expect("link location").host,
                 target,
             }),

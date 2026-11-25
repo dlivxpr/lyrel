@@ -457,10 +457,10 @@ impl LyrelApp {
         .detach();
     }
 
-    /// A loopback link clicked in a managed remote Workspace pane opens a
-    /// Side Panel page bound to that Workspace's Host (#392). The app builds
-    /// the durable Host binding and the browser verifies the forward before
-    /// anything loads.
+    /// A URL or loopback link clicked in a pane opens in the Side Panel
+    /// Browser by default, or in the System Browser when requested via
+    /// `Shift` (#419). A managed remote Workspace binds the page to its Host
+    /// so loopback addresses verify and forward before anything loads (#392).
     fn watch_open_web_requests(
         view: &Entity<TerminalView>,
         window: &mut Window,
@@ -470,13 +470,17 @@ impl LyrelApp {
             view,
             window,
             |app, view, ev: &lyrel_ui_base::web_preview::OpenWebPageRequested, _window, cx| {
-                let workspace = view.read(cx).workspace().map(|ws| ws.workspace);
-                let Some(host) = workspace
-                    .and_then(|id| lyrel_ui_base::session::WorkspaceStore::remote_ref(cx, id))
-                else {
-                    return;
-                };
-                app.open_web_page(&ev.address, Some(host), cx);
+                let host = view.read(cx).workspace().and_then(|ws| {
+                    lyrel_ui_base::session::WorkspaceStore::remote_ref(cx, ws.workspace)
+                });
+                match ev.destination {
+                    lyrel_ui_base::web_preview::WebOpenDestination::Browser => {
+                        app.open_web_page(&ev.address, host, cx);
+                    }
+                    lyrel_ui_base::web_preview::WebOpenDestination::SystemBrowser => {
+                        app.open_url_in_system_browser(&ev.address, host, cx);
+                    }
+                }
             },
         )
         .detach();
