@@ -134,8 +134,7 @@ jobs:
     env:
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
       RUST_BACKTRACE: 1
-      # CI 没有可复用的增量目录：关掉它让 rust-cache 的 target 归档更小、
-      # 跨机器复用更稳。sccache 只缓存非增量产物，这个值也不影响其正确性。
+      # CI 没有可复用的增量目录，关闭增量编译以缩小 rust-cache 的 target 归档。
       CARGO_INCREMENTAL: '0'
       LYREL_GRAPHICS_FIXTURE_BIN: ${{ github.workspace }}/target/${{ matrix.target }}/debug/lyrel-graphics-fixture${{ matrix.target == 'x86_64-pc-windows-msvc' && '.exe' || '' }}
     # 冷缓存需先编译完整依赖图，再链接大型 libtest；编译预算与逐例测试超时
@@ -180,28 +179,6 @@ jobs:
           shared-key: ci-v3-${{ matrix.target }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: false
-
-      # sccache 只在 POSIX runner 启用。Windows 上把 rustc 包进 sccache 已经实测
-      # 触发 os error 206（文件名/扩展名太长，cargo 1.100 的
-      # build/<pkg>/<hash>/out 布局进一步加长命令），会在编译真正的 crate 时失败；
-      # 该路径尚未证明可用，因此 Windows 继续走已经验证过的 rust-cache + 包装器。
-      # action 安装二进制并导出 ACTIONS_RUNTIME_TOKEN/ACTIONS_RESULTS_URL
-      # （runner 掩码）；wrapper 变量只通过 $GITHUB_ENV 注入后续步骤，
-      # 不写自定义 token、凭据或本地缓存路径。
-      - name: Install sccache (POSIX)
-        if: runner.os != 'Windows'
-        uses: mozilla-actions/sccache-action@v0.0.11
-        with:
-          version: v0.20.1
-      - name: Enable sccache (POSIX)
-        if: runner.os != 'Windows'
-        run: |
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          # PR 合并 ref 写入的缓存只能供该 PR 使用。只在 main 预热共享缓存。
-          echo "SCCACHE_GHA_RW_MODE=${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}" >> "$GITHUB_ENV"
-          # 桌面测试可能超过默认 10 分钟空闲期，保留统计供 action 的 post 步骤读取。
-          echo "SCCACHE_IDLE_TIMEOUT=0" >> "$GITHUB_ENV"
 
       # nextest 提供每个用例的超时与更快的调度；只跑 libtest 目标，见下方 -E。
       - uses: taiki-e/install-action@v2

@@ -189,9 +189,7 @@ CI 的 Draft PR 默认仅运行所需的 Linux headless／Windows 验证；Ready
 相同 tree 的测试晋升只有在可验证的完整 PR 门禁已经成功时才允许，证据不完整即全量测试。
 冷缓存的生产构建、desktop library 单测编译各保留 45 分钟上限，job 为 120 分钟；
 这是依据实际冷编译超时调整的运行预算，不是性能提升声明，逐例测试超时与失败不写缓存策略不变。
-CI 的 sccache 关闭 incremental 以缓存可复用 Rust 编译；本地仍默认保留 incremental，
-可按单次命令选择 `RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0`，不修改全局 Cargo 配置。
-实际收益须在相同工具链、feature、target 与缓存条件下计时，不保证固定提速比例。
+CI 关闭增量编译以缩小 `rust-cache` 的目标目录归档。本地开发默认使用 Cargo 增量编译。
 
 `lyrel-test-support` 是独立的测试夹具包。桌面图形消费者使用其中不链接 GUI 的 `lyrel-graphics-fixture` 进程，驱动真实 daemon／PTY；CLI、core 与 server 用 dev-dependency 复用同一包的夹具库。
 完整桌面测试前可用 `cargo build --locked --workspace --features native-markdown-tests,test-support --bin lyrel-graphics-fixture`
@@ -481,7 +479,7 @@ node scripts/rerun-failed-ci.cjs <run-id>
 
 可信 main push 在三个独立 server 构建及平台断言成功后上传 `ci-server-<target>`，保存 7 天。Release 可复用同仓库、同 SHA、已完整成功的 main CI 产物；PR、fork 和手动 CI 产物不作为发布来源。下载固定 artifact ID，核验来源 run、目标、文件 SHA-256、Cargo 输入及 Rust／Zig／SDK 构建契约，再执行原有静态链接／Mach-O／签名检查。缺失、过期、下载失败或契约不匹配时正常重新构建，不放宽校验；Windows server 不参与此复用。该机制不是字节级可重现构建声明。路径裁剪未生成该 SHA 的 server artifact 时，同样由 Release 正常构建。
 
-CI 与 Release 使用独立的稳定 Rust 缓存键，保留 toolchain、target、flags 和依赖哈希隔离。Rust 归档仅在 `main` 上成功时写回。Linux 和 macOS 的 CI 在 `main` 写入 sccache 编译产物，其余 ref 只读共享缓存。sccache 在测试期间保留统计，并在 job 结束时报告命中、缺失和写入。标签和 PR 可读取默认分支缓存，见 [GitHub 缓存访问规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)。可用 `gh api repos/dlivxpr/lyrel/actions/cache/usage` 观察仓库的实际占用，核对 10 GB 配额。冷缓存仍需完整编译，可在 `main` 手动预热发行依赖：
+CI 与 Release 使用独立的 Rust 缓存键，按 toolchain、target、flags 和依赖哈希隔离。Rust 归档仅在 `main` 上成功时写回。标签和 PR 可读取默认分支缓存。参见 [GitHub 缓存访问规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)。可用 `gh api repos/dlivxpr/lyrel/actions/cache/usage` 查看实际占用。冷缓存需要完整编译，发行依赖可通过 `main` 的手动发布验证预热。
 
 ```bash
 gh workflow run release.yml --repo dlivxpr/lyrel --ref main
