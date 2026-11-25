@@ -626,3 +626,94 @@ fn a_retired_adapter_cannot_land_reads_or_writes_after_reconnect(cx: &mut TestAp
         });
     });
 }
+
+#[gpui_kit::test]
+fn remote_html_row_context_menu_emits_dual_browser_events_with_remote_host(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::test::{TestEventExt, TestQueryExt, TestWindowExt};
+
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("remote.html"), "<h1>Remote</h1>").unwrap();
+    std::fs::write(dir.path().join("diagram.svg"), "<svg/>").unwrap();
+
+    let remote_id = HostId::from_connection_key("ssh-direct:dev@remote-tree:22");
+    let host: SharedHost = NamespaceHost::new_unwatched(remote_id, dir.path());
+    let (tree, mut vcx) = setup(cx, host.clone());
+    let harness = cx.update(|cx| install_harness(cx, &tree));
+    let root = PathBuf::from("/");
+    present(&tree, &mut vcx, &host, &[root.clone()], "");
+
+    wait_until(&mut vcx, "remote tree listing", |vcx| {
+        vcx.update(|_, cx| {
+            tree.read(cx)
+                .children
+                .get(remote_id, &root)
+                .is_some_and(|entries| entries.iter().any(|e| e.name == "remote.html"))
+        })
+    });
+
+    // .svg excludes browser preview actions on remote host too.
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.right_click("tree-/diagram.svg", cx);
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window
+                .try_find_by_label(t(L10nKey::PanelOpenInBrowser))
+                .is_none()
+        );
+        assert!(
+            window
+                .try_find_by_label(t(L10nKey::BrowserOpenExternal))
+                .is_none()
+        );
+        window.press("escape", cx);
+    });
+
+    // Click Open in Browser on remote.html
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.right_click("tree-/remote.html", cx);
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let pos = window
+            .find_by_label(t(L10nKey::PanelOpenInBrowser))
+            .bounds()
+            .center();
+        window.pointer_down(pos, MouseButton::Left, cx);
+        window.pointer_up(pos, MouseButton::Left, cx);
+    });
+
+    // Click Open in System Browser on remote.html
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        window.right_click("tree-/remote.html", cx);
+    });
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let pos = window
+            .find_by_label(t(L10nKey::BrowserOpenExternal))
+            .bounds()
+            .center();
+        window.pointer_down(pos, MouseButton::Left, cx);
+        window.pointer_up(pos, MouseButton::Left, cx);
+    });
+
+    let events = harness.events.borrow();
+    assert!(
+        events
+            .iter()
+            .any(|ev| ev.contains("OpenInBrowser") && ev.contains("remote.html")),
+        "expected OpenInBrowser event in {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|ev| ev.contains("OpenInSystemBrowser") && ev.contains("remote.html")),
+        "expected OpenInSystemBrowser event in {events:?}"
+    );
+}

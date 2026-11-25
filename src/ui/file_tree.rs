@@ -249,6 +249,10 @@ impl SearchState {
 pub(crate) enum FileTreeEvent {
     /// A row's default gesture: open the file in the editor panel.
     OpenFile { path: PathBuf },
+    /// Open an HTML preview file in the Side Panel Browser (#420).
+    OpenInBrowser { host: HostId, path: PathBuf },
+    /// Open an HTML preview file in the OS default browser (#420).
+    OpenInSystemBrowser { host: HostId, path: PathBuf },
     /// A rename landed; the editor must retarget the buffers and selection it
     /// keys by canonical path.
     PathMoved {
@@ -730,6 +734,20 @@ impl FileTree {
 
     fn open_file(&mut self, path: &Path, cx: &mut Context<Self>) {
         cx.emit(FileTreeEvent::OpenFile {
+            path: path.to_path_buf(),
+        });
+    }
+
+    fn open_in_browser(&mut self, path: &Path, cx: &mut Context<Self>) {
+        cx.emit(FileTreeEvent::OpenInBrowser {
+            host: self.view.host,
+            path: path.to_path_buf(),
+        });
+    }
+
+    fn open_in_system_browser(&mut self, path: &Path, cx: &mut Context<Self>) {
+        cx.emit(FileTreeEvent::OpenInSystemBrowser {
+            host: self.view.host,
             path: path.to_path_buf(),
         });
     }
@@ -2264,6 +2282,28 @@ impl FileTree {
                     }
                 }),
             );
+            if lyrel_core::core::web::is_html_preview_path(&p) {
+                menu = menu
+                    .item(
+                        PopupMenuItem::new(t(L10nKey::PanelOpenInBrowser)).on_click({
+                            let tree = tree.clone();
+                            let p = p.clone();
+                            move |_, _window, cx| {
+                                let _ = tree.update(cx, |this, cx| this.open_in_browser(&p, cx));
+                            }
+                        }),
+                    )
+                    .item(
+                        PopupMenuItem::new(t(L10nKey::BrowserOpenExternal)).on_click({
+                            let tree = tree.clone();
+                            let p = p.clone();
+                            move |_, _window, cx| {
+                                let _ =
+                                    tree.update(cx, |this, cx| this.open_in_system_browser(&p, cx));
+                            }
+                        }),
+                    );
+            }
         }
         if is_dir {
             menu = menu.item(

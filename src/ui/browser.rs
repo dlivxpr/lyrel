@@ -23,6 +23,7 @@
 //! page can ask for are the events the surface defines, and the only ways in
 //! are the commands.
 
+pub(crate) mod html_preview;
 pub(crate) mod policy;
 pub(crate) mod route;
 pub(crate) mod surface;
@@ -30,6 +31,10 @@ pub(crate) mod surface;
 #[cfg(test)]
 #[path = "browser/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "browser/html_preview_tests.rs"]
+mod html_preview_tests;
 
 #[cfg(test)]
 #[path = "browser/overlay_tests.rs"]
@@ -113,6 +118,10 @@ pub(crate) struct WebPage {
     /// The next capture id this page mints. A stale native answer must not
     /// be mistaken for the share the user just asked for.
     next_capture: u64,
+    /// Active Host-backed loopback mount for HTML preview tabs (#420).
+    /// Dropping the page releases its mount token and shuts down the
+    /// loopback listener when no mounts remain.
+    pub(crate) html_mount: Option<html_preview::HtmlPreviewMount>,
 }
 
 /// The live pane incarnation one preview may send to (#393).
@@ -302,6 +311,7 @@ impl WebPage {
             feedback: None,
             preview: None,
             next_capture: 0,
+            html_mount: None,
         }
     }
 
@@ -311,6 +321,15 @@ impl WebPage {
     pub(crate) fn display_title(&self, tab: &WebTab) -> String {
         if !self.live_title.is_empty() {
             return self.live_title.clone();
+        }
+        if self.html_mount.is_some() || tab.html_path.is_some() {
+            if !tab.title.is_empty() {
+                return tab.title.clone();
+            }
+            if !self.display_url.is_empty() {
+                return self.display_url.clone();
+            }
+            return tab.address.clone();
         }
         if !self.current_url.is_empty() && self.current_url != "about:blank" {
             return self.current_url.clone();
@@ -435,6 +454,7 @@ impl LyrelApp {
             title: String::new(),
             host,
             source: None,
+            html_path: None,
         };
         let tab_id = tab.id.clone();
         let mut layout = self.tool_layout();
@@ -457,6 +477,144 @@ impl LyrelApp {
         };
         self.store_tool_layout(&layout, cx);
         cx.notify();
+    }
+
+    /// Opens a local or remote HTML file in the Side Panel Browser (#420).
+    ///
+    /// Deduplicates by `(host, html_path)`: if an existing tab is already open
+    /// for that file on that Host, focuses and reloads it; otherwise opens a
+    /// new Browser tab whose address bar shows the clean Host path while the
+    /// native surface loads from the Host-backed loopback mount.
+    pub(crate) fn open_html_preview(
+        &mut self,
+        host_id: HostId,
+        path: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) {
+        if !lyrel_core::core::web::is_html_preview_path(path) {
+            return;
+        }
+        let host_ref = if host_id.is_local() {
+            None
+        } else {
+            let found = lyrel_ui_base::session::WorkspaceStore::remote_ref(cx, self.workspace)
+                .filter(|remote| remote.host_id() == host_id)
+                .or_else(|| {
+                    lyrel_ui_base::session::WorkspaceStore::all(cx)
+                        .views
+                        .iter()
+                        .filter(|view| view.open)
+                        .filter_map(|view| view.host.as_ref())
+                        .find(|remote| remote.host_id() == host_id)
+                        .cloned()
+                });
+            if found.is_none() {
+                self.notify_html_preview_error("HTML preview Host is unavailable", cx);
+                return;
+            }
+            found
+        };
+        let clean_path = lyrel_core::core::path_spelling::spelling_on(host_id, path)
+            .to_string_lossy()
+            .into_owned();
+        let file_name = clean_path
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&clean_path)
+            .to_string();
+
+        let mut layout = self.tool_layout();
+        if let Some(existing_id) = layout
+            .web_tabs
+            .iter()
+            .find(|tab| {
+                tab.host == host_ref
+                    && tab
+                        .html_path
+                        .as_deref()
+                        .is_some_and(|existing| html_paths_match(host_id, existing, &clean_path))
+            })
+            .map(|tab| tab.id.clone())
+        {
+            layout.show(lyrel_core::core::config::RightPanelTab::Browser);
+            self.reveal_browser_detail(existing_id.clone(), cx);
+            self.store_tool_layout(&layout, cx);
+            self.browser_reload(&existing_id, cx);
+            cx.notify();
+            return;
+        }
+
+        let tab = WebTab {
+            id: self.new_web_tab_id(),
+            address: clean_path.clone(),
+            title: file_name,
+            host: host_ref,
+            source: None,
+            html_path: Some(clean_path.clone()),
+        };
+        let tab_id = tab.id.clone();
+        layout.show_web(tab);
+        self.reveal_browser_detail(tab_id.clone(), cx);
+        let page = self
+            .right_panel
+            .web_pages
+            .entry(tab_id)
+            .or_insert_with(WebPage::new);
+        page.display_url = clean_path;
+        page.route = RouteState::Local;
+        self.store_tool_layout(&layout, cx);
+        cx.notify();
+    }
+
+    /// Mounts a local or remote HTML file on the Host-backed loopback server
+    /// and opens its URL in the OS default system browser (#420).
+    pub(crate) fn open_html_in_system_browser(
+        &mut self,
+        host_id: HostId,
+        path: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) {
+        if !lyrel_core::core::web::is_html_preview_path(path) {
+            return;
+        }
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
+            self.notify_html_preview_error("HTML preview Host is unavailable", cx);
+            return;
+        };
+        if !host.is_connected() {
+            self.notify_html_preview_error("HTML preview Host is disconnected", cx);
+            return;
+        }
+        let service = cx
+            .default_global::<html_preview::HtmlPreviewService>()
+            .clone();
+        let path = path.to_path_buf();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { service.mount_external(host, &path) })
+                .await;
+            let _ = this.update(cx, |app, cx| match result {
+                Ok(url) => cx.open_url(&url),
+                Err(err) => app.notify_html_preview_error(&err.to_string(), cx),
+            });
+        })
+        .detach();
+    }
+
+    fn notify_html_preview_error(&self, message: &str, cx: &mut gpui_kit::App) {
+        log::warn!("html preview failed: {message}");
+        if let Some(handle) = crate::ui::windows::WindowRegistry::window_for(cx, self.workspace) {
+            let text = message.to_string();
+            let _ = handle.update(cx, |_, window, cx| {
+                crate::ui::notification_history::NotificationWindowExt::notify_app(
+                    window,
+                    crate::ui::notification_history::Notification::error(text),
+                    cx,
+                );
+            });
+        }
     }
 
     /// Reveals one agent-requested preview in its own workspace (#393).
@@ -512,6 +670,7 @@ impl LyrelApp {
                 title: String::new(),
                 host: expected,
                 source: Some(source),
+                html_path: None,
             };
             let binding = self.preview_binding_for(&tab, cx);
             layout.web_tabs[at] = tab.clone();
@@ -561,6 +720,7 @@ impl LyrelApp {
             title: String::new(),
             host: expected,
             source: Some(source),
+            html_path: None,
         };
         let binding = self.preview_binding_for(&tab, cx);
         let tab_id = tab.id.clone();
@@ -1180,6 +1340,32 @@ impl LyrelApp {
         let Some(tab) = self.web_tab(tab_id) else {
             return;
         };
+        if let Some(html_path) = tab.html_path.clone() {
+            let page = self.right_panel.web_pages.get(tab_id);
+            let on_html_preview = page.is_none_or(|page| {
+                if let Some(mount) = page.html_mount.as_ref() {
+                    page.current_url.is_empty() || page.current_url.starts_with(mount.origin())
+                } else {
+                    policy::classify(&page.display_url) != policy::Route::Load
+                }
+            });
+            if on_html_preview {
+                let host_id = tab
+                    .host
+                    .as_ref()
+                    .map(|host| host.host_id())
+                    .unwrap_or(HostId::LOCAL);
+                let target_path = page
+                    .and_then(|page| {
+                        page.html_mount
+                            .as_ref()
+                            .and_then(|mount| mount.display_path_for_url(&page.current_url))
+                    })
+                    .unwrap_or(html_path);
+                self.open_html_in_system_browser(host_id, std::path::Path::new(&target_path), cx);
+                return;
+            }
+        }
         let url = self
             .right_panel
             .web_pages
@@ -1230,11 +1416,22 @@ impl LyrelApp {
         if policy::classify(&url) == policy::Route::Load
             && self
                 .web_tab(&tab_id)
-                .is_some_and(|tab| policy::is_blank(&tab.address))
+                .is_some_and(|tab| policy::is_blank(&tab.address) || tab.html_path.is_some())
         {
             let mut layout = self.tool_layout();
             if let Some(tab) = layout.web_tabs.iter_mut().find(|tab| tab.id == tab_id) {
+                let bound = tab.host.is_some();
+                let was_html = tab.html_path.take().is_some();
                 tab.address.clone_from(&url);
+                if was_html && let Some(page) = self.right_panel.web_pages.get_mut(&tab_id) {
+                    page.html_mount = None;
+                    page.live_title.clear();
+                    page.route = if bound {
+                        RouteState::Unverified
+                    } else {
+                        RouteState::Local
+                    };
+                }
                 self.store_tool_layout(&layout, cx);
             }
         }
@@ -1273,6 +1470,26 @@ impl LyrelApp {
         let Some(tab) = self.web_tab(tab_id) else {
             return;
         };
+        if let Some(html_path) = tab.html_path.clone() {
+            if self
+                .right_panel
+                .web_pages
+                .get(tab_id)
+                .is_some_and(|page| page.surface.is_some())
+            {
+                self.begin_web_load(tab_id, PageLoad::Navigate { url: html_path }, cx);
+                return;
+            }
+            if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                page.surface_attempted = false;
+                page.surface_pending = false;
+                page.load_error = None;
+                page.status = PageStatus::Starting;
+                page.display_url = html_path;
+            }
+            cx.notify();
+            return;
+        }
         let url = self
             .right_panel
             .web_pages
@@ -1312,6 +1529,13 @@ impl LyrelApp {
         let Some(tab) = self.web_tab(tab_id) else {
             return;
         };
+        if tab.html_path.is_some() {
+            if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+                page.load_error = None;
+            }
+            self.browser_reload(tab_id, cx);
+            return;
+        }
         let url = self
             .right_panel
             .web_pages
@@ -1390,6 +1614,12 @@ impl LyrelApp {
         page.route_epoch = page.route_epoch.wrapping_add(1);
         page.route_pending = false;
         let epoch = page.route_epoch;
+        if let Some(html_path) = tab.html_path.clone()
+            && !matches!(load, PageLoad::External { .. })
+        {
+            self.begin_html_preview_load(tab_id, &tab, html_path, load, epoch, cx);
+            return;
+        }
         if tab.host.is_none() || !route::is_loopback(&url) {
             self.deliver_web_load(tab_id, load, None, cx);
             return;
@@ -1478,6 +1708,152 @@ impl LyrelApp {
                 .detach();
             }
         }
+    }
+
+    /// Mounts `html_path` on `tab`'s Host via [`html_preview::HtmlPreviewService`]
+    /// on the background executor, preserving `route_epoch` against concurrent
+    /// reloads or navigations, and starts or navigates the surface to the
+    /// loopback mount URL without leaking it into `display_url`.
+    fn begin_html_preview_load(
+        &mut self,
+        tab_id: &str,
+        tab: &WebTab,
+        html_path: String,
+        load: PageLoad,
+        epoch: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let host_id = tab
+            .host
+            .as_ref()
+            .map(|host| host.host_id())
+            .unwrap_or(HostId::LOCAL);
+        let Some(host) = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id) else {
+            self.fail_web_route(tab_id, "HTML preview Host is unavailable".into(), cx);
+            return;
+        };
+        if !host.is_connected() {
+            self.fail_web_route(tab_id, "HTML preview Host is disconnected".into(), cx);
+            return;
+        }
+        self.set_page_guard(tab_id, surface::RouteGuard::DenyLoopback);
+        if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
+            page.route_pending = true;
+            page.status = PageStatus::Starting;
+        }
+        let service = cx
+            .default_global::<html_preview::HtmlPreviewService>()
+            .clone();
+        let async_tab_id = tab_id.to_string();
+        let expected_host = tab.host.clone();
+        let mount_path = std::path::PathBuf::from(&html_path);
+        let before_host = std::sync::Arc::clone(&host);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { service.mount_in_app(host, &mount_path) })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                let current = app
+                    .right_panel
+                    .web_pages
+                    .get(async_tab_id.as_str())
+                    .is_some_and(|page| page.route_epoch == epoch)
+                    && app.web_tab(&async_tab_id).is_some_and(|current_tab| {
+                        current_tab.host == expected_host
+                            && current_tab.html_path.as_deref() == Some(html_path.as_str())
+                    });
+                if !current {
+                    return;
+                }
+                let live_ok = lyrel_ui_base::host_registry::HostRegistry::lookup(cx, host_id)
+                    .is_some_and(|now| {
+                        std::sync::Arc::ptr_eq(&before_host, &now) && now.is_connected()
+                    });
+                if !live_ok {
+                    app.fail_web_route(
+                        &async_tab_id,
+                        "the HTML preview Host connection changed".into(),
+                        cx,
+                    );
+                    return;
+                }
+                match result {
+                    Ok(mount) => {
+                        let mount_url = mount.url().to_string();
+                        let mount_origin = mount.origin().to_string();
+                        if let Some(page) = app.right_panel.web_pages.get_mut(&async_tab_id) {
+                            page.route_pending = false;
+                            page.route = RouteState::Local;
+                            page.load_error = None;
+                            page.html_mount = Some(mount);
+                            page.display_url = html_path;
+                        }
+                        match load {
+                            PageLoad::Start {
+                                parent,
+                                bounds,
+                                scale,
+                                site,
+                            } => {
+                                app.start_web_surface(
+                                    &async_tab_id,
+                                    parent,
+                                    bounds,
+                                    scale,
+                                    site,
+                                    mount_url,
+                                    surface::RouteGuard::Origin(mount_origin),
+                                    cx,
+                                );
+                            }
+                            PageLoad::Navigate { .. } => {
+                                if let Some(page) = app.right_panel.web_pages.get_mut(&async_tab_id)
+                                {
+                                    page.invalidate_still_frame();
+                                    if let Some(surface) = page.surface.as_mut() {
+                                        let guard = surface::RouteGuard::Origin(mount_origin);
+                                        if surface
+                                            .command(BrowserCommand::SetRouteGuard { guard })
+                                            .is_ok()
+                                            && surface
+                                                .command(BrowserCommand::Navigate {
+                                                    url: mount_url.clone(),
+                                                })
+                                                .is_ok()
+                                        {
+                                            page.current_url = mount_url;
+                                            page.status = PageStatus::Starting;
+                                        } else {
+                                            page.status = PageStatus::Failed(
+                                                "the browser surface could not navigate"
+                                                    .to_string(),
+                                            );
+                                        }
+                                    } else {
+                                        page.current_url = mount_url;
+                                        page.status = PageStatus::Starting;
+                                    }
+                                }
+                                cx.notify();
+                            }
+                            PageLoad::External { .. } => {}
+                        }
+                    }
+                    Err(err) => {
+                        app.set_page_guard(&async_tab_id, surface::RouteGuard::DenyLoopback);
+                        if let Some(page) = app.right_panel.web_pages.get_mut(&async_tab_id) {
+                            page.route_pending = false;
+                            page.html_mount = None;
+                            page.surface_attempted = true;
+                            page.status = PageStatus::Failed(err.to_string());
+                        }
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     /// Stores a verified route, sends it to the surface as the approved
@@ -1771,13 +2147,24 @@ impl LyrelApp {
                 can_back,
                 can_forward,
             } => {
+                let html_fallback = self.web_tab(tab_id).and_then(|tab| tab.html_path);
                 if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
                     page.invalidate_still_frame();
-                    page.display_url = page
-                        .route
-                        .verified()
-                        .and_then(|verified| verified.original_url(&url))
-                        .unwrap_or_else(|| url.clone());
+                    page.display_url = if let Some(mount) = page.html_mount.as_ref()
+                        && url.starts_with(mount.origin())
+                    {
+                        mount
+                            .display_path_for_url(&url)
+                            .or(html_fallback)
+                            .unwrap_or_else(|| {
+                                mount.canonical_file().to_string_lossy().into_owned()
+                            })
+                    } else {
+                        page.route
+                            .verified()
+                            .and_then(|verified| verified.original_url(&url))
+                            .unwrap_or_else(|| url.clone())
+                    };
                     page.current_url = url;
                     page.can_back = can_back;
                     page.can_forward = can_forward;
@@ -1825,6 +2212,15 @@ impl LyrelApp {
                 // sibling keeps the Host's spelling of the address, so its
                 // own first load verifies the route (#392).
                 let page = self.right_panel.web_pages.get(tab_id);
+                if let Some(mount) = page.and_then(|page| page.html_mount.as_ref())
+                    && url.starts_with(mount.origin())
+                {
+                    if let Some(sibling_path) = mount.display_path_for_url(&url) {
+                        let host_id = mount.host_id();
+                        self.open_html_preview(host_id, std::path::Path::new(&sibling_path), cx);
+                    }
+                    return;
+                }
                 let url = page
                     .and_then(|page| {
                         page.route
@@ -1860,13 +2256,24 @@ impl LyrelApp {
                 }
             }
             BrowserEvent::LoadFailed { url, message } => {
+                let html_fallback = self.web_tab(tab_id).and_then(|tab| tab.html_path);
                 let host_bound = self.web_tab(tab_id).is_some_and(|tab| tab.host.is_some());
                 if let Some(page) = self.right_panel.web_pages.get_mut(tab_id) {
-                    page.display_url = page
-                        .route
-                        .verified()
-                        .and_then(|verified| verified.original_url(&url))
-                        .unwrap_or_else(|| url.clone());
+                    page.display_url = if let Some(mount) = page.html_mount.as_ref()
+                        && url.starts_with(mount.origin())
+                    {
+                        mount
+                            .display_path_for_url(&url)
+                            .or(html_fallback)
+                            .unwrap_or_else(|| {
+                                mount.canonical_file().to_string_lossy().into_owned()
+                            })
+                    } else {
+                        page.route
+                            .verified()
+                            .and_then(|verified| verified.original_url(&url))
+                            .unwrap_or_else(|| url.clone())
+                    };
                     page.current_url = url;
                     page.load_error = Some(message.clone());
                     if host_bound && page.route.verified().is_some() {
@@ -2196,6 +2603,20 @@ pub(crate) fn initial_navigate_url(address: &str) -> String {
     match policy::classify(address) {
         policy::Route::Load => address.to_string(),
         policy::Route::Blank | policy::Route::Deny => "about:blank".to_string(),
+    }
+}
+
+/// Compares two HTML preview paths for tab deduplication on `host_id`.
+fn html_paths_match(host_id: HostId, a: &str, b: &str) -> bool {
+    if host_id.is_local() && cfg!(windows) {
+        let norm = |s: &str| {
+            let replaced = s.replace('/', "\\");
+            let trimmed = replaced.trim_end_matches('\\');
+            trimmed.to_lowercase()
+        };
+        norm(a) == norm(b)
+    } else {
+        a == b
     }
 }
 

@@ -59,9 +59,43 @@ pub fn is_preview_address(address: &str) -> bool {
     classify(address) == WebRoute::Load
 }
 
+/// Whether `path` (written with either `/` or `\` separators) names an HTML
+/// preview file (`.html`, `.htm`, `.xhtml`, ASCII case-insensitive). `.svg`
+/// uses the standalone native preview and is excluded here.
+pub fn is_html_preview_str(path: &str) -> bool {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or("");
+    let Some((stem, ext)) = name.rsplit_once('.') else {
+        return false;
+    };
+    if stem.is_empty() {
+        return false;
+    }
+    ext.eq_ignore_ascii_case("html")
+        || ext.eq_ignore_ascii_case("htm")
+        || ext.eq_ignore_ascii_case("xhtml")
+}
+
+/// Whether `path` names an HTML preview file (`.html`, `.htm`, `.xhtml`,
+/// ASCII case-insensitive). `.svg` uses the standalone native preview and is
+/// excluded here.
+pub fn is_html_preview_path(path: &std::path::Path) -> bool {
+    if let Some(s) = path.to_str() {
+        return is_html_preview_str(s);
+    }
+    match path.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) => {
+            ext.eq_ignore_ascii_case("html")
+                || ext.eq_ignore_ascii_case("htm")
+                || ext.eq_ignore_ascii_case("xhtml")
+        }
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn http_and_https_with_a_host_load() {
@@ -84,6 +118,7 @@ mod tests {
         for denied in [
             "file:///etc/passwd",
             "file:///C:/Windows/system32/cmd.exe",
+            "file:///tmp/index.html",
             "ftp://example.com/x",
             "data:text/html,<script>1</script>",
             "javascript:alert(1)",
@@ -104,5 +139,44 @@ mod tests {
         assert!(is_preview_address("https://example.com/preview"));
         assert!(!is_preview_address(""));
         assert!(!is_preview_address("about:blank"));
+    }
+
+    #[test]
+    fn html_preview_paths_match_only_html_variants() {
+        for matching in [
+            "index.html",
+            "page.HTM",
+            "doc.Xhtml",
+            "/remote/dir/app.html",
+            r"C:\Users\me\prototype\index.htm",
+            "a.b.html",
+        ] {
+            assert!(is_html_preview_str(matching), "{matching} should match");
+            assert!(
+                is_html_preview_path(Path::new(matching)),
+                "{matching} path should match"
+            );
+        }
+        for excluded in [
+            "icon.svg",
+            "ICON.SVG",
+            "main.rs",
+            "styles.css",
+            "index.html.bak",
+            ".html",
+            "/dir/.html",
+            r"C:\dir\.html",
+            "html",
+            "",
+        ] {
+            assert!(
+                !is_html_preview_str(excluded),
+                "{excluded} should not match"
+            );
+            assert!(
+                !is_html_preview_path(Path::new(excluded)),
+                "{excluded} path should not match"
+            );
+        }
     }
 }
