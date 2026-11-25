@@ -215,6 +215,9 @@ pub fn is_agent_placeholder_title(agent: CLIAgent, title: &str) -> bool {
                 | "kimi code"
                 | "opencode"
                 | "hermes"
+                | "agy"
+                | "antigravity"
+                | "antigravity-cli"
         )
     {
         return true;
@@ -233,6 +236,9 @@ pub fn is_agent_placeholder_title(agent: CLIAgent, title: &str) -> bool {
                 | "opencode"
                 | "opencode2"
                 | "hermes"
+                | "agy"
+                | "antigravity"
+                | "antigravity-cli"
                 | "node"
                 | "bun"
                 | "python"
@@ -745,5 +751,29 @@ mod tests {
             TabLabel::Osc("π - lyrel"),
             "OMP's own fallback still names its tab while it runs"
         );
+    }
+
+    #[test]
+    fn antigravity_placeholder_titles_fall_through_to_agent_label() {
+        for title in [
+            "agy",
+            "AGY",
+            "Antigravity",
+            "/opt/homebrew/bin/agy",
+            "/opt/homebrew/Caskroom/antigravity-cli/1.5.15,5514532022517760/antigravity",
+            "C:\\Users\\me\\antigravity-cli.exe",
+        ] {
+            let tab = TabView {
+                osc_title: Some(title.into()),
+                agent: Some(CLIAgent::Antigravity),
+                cwd: Some("/work".into()),
+                ..view()
+            };
+            assert_eq!(
+                tab.label(),
+                TabLabel::Agent(CLIAgent::Antigravity),
+                "placeholder title {title:?} must not mask TabLabel::Agent(Antigravity)"
+            );
+        }
     }
 }

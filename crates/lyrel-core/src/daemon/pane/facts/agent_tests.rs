@@ -47,6 +47,42 @@ fn live_pty_child_argv_detects_the_agent() {
     );
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn live_pty_child_argv_detects_antigravity_homebrew_wrapper() {
+    use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+    let pty = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .expect("openpty");
+    let mut cmd = CommandBuilder::new("bash");
+    cmd.args([
+        "-c",
+        "exec -a /opt/homebrew/Caskroom/antigravity-cli/1.5.15,5514532022517760/antigravity cat",
+    ]);
+    let mut child = pty.slave.spawn_command(cmd).expect("spawn child");
+    let master = Mutex::new(Some(pty.master));
+
+    let mut detected = None;
+    for _ in 0..50 {
+        if let AgentProbe::Foreground(Some(agent)) = foreground_agent(&master, None) {
+            detected = Some(agent);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let (agent, _) = detected.expect("Antigravity detected from Homebrew wrapper exec argv");
+    assert_eq!(agent, crate::core::cli_agent::CLIAgent::Antigravity);
+}
+
 #[cfg(windows)]
 #[test]
 fn resumed_output_marks_do_not_release_the_running_agent() {
