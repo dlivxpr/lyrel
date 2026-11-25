@@ -15,7 +15,7 @@
 
 - 缩短 SQLite 与空闲控制连接测试的夹具等待（#409）。三个需真实 SSH 端点的 server 测试目标按需启用 `native-ssh-tests`（#408）。
 - CI 使用 `rust-cache` 缓存 Cargo 构建依赖，停用 sccache。
-- macOS CI 的 library 单测编译上限提高到 60 分钟，覆盖缓存归档恢复后仍需大量重编的运行。
+- Windows 和 macOS CI 的 library 单测编译上限提高到 60 分钟，覆盖恢复缓存归档后仍需大量重编的运行。
 
 ## [0.5.0] - 2026-11-24
 

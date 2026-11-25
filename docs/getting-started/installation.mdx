@@ -187,7 +187,7 @@ CI 的 Draft PR 默认仅运行所需的 Linux headless／Windows 验证；Ready
 只有 `scope=full` 才额外执行完整生产构建和发行验证。Windows PR／`scope=ci` 的静态 CRT 门禁检查
 测试图生成的 GUI、CLI、server 可执行文件，并单独构建普通 `lyrel-updater.exe`，而不是检查其测试 harness。
 相同 tree 的测试晋升只有在可验证的完整 PR 门禁已经成功时才允许，证据不完整即全量测试。
-冷缓存的生产构建和 Windows library 单测编译各保留 45 分钟上限，macOS library 单测编译为 60 分钟。
+桌面生产构建上限为 45 分钟，Windows 和 macOS 的 library 单测编译上限为 60 分钟。
 job 上限为 120 分钟，逐例测试超时与失败不写缓存策略不变。
 CI 关闭增量编译以缩小 `rust-cache` 的目标目录归档。本地开发默认使用 Cargo 增量编译。
 
