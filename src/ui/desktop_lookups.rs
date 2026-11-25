@@ -74,6 +74,11 @@ impl HostLinks {
         cx.default_global::<HostLinks>().hosts.remove(&id);
         publish_remote_home(cx, id, None);
         HostRegistry::remove(cx, id);
+        if let Some(service) =
+            cx.try_global::<crate::ui::browser::html_preview::HtmlPreviewService>()
+        {
+            service.purge_host(id);
+        }
     }
 
     pub fn len(cx: &mut App) -> usize {

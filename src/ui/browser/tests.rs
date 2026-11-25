@@ -742,6 +742,7 @@ fn a_restored_preview_has_no_sendable_source(cx: &mut TestAppContext) {
                 address: "http://localhost:5173/app".into(),
                 host: None,
                 title: String::new(),
+                html_path: None,
             }),
         ],
         active: TabSelectionState::Tool(Browser),

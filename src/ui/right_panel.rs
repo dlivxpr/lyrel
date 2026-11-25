@@ -440,6 +440,10 @@ pub(crate) struct WebTab {
     /// number cannot identify the same pane after a restart. A restored tab
     /// has no source until a fresh agent request binds one.
     pub(crate) source: Option<lyrel_core::core::session::PreviewSourceState>,
+    /// The HTML preview file path on its Host, when this tab is an HTML
+    /// preview (#420). Loopback ports and tokens are live-only and never
+    /// persisted.
+    pub(crate) html_path: Option<String>,
 }
 
 impl WebTab {
@@ -449,6 +453,7 @@ impl WebTab {
             address: self.address.clone(),
             host: self.host.clone(),
             title: self.title.clone(),
+            html_path: self.html_path.clone(),
         }
     }
 
@@ -459,6 +464,7 @@ impl WebTab {
             title: state.title.clone(),
             host: state.host.clone(),
             source: None,
+            html_path: state.html_path.clone(),
         }
     }
 }
@@ -3973,6 +3979,7 @@ mod tests {
             title: String::new(),
             host: None,
             source: None,
+            html_path: None,
         }
     }
 
@@ -4200,6 +4207,7 @@ mod tests {
             address: address.to_string(),
             host: None,
             title: String::new(),
+            html_path: None,
         }
     }
 
@@ -4557,6 +4565,7 @@ mod persistence_tests {
                 title: String::new(),
                 host: None,
                 source: None,
+                html_path: None,
             },
             "the original address is the tab's identity"
         );
@@ -4578,12 +4587,14 @@ mod persistence_tests {
                     address: "http://one.test".into(),
                     host: None,
                     title: String::new(),
+                    html_path: None,
                 }),
                 TabEntryState::Web(WebTabState {
                     id: written.web_tabs[1].id.clone(),
                     address: "https://two.test/path".into(),
                     host: None,
                     title: String::new(),
+                    html_path: None,
                 }),
             ]
         );
@@ -4663,6 +4674,7 @@ mod persistence_tests {
                     address: "http://legacy.test".into(),
                     host: None,
                     title: "Legacy page".into(),
+                    html_path: None,
                 }),
                 TabEntryState::Tool(Files),
                 TabEntryState::Web(WebTabState {
@@ -4670,6 +4682,7 @@ mod persistence_tests {
                     address: "https://legacy.test/two".into(),
                     host: None,
                     title: String::new(),
+                    html_path: None,
                 }),
             ],
             active: TabSelectionState::Web("legacy-b".into()),

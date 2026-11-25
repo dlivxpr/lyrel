@@ -790,3 +790,100 @@ fn a_failed_batch_delete_names_its_target_and_keeps_successful_removals(cx: &mut
         assert!(!code.selected.contains(HostId::LOCAL, &first));
     });
 }
+
+#[gpui_kit::test]
+fn html_row_context_menu_offers_dual_browser_actions_while_svg_excludes_them(
+    cx: &mut TestAppContext,
+) {
+    let _serial = serial();
+    let root = temp();
+    let html_file = root.path().join("prototype.html");
+    let svg_file = root.path().join("icon.svg");
+    std::fs::write(&html_file, "<h1>Prototype</h1>").unwrap();
+    std::fs::write(&svg_file, "<svg/>").unwrap();
+
+    let (app, mut vcx, _pane) = files_panel_on(cx, root.path());
+    settle(&app, &mut vcx, root.path());
+
+    // .svg must NOT show Open in Browser or Open in System Browser.
+    vcx.update(|window, cx| window.right_click(id(&svg_file), cx));
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window
+                .try_find_by_label(t(L10nKey::FileTreeContextOpen))
+                .is_some()
+        );
+        assert!(
+            window
+                .try_find_by_label(t(L10nKey::PanelOpenInBrowser))
+                .is_none(),
+            ".svg must not show Open in Browser"
+        );
+        assert!(
+            window
+                .try_find_by_label(t(L10nKey::BrowserOpenExternal))
+                .is_none(),
+            ".svg must not show Open in System Browser"
+        );
+    });
+    key(&mut vcx, "escape");
+
+    // .html shows both actions and clicking Open in Browser opens the HTML preview tab.
+    vcx.update(|window, cx| window.right_click(id(&html_file), cx));
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(
+            window
+                .try_find_by_label(t(L10nKey::PanelOpenInBrowser))
+                .is_some()
+        );
+        assert!(
+            window
+                .try_find_by_label(t(L10nKey::BrowserOpenExternal))
+                .is_some()
+        );
+    });
+    menu_item(&mut vcx, L10nKey::PanelOpenInBrowser);
+    wait(&mut vcx, |vcx| {
+        app.read_with(vcx, |app, _| app.active_browser_detail().is_some())
+    });
+
+    app.read_with(&vcx, |app, _| {
+        let tabs = &app.tool_layout().web_tabs;
+        assert_eq!(tabs.len(), 1);
+        assert!(tabs[0].html_path.is_some());
+    });
+
+    // Switch back to Files and trigger Open in System Browser from the row context menu.
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.set_right_panel_tab(lyrel_core::core::config::RightPanelTab::Files, window, cx);
+    });
+    settle(&app, &mut vcx, root.path());
+    vcx.update(|window, cx| window.right_click(id(&html_file), cx));
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+        let pos = window
+            .within("popup-menu")
+            .find_by_label(t(L10nKey::BrowserOpenExternal))
+            .bounds()
+            .center();
+        window.pointer_down(pos, MouseButton::Left, cx);
+        window.pointer_up(pos, MouseButton::Left, cx);
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let opened = loop {
+        vcx.background_executor.run_until_parked();
+        vcx.update(|window, cx| window.render_frame(cx));
+        if let Some(url) = cx.opened_url() {
+            break url;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for opened_url"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert!(opened.starts_with("http://127.0.0.1:"));
+    assert!(opened.ends_with("/prototype.html"));
+}

@@ -334,6 +334,7 @@ mod tests {
             title: String::new(),
             host,
             source: None,
+            html_path: None,
         }
     }
 

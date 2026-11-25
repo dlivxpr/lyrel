@@ -41,6 +41,12 @@ impl LyrelApp {
     ) {
         match event {
             FileTreeEvent::OpenFile { path } => self.open_file_in_editor(path, window, cx),
+            FileTreeEvent::OpenInBrowser { host, path } => {
+                self.open_html_preview(*host, path, cx);
+            }
+            FileTreeEvent::OpenInSystemBrowser { host, path } => {
+                self.open_html_in_system_browser(*host, path, cx);
+            }
             FileTreeEvent::PathMoved { host, from, to } => {
                 self.editor_path_moved(*host, from, to, cx);
             }
