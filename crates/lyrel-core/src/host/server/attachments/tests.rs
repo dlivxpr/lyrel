@@ -344,6 +344,7 @@ pub(super) fn hello_for(workspace: &str, token: &str, hostname: &str) -> Control
         client_hostname: hostname.to_string(),
         gui: false,
         preview: false,
+        preview_html: false,
     }
 }
 
