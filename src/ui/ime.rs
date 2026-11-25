@@ -1,37 +1,31 @@
-//! An uncommitted composition belongs to the input that started it, not the
-//! next control focused inside the same native window.
+//! Focus-boundary IME cleanup for the app-owned Markdown editor.
+//!
+//! Framework inputs (`InputState`, `TextareaState`, `EditorState`) rely on
+//! `gpui-kit 0.11.0` (#4032), whose `EntityInputHandler::accepts_text_input`
+//! returns `false` once blurred so the platform ends composition cleanly.
+//! The custom `MarkdownEditor` is not covered by that upstream component state,
+//! so this module keeps focus-change unmarking and Windows native cancellation
+//! scoped strictly to `MarkdownEditor`.
 
 use std::collections::HashMap;
 
 use lyrel_workbench_editor::code_editor::markdown::EditorState as MarkdownEditor;
 
 use gpui_kit::base::{Root, RootPlugin};
-use gpui_kit::component::input::{EditorState, InputState, TextareaState};
 use gpui_kit::{
     App, Context, ElementId, EntityInputHandler, FocusHandle, Focusable, Global, IntoElement,
     Render, WeakEntity, Window,
 };
 
-#[derive(Clone)]
-enum CompositionOwner {
-    Input(WeakEntity<InputState>),
-    Textarea(WeakEntity<TextareaState>),
-    Editor(WeakEntity<EditorState>),
-    Markdown(WeakEntity<MarkdownEditor>),
-}
-
 #[derive(Default)]
 struct CompositionOwners {
-    inputs: HashMap<ElementId, CompositionOwner>,
+    markdown_editors: HashMap<ElementId, WeakEntity<MarkdownEditor>>,
 }
 impl Global for CompositionOwners {}
 
 pub(crate) fn install(cx: &mut App) {
     cx.set_global(CompositionOwners::default());
-    observe_inputs(cx, CompositionOwner::Input);
-    observe_inputs(cx, CompositionOwner::Textarea);
-    observe_inputs(cx, CompositionOwner::Editor);
-    observe_inputs(cx, CompositionOwner::Markdown);
+    observe_markdown_editors(cx);
     Root::register_plugin(cx, |window, cx| CompositionFocus {
         focus: window
             .is_window_active()
@@ -40,22 +34,19 @@ pub(crate) fn install(cx: &mut App) {
     });
 }
 
-fn observe_inputs<T: EntityInputHandler + Focusable + 'static>(
-    cx: &mut App,
-    owner: fn(WeakEntity<T>) -> CompositionOwner,
-) {
-    cx.observe_new::<T>(move |input, _, cx| {
-        // A window's initial inputs can be created before observe_new has a
+fn observe_markdown_editors(cx: &mut App) {
+    cx.observe_new::<MarkdownEditor>(move |input, _, cx| {
+        // A window's initial editors can be created before observe_new has a
         // window context. Their stable focus identity is already available.
         let key = ElementId::from(&input.focus_handle(cx));
         let input = cx.entity().downgrade();
         cx.global_mut::<CompositionOwners>()
-            .inputs
-            .insert(key.clone(), owner(input));
+            .markdown_editors
+            .insert(key.clone(), input);
         cx.on_release(move |_, cx| {
             if cx.has_global::<CompositionOwners>() {
                 let owners = cx.global_mut::<CompositionOwners>();
-                owners.inputs.remove(&key);
+                owners.markdown_editors.remove(&key);
             }
         })
         .detach();
@@ -74,32 +65,22 @@ impl RootPlugin for CompositionFocus {
             .then(|| window.focused(cx))
             .flatten();
         if self.focus != focus {
-            // The old platform handler has been taken, but the new one has
-            // not been installed. Native cancellation cannot edit the new
-            // input, and the retained component still owns its marked text.
-            #[cfg(windows)]
-            windows::cancel_native_composition(window);
-        }
-        if self.focus != focus {
             let owner = self.focus.as_ref().and_then(|focus| {
                 cx.global::<CompositionOwners>()
-                    .inputs
+                    .markdown_editors
                     .get(&ElementId::from(focus))
                     .cloned()
             });
-            match owner {
-                Some(CompositionOwner::Input(input)) => discard_composition(input, window, cx),
-                Some(CompositionOwner::Textarea(input)) => discard_composition(input, window, cx),
-                Some(CompositionOwner::Editor(input)) => discard_composition(input, window, cx),
-                Some(CompositionOwner::Markdown(input)) => {
-                    if let Some(input) = input.upgrade() {
-                        // Focus/mode/close handoff keeps visible preedit as one
-                        // meaningful document edit. Only explicit cancel rolls
-                        // back its original source; committed prefixes survive.
-                        input.update(cx, |input, cx| input.unmark_text(window, cx));
-                    }
-                }
-                None => {}
+            if let Some(input) = owner.and_then(|input| input.upgrade()) {
+                // The old platform handler has been taken, but the new one has
+                // not been installed. Native cancellation cannot edit the new
+                // input, and the Markdown editor still owns its marked text.
+                #[cfg(windows)]
+                windows::cancel_native_composition(window);
+                // Focus/mode/close handoff keeps visible preedit as one
+                // meaningful document edit. Only explicit cancel rolls
+                // back its original source; committed prefixes survive.
+                input.update(cx, |input, cx| input.unmark_text(window, cx));
             }
             self.focus = focus;
         }
@@ -110,22 +91,6 @@ impl Render for CompositionFocus {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         gpui_kit::Empty
     }
-}
-
-fn discard_composition<T: EntityInputHandler + 'static>(
-    input: WeakEntity<T>,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let Some(input) = input.upgrade() else {
-        return;
-    };
-    input.update(cx, |input, cx| {
-        if let Some(range) = input.marked_text_range(window, cx) {
-            input.replace_text_in_range(Some(range), "", window, cx);
-            input.unmark_text(window, cx);
-        }
-    });
 }
 
 #[cfg(windows)]
@@ -174,6 +139,7 @@ mod tests {
     use gpui_kit::{AppContext as _, Entity, ParentElement as _, TestAppContext, div};
 
     struct Inputs {
+        markdown: Entity<MarkdownEditor>,
         first: Entity<InputState>,
         second: Entity<InputState>,
     }
@@ -181,19 +147,81 @@ mod tests {
     impl Render for Inputs {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div()
+                .child(self.markdown.clone())
                 .child(Input::new(&self.first))
                 .child(Input::new(&self.second))
         }
     }
 
     #[gpui_kit::test]
-    fn focus_change_discards_only_the_previous_inputs_preedit(cx: &mut TestAppContext) {
+    fn focus_change_unmarks_only_the_previous_markdown_editors_preedit(cx: &mut TestAppContext) {
         cx.update(|cx| {
             gpui_kit::init(cx);
             install(cx);
         });
         let window = cx.add_window(|window, cx| {
             let view = cx.new(|cx| Inputs {
+                markdown: cx.new(|cx| MarkdownEditor::new(window, cx)),
+                first: cx.new(|cx| InputState::new(window, cx)),
+                second: cx.new(|cx| InputState::new(window, cx)),
+            });
+            gpui_kit::component::Root::new(view, window, cx)
+        });
+        let (markdown, second) = window
+            .update(cx, |root, window, cx| {
+                window.activate_window();
+                let view = root.view().clone().downcast::<Inputs>().unwrap();
+                let inputs = view.read(cx);
+                (inputs.markdown.clone(), inputs.second.clone())
+            })
+            .unwrap();
+        window
+            .update(cx, |_, window, cx| {
+                second.update(cx, |input, cx| input.set_value("新值", window, cx));
+                markdown.update(cx, |editor, cx| {
+                    editor.focus_handle(cx).focus(window, cx);
+                    editor.replace_text_in_range(None, "保留 ", window, cx);
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |_, window, cx| {
+                markdown.update(cx, |editor, cx| {
+                    editor.replace_and_mark_text_in_range(None, "ce shi", Some(6..6), window, cx);
+                    assert_eq!(editor.text(), "保留 ce shi");
+                    assert!(editor.marked_text_range(window, cx).is_some());
+                });
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |_, window, cx| {
+                second.read(cx).focus_handle(cx).focus(window, cx);
+            })
+            .unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |_, window, cx| {
+                markdown.update(cx, |editor, cx| {
+                    assert_eq!(editor.text(), "保留 ce shi");
+                    assert_eq!(editor.marked_text_range(window, cx), None);
+                });
+                assert_eq!(second.read(cx).value(), "新值");
+                assert!(second.read(cx).focus_handle(cx).is_focused(window));
+            })
+            .unwrap();
+    }
+
+    #[gpui_kit::test]
+    fn framework_input_accepts_text_input_only_while_focused(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            install(cx);
+        });
+        let window = cx.add_window(|window, cx| {
+            let view = cx.new(|cx| Inputs {
+                markdown: cx.new(|cx| MarkdownEditor::new(window, cx)),
                 first: cx.new(|cx| InputState::new(window, cx)),
                 second: cx.new(|cx| InputState::new(window, cx)),
             });
@@ -209,37 +237,22 @@ mod tests {
             .unwrap();
         window
             .update(cx, |_, window, cx| {
-                second.update(cx, |input, cx| input.set_value("新值", window, cx));
-                first.update(cx, |input, cx| {
-                    input.focus_handle(cx).focus(window, cx);
-                    input.set_value("保留 ", window, cx);
-                });
+                first.read(cx).focus_handle(cx).focus(window, cx);
             })
             .unwrap();
         cx.run_until_parked();
         window
             .update(cx, |_, window, cx| {
-                first.update(cx, |input, cx| {
-                    input.replace_and_mark_text_in_range(None, "ce shi", Some(6..6), window, cx);
-                    assert_eq!(input.value(), "保留 ce shi");
-                });
-            })
-            .unwrap();
-        cx.run_until_parked();
-        window
-            .update(cx, |_, window, cx| {
+                assert!(first.update(cx, |input, cx| input.accepts_text_input(window, cx)));
+                assert!(!second.update(cx, |input, cx| input.accepts_text_input(window, cx)));
                 second.read(cx).focus_handle(cx).focus(window, cx);
             })
             .unwrap();
         cx.run_until_parked();
         window
             .update(cx, |_, window, cx| {
-                first.update(cx, |input, cx| {
-                    assert_eq!(input.value(), "保留 ");
-                    assert_eq!(input.marked_text_range(window, cx), None);
-                });
-                assert_eq!(second.read(cx).value(), "新值");
-                assert!(second.read(cx).focus_handle(cx).is_focused(window));
+                assert!(!first.update(cx, |input, cx| input.accepts_text_input(window, cx)));
+                assert!(second.update(cx, |input, cx| input.accepts_text_input(window, cx)));
             })
             .unwrap();
     }

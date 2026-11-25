@@ -173,14 +173,13 @@ fn negotiated_keyboard_composition_commits_text_without_key_releases(cx: &mut Te
                 )
             });
             handler.replace_text_in_range(None, "中文", window, cx);
-            window.dispatch_event(
-                gpui_kit::PlatformInput::KeyUp(gpui_kit::KeyUpEvent {
-                    keystroke: key("g"),
-                }),
-                cx,
-            );
         })
         .unwrap();
+    gpui_kit::VisualTestContext::from_window(window.into(), cx).simulate_event(
+        gpui_kit::KeyUpEvent {
+            keystroke: key("g"),
+        },
+    );
     assert_eq!(
         next_input_until_timeout(&mut daemon),
         Some(b"\x1b[0;1;20013:25991u".to_vec())

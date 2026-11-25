@@ -676,6 +676,7 @@ impl LyrelApp {
                                 } else {
                                     t(L10nKey::ForwardAdvancedToggle)
                                 })
+                                .aria_expanded(advanced)
                                 .ghost()
                                 .xsmall()
                                 .on_click(cx.listener(|this, _, _window, cx| {

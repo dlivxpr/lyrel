@@ -1174,7 +1174,9 @@ impl LyrelApp {
                     // and it cannot go stale, because closing the box is what
                     // throws the query away.
                     crate::ui::window_chrome::chrome_tile_sized(
-                        Button::new("scm-graph-filter").icon(Icon::new(IconName::Search)),
+                        Button::new("scm-graph-filter")
+                            .icon(Icon::new(IconName::Search))
+                            .aria_expanded(filtering),
                         GRAPH_TILE,
                         GRAPH_TILE_GLYPH,
                         filtering,

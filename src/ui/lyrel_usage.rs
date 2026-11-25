@@ -277,7 +277,7 @@ impl LyrelUsageView {
             metric_host,
             desktop: Desktop::Priming,
             local: Slot::Priming,
-            remote: (!metric_host.is_local()).then(|| (metric_host, Slot::Priming)),
+            remote: (!metric_host.is_local()).then_some((metric_host, Slot::Priming)),
             expanded: false,
         }
     }

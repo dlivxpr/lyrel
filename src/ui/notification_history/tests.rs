@@ -910,7 +910,7 @@ fn waiting_pane_projects_into_pending_across_filters_and_resolves_live(cx: &mut 
     restart(&mut window, &dir);
     assert!(messages(&window).is_empty());
     assert!(
-        window.read(|cx| super::pending(cx)).is_empty(),
+        window.read(super::pending).is_empty(),
         "Pending is a live projection, never persisted"
     );
 }
@@ -1184,7 +1184,7 @@ fn blocked_program_stays_in_pending_under_unread_and_resolves_without_disturbing
         },
     );
     settle(&mut window);
-    let projection = window.read(|cx| pending(cx));
+    let projection = window.read(pending);
     assert_eq!(
         projection.len(),
         1,
@@ -1261,7 +1261,7 @@ fn blocked_program_stays_in_pending_under_unread_and_resolves_without_disturbing
             "the waiting agent is undisturbed by the program resolving"
         );
     });
-    let projection = window.read(|cx| pending(cx));
+    let projection = window.read(pending);
     assert_eq!(projection.len(), 1);
     assert_eq!(projection[0].state, PendingState::Waiting);
     // The agent settling empties Pending entirely.

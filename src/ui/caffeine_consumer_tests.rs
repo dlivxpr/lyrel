@@ -187,10 +187,9 @@ fn menu_offers_three_modes_and_reflects_the_live_hold(cx: &mut TestAppContext) {
     );
     assert!(
         vcx.update(|window, _| {
-            window
+            !window
                 .find_all_by_label(t(L10nKey::StatusCaffeineTitle))
-                .len()
-                >= 1
+                .is_empty()
         }),
         "the menu title shows beside the cup's accessible name"
     );

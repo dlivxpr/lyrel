@@ -470,6 +470,7 @@ pub struct PreviewSourceState {
 /// migration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
 pub enum TabEntryState {
     /// A browser page. Tried first: it is an object, and untagged reading
     /// stops at the first variant that fits.

@@ -170,6 +170,7 @@ fn canonical_checkout(host: &dyn lyrel_core::host::Host, cwd: &Path) -> Option<P
 /// second. The menu's own check gutter ticks the current checkout. `kind`
 /// separates the navigation rows from the removal submenu's rows so both
 /// can be open at once without shared element ids.
+#[allow(clippy::too_many_arguments)]
 fn worktree_row_item(
     kind: &'static str,
     wt: &lyrel_core::core::worktree::Listed,
@@ -1386,7 +1387,7 @@ mod tests {
     /// Open the checkout menu and hover into the shared 工作树 submenu.
     fn open_worktree_menu(vcx: &mut VisualTestContext) {
         open_status_checkout_menu(vcx);
-        hover_menu_item(vcx, &t(L10nKey::ScmWorktrees));
+        hover_menu_item(vcx, t(L10nKey::ScmWorktrees));
     }
 
     /// Wait for both checkout rows of the shared submenu.
@@ -1405,7 +1406,7 @@ mod tests {
 
     /// Hover the discreet removal entry inside the open 工作树 submenu.
     fn open_removal_entry(vcx: &mut VisualTestContext) {
-        hover_menu_item(vcx, &t(L10nKey::WorktreePickerRemove));
+        hover_menu_item(vcx, t(L10nKey::WorktreePickerRemove));
     }
 
     /// The texts the removal dialog shows, scoped to its card.
@@ -1642,7 +1643,7 @@ mod tests {
         seed_repo_pane(&mut vcx, &pane, &main_root, "main");
 
         open_worktree_menu(&mut vcx);
-        click_menu_item(&mut vcx, &t(L10nKey::CmdNewWorktreeTab));
+        click_menu_item(&mut vcx, t(L10nKey::CmdNewWorktreeTab));
         wait_for(&mut vcx, "the worktree creation card", |vcx| {
             vcx.update(|window, _| {
                 window
@@ -2066,7 +2067,7 @@ mod tests {
         });
         vcx.update(|window, cx| window.click("scm-branch", cx));
         settle(&mut vcx);
-        hover_menu_item(&mut vcx, &t(L10nKey::ScmWorktrees));
+        hover_menu_item(&mut vcx, t(L10nKey::ScmWorktrees));
         wait_for_checkout_rows(&mut vcx, &main_root, &wt_root);
         open_removal_entry(&mut vcx);
         begin_removal(&mut vcx, &wt_root);

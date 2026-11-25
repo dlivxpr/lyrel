@@ -247,11 +247,7 @@ fn theme_crossfade_sends_no_terminal_input_and_no_resize(cx: &mut gpui_kit::Test
         .set_read_timeout(Some(Duration::from_millis(100)))
         .unwrap();
     let quiet_deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match ClientMsg::read(&mut stream) {
-            Ok(_) => {}
-            Err(_) => break,
-        }
+    while ClientMsg::read(&mut stream).is_ok() {
         if Instant::now() > quiet_deadline {
             panic!("the pane setup never went quiet");
         }

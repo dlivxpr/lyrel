@@ -707,6 +707,17 @@ pub fn glyph_bounds_close(
         && close(left.size.height.0, right.size.height.0)
 }
 
+fn painted_path_bounds_and_color(
+    path: &gpui_kit::PaintedPath,
+) -> (
+    gpui_kit::Bounds<gpui_kit::ScaledPixels>,
+    gpui_kit::Background,
+) {
+    let (mut paints, mut curves, mut tiles) = (Vec::new(), Vec::new(), Vec::new());
+    path.append_to(&mut paints, &mut curves, &mut tiles);
+    (paints[0].bounds, paints[0].color)
+}
+
 /// Renders one production frame and returns the path primitives that land
 /// inside `cell`, with the solid colour they were painted with.
 pub fn glyph_paths_in_cell(
@@ -727,11 +738,12 @@ pub fn glyph_paths_in_cell(
                 .painted_scene()
                 .paths
                 .iter()
-                .filter(|path| {
-                    let visible = path.bounds.intersect(&cell);
-                    visible.size.width.0 > 0. && visible.size.height.0 > 0.
+                .filter_map(|path| {
+                    let (bounds, color) = painted_path_bounds_and_color(path);
+                    let visible = bounds.intersect(&cell);
+                    (visible.size.width.0 > 0. && visible.size.height.0 > 0.)
+                        .then_some((bounds, color))
                 })
-                .map(|path| (path.bounds, path.color))
                 .collect()
         })
         .unwrap()
@@ -760,11 +772,15 @@ pub fn glyph_paths_with_clip_in_region(
                 .painted_scene()
                 .paths
                 .iter()
-                .filter(|path| {
-                    let visible = path.bounds.intersect(&region);
-                    visible.size.width.0 > 0. && visible.size.height.0 > 0.
+                .filter_map(|path| {
+                    let (bounds, color) = painted_path_bounds_and_color(path);
+                    let visible = bounds.intersect(&region);
+                    (visible.size.width.0 > 0. && visible.size.height.0 > 0.).then_some((
+                        bounds,
+                        path.content_mask().bounds,
+                        color,
+                    ))
                 })
-                .map(|path| (path.bounds, path.content_mask.bounds, path.color))
                 .collect()
         })
         .unwrap()

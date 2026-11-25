@@ -10,7 +10,7 @@ lyrel 按机器组织工作区，每个工作区包含标签页，每个标签�
 
 一个**窗格**把 shell 或程序连接到伪终端（PTY），在工作台中呈现它的输入与输出。
 
-当前桌面 GUI 通过 GPUI Kit `0.10.0` 的官方 `gpui-fast` facade 使用 Fast `0.1.16` 系列。GUI、daemon 与 CLI capture 共用 `rio-vt`／`rio-graphics`／`rio-unicode` `0.5.32` 及对应的 `rio-grapheme-width`；这条依赖链不替换 Lyrel 的 PTY、Session Daemon、Host、终端绘制管线或独立维护的 Markdown 编辑器。
+当前桌面 GUI 通过 GPUI Kit `0.11.0` 的官方 `gpui-fast` facade 使用 Fast `0.1.19` 系列。GUI、daemon 与 CLI capture 共用 `rio-vt`／`rio-graphics`／`rio-unicode` `0.5.32` 及对应的 `rio-grapheme-width`；这条依赖链不替换 Lyrel 的 PTY、Session Daemon、Host、终端绘制管线或独立维护的 Markdown 编辑器。
 
 窗格在整个生命周期内都有固定的 ID，例如 `%42`。[CLI](/cli/overview) 通过这个 ID 定位窗格，窗格内部的 `$LYREL_PANE` 保存的也是这个 ID。
 

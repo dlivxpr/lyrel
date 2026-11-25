@@ -480,8 +480,10 @@ fn session_from_row<H: Host + ?Sized>(
     let id = raw.id.as_deref().filter(|id| valid_id(id))?;
     let cwd = primary_workspace_path(raw.workspace_uris.as_deref()?)?;
     let updated = parse_time(raw.updated.as_deref()?)?;
-    let mut scope = SessionScope::default();
-    scope.session_file = Some(transcript_path(host, root, id));
+    let scope = SessionScope {
+        session_file: Some(transcript_path(host, root, id)),
+        ..Default::default()
+    };
     Some(PastSession {
         agent: CLIAgent::Antigravity,
         id: id.to_string(),

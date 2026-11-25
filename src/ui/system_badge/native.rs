@@ -34,11 +34,11 @@ pub(super) fn apply(
     {
         let _ = (description, windows);
         TEST_BADGES.with(|badges| badges.borrow_mut().push(label.map(str::to_owned)));
-        return Ok(());
+        Ok(())
     }
     #[cfg(all(not(test), target_os = "windows"))]
     {
-        return platform::apply(label, description, windows);
+        platform::apply(label, description, windows)
     }
     #[cfg(all(not(test), target_os = "macos"))]
     {
@@ -262,14 +262,16 @@ mod platform {
                 if dc.is_invalid() {
                     return Err("CreateCompatibleDC failed".to_owned());
                 }
-                let mut header = BITMAPINFOHEADER::default();
-                header.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-                header.biWidth = BADGE_PX;
-                // Negative height: top-down rows, matching the pixel loop.
-                header.biHeight = -BADGE_PX;
-                header.biPlanes = 1;
-                header.biBitCount = 32;
-                header.biCompression = BI_RGB.0;
+                let header = BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: BADGE_PX,
+                    // Negative height: top-down rows, matching the pixel loop.
+                    biHeight: -BADGE_PX,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                };
                 let info = BITMAPINFO {
                     bmiHeader: header,
                     bmiColors: [Default::default()],
@@ -369,7 +371,7 @@ mod platform {
                     self.bits,
                     BADGE_PX as usize * BADGE_PX as usize * 4,
                 );
-                for pixel in pixels.chunks_exact_mut(4) {
+                for pixel in pixels.as_chunks_mut::<4>().0 {
                     let ink = pixel[0] | pixel[1] | pixel[2] != 0;
                     pixel[3] = if ink { 0xFF } else { 0 };
                 }

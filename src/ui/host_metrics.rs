@@ -228,6 +228,7 @@ struct MetricsHistories(HashMap<HostId, SampleHistory>);
 impl Global for MetricsHistories {}
 
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum State {
     Waiting,
     Connecting,

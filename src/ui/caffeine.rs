@@ -164,7 +164,7 @@ impl CaffeineState {
     /// current update unwinds, so aggregation can read every window without
     /// this one being leased.
     pub(crate) fn agents_changed(cx: &mut App) {
-        cx.defer(|cx| Self::refresh(cx));
+        cx.defer(Self::refresh);
     }
 
     fn release_hold(cx: &mut App) {

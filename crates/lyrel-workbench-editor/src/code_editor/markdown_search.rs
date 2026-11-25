@@ -262,6 +262,7 @@ impl Render for MarkdownSearch {
                             .icon(IconName::Replace)
                             .tooltip(t(L10nKey::EditorReplace))
                             .selected(self.replace_mode)
+                            .aria_expanded(self.replace_mode)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.replace_mode = !this.replace_mode;
                                 cx.notify();

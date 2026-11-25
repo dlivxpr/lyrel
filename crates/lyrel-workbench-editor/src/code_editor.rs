@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::input::{
-    Editor, EditorState, Input, InputEvent, InputState, Position, TabSize,
+    Editor, EditorState, GutterStyle, Input, InputEvent, InputState, Position, TabSize,
 };
 use gpui_kit::component::menu::PopupMenuItem;
 use gpui_kit::component::{
@@ -2427,6 +2427,7 @@ impl EditorPanelState {
                     .child(
                         Editor::new(&input)
                             .appearance(false)
+                            .gutter_style(editor_gutter_style(cx))
                             .font_family(cx.theme().mono_font_family.clone())
                             .text_size(cx.theme().mono_font_size)
                             .size_full(),
@@ -2638,6 +2639,7 @@ impl EditorPanelState {
                     .ghost()
                     .xsmall()
                     .flex_none()
+                    .aria_expanded(self.problems_open())
                     .accessibility_label(t(L10nKey::EditorProblemsToggle))
                     .tooltip(t(L10nKey::EditorProblemsToggle))
                     .child(lsp.unwrap_or_else(|| {
@@ -3327,6 +3329,23 @@ fn dirs_home() -> PathBuf {
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
+}
+
+fn editor_gutter_style(cx: &gpui_kit::App) -> GutterStyle {
+    let theme = cx.theme();
+    let line_number = theme
+        .highlight_theme
+        .style
+        .editor_line_number
+        .unwrap_or(theme.muted_foreground);
+    let active_line_number = theme
+        .highlight_theme
+        .style
+        .editor_active_line_number
+        .unwrap_or(theme.foreground);
+    GutterStyle::default()
+        .with_line_number_color(line_number)
+        .with_active_line_number_color(active_line_number)
 }
 
 #[cfg(test)]

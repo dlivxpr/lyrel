@@ -31,8 +31,10 @@ fn listing(sessions: Vec<PastSession>) -> SessionListing {
 }
 
 fn store_scope(root: &str) -> lyrel_core::host::session_operations::SessionScope {
-    let mut scope = lyrel_core::host::session_operations::SessionScope::default();
-    scope.session_dir = Some(PathBuf::from(root));
+    let mut scope = lyrel_core::host::session_operations::SessionScope {
+        session_dir: Some(PathBuf::from(root)),
+        ..Default::default()
+    };
     scope
         .environment
         .insert("PI_CODING_AGENT_DIR".into(), root.into());
@@ -1323,7 +1325,7 @@ fn delete_gate_only_hermes_with_confirmed_store() {
         "a Hermes row with a confirmed store reads deletable"
     );
     assert_eq!(
-        session_blockers(&identity, &[identity.clone()]),
+        session_blockers(&identity, std::slice::from_ref(&identity)),
         [SessionBlocker::Running],
         "a live pane at the same identity blocks first"
     );

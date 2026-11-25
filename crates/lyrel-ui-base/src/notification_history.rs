@@ -593,11 +593,10 @@ impl Inbox {
             .records
             .iter_mut()
             .find(|record| record.id == id)
+            && record.unread
         {
-            if record.unread {
-                record.unread = false;
-                self.send(Operation::ReadOne(id));
-            }
+            record.unread = false;
+            self.send(Operation::ReadOne(id));
         }
     }
     #[cfg(feature = "test-guards")]

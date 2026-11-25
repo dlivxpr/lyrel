@@ -3277,7 +3277,8 @@ impl LyrelApp {
         let add = ctx.route.is_some().then(|| {
             crate::ui::window_chrome::chrome_tile_sized(
                 Button::new(("ssh-forward-add-toggle", pane_id))
-                    .icon(Icon::empty().path("icons/plus.svg")),
+                    .icon(Icon::empty().path("icons/plus.svg"))
+                    .aria_expanded(form_open),
                 HEADING_TILE,
                 HEADING_TILE_GLYPH,
                 form_open,
@@ -4532,7 +4533,7 @@ mod persistence_tests {
     #[gpui_kit::test]
     fn browser_pages_persist_and_an_emptied_panel_reopens_on_info(cx: &mut TestAppContext) {
         let _views = VIEWS_FILE.lock().unwrap_or_else(|e| e.into_inner());
-        cx.update(|cx| WorkspaceStore::init(cx));
+        cx.update(WorkspaceStore::init);
         let ws = claim_workspace(cx);
         let (app, mut vcx) = crate::ui::app::test_window::harness_on_workspace(cx, ws);
         app.update_in(&mut vcx, |app, _window, cx| {
@@ -4595,7 +4596,7 @@ mod persistence_tests {
         // Relaunch: the tool strip, the page rows and the open state come
         // back; the transient detail does not (it belongs to the terminal
         // tab, like the GitHub detail's).
-        cx.update(|cx| WorkspaceStore::init(cx));
+        cx.update(WorkspaceStore::init);
         let (relaunched, mut vcx) = crate::ui::app::test_window::open_window_on(cx, Some(ws));
         settle(&mut vcx);
         let restored = relaunched.read_with(&vcx, |app, _| app.tool_layout());
@@ -4651,7 +4652,7 @@ mod persistence_tests {
     #[gpui_kit::test]
     fn a_v2_layout_restores_its_pages_into_the_browser_list(cx: &mut TestAppContext) {
         let _views = VIEWS_FILE.lock().unwrap_or_else(|e| e.into_inner());
-        cx.update(|cx| WorkspaceStore::init(cx));
+        cx.update(WorkspaceStore::init);
         let ws = claim_workspace(cx);
         let legacy = ToolLayoutState {
             version: 2,
@@ -4723,7 +4724,7 @@ mod persistence_tests {
     #[gpui_kit::test]
     fn workspaces_keep_their_own_tool_layout_across_relaunch(cx: &mut TestAppContext) {
         let _views = VIEWS_FILE.lock().unwrap_or_else(|e| e.into_inner());
-        cx.update(|cx| WorkspaceStore::init(cx));
+        cx.update(WorkspaceStore::init);
 
         // — First session: two workspaces used differently. —
         let alpha = claim_workspace(cx);
@@ -4791,7 +4792,7 @@ mod persistence_tests {
 
         // — Restart: the store global is rebuilt from disk, the windows are
         // reopened on the same workspaces. —
-        cx.update(|cx| WorkspaceStore::init(cx));
+        cx.update(WorkspaceStore::init);
         let (relaunched, mut vcx) = crate::ui::app::test_window::open_window_on(cx, Some(alpha));
         settle(&mut vcx);
         assert_eq!(

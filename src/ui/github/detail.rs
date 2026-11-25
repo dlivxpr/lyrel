@@ -316,6 +316,7 @@ impl LyrelApp {
     /// and diff headers carry. No path, save, dirty, cursor or encoding
     /// chrome — the content is read-only and names its repository, not a
     /// file.
+    #[allow(clippy::too_many_arguments)]
     fn github_document_header(
         &self,
         chrome: DocumentChrome,

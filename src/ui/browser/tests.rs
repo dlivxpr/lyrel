@@ -442,7 +442,11 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(cx: &mut T
     app.read_with(&vcx, |app, _| {
         let layout = app.tool_layout();
         let web: Vec<_> = layout.web_tabs.iter().map(|tab| tab.id.clone()).collect();
-        assert_eq!(web, [first.clone()], "one preview tab per agent pane");
+        assert_eq!(
+            web,
+            std::slice::from_ref(&first),
+            "one preview tab per agent pane"
+        );
         assert_eq!(
             layout.active,
             lyrel_core::core::config::RightPanelTab::Browser,
@@ -918,7 +922,7 @@ fn a_same_numbered_pane_on_another_route_never_steals_the_share(cx: &mut TestApp
 #[gpui_kit::test]
 fn a_remote_preview_inherits_the_windows_verified_host_binding(cx: &mut TestAppContext) {
     lyrel_ui_base::config::pin_test_config_dir();
-    cx.update(|cx| WorkspaceStore::init(cx));
+    cx.update(WorkspaceStore::init);
     let target = RemoteTarget::Direct {
         user: "dev".into(),
         host: "remote.test".into(),
