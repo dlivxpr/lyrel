@@ -397,8 +397,15 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(cx: &mut T
     let (focused, first) = app.update_in(&mut vcx, |app, window, cx| {
         app.focus_active(window, cx);
         let focused = window.focused(cx).expect("terminal content owns focus");
-        app.reveal_agent_preview(app.workspace, 1, "http://localhost:5173/app", &scratch, cx)
-            .expect("a local preview is eligible");
+        app.reveal_agent_preview(
+            app.workspace,
+            1,
+            "http://localhost:5173/app",
+            None,
+            &scratch,
+            cx,
+        )
+        .expect("a local preview is eligible");
         let first = active_web(app).expect("the preview is the front detail");
         assert!(app.right_panel_visible, "the panel reveals for the preview");
         (focused, first)
@@ -436,8 +443,15 @@ fn an_agent_preview_reveals_and_selects_without_moving_terminal_focus(cx: &mut T
     // A second request from the same agent pane reuses its preview tab and
     // moves that page rather than piling up tabs.
     app.update_in(&mut vcx, |app, _window, cx| {
-        app.reveal_agent_preview(app.workspace, 1, "http://localhost:5173/next", &scratch, cx)
-            .expect("the same pane may move its preview");
+        app.reveal_agent_preview(
+            app.workspace,
+            1,
+            "http://localhost:5173/next",
+            None,
+            &scratch,
+            cx,
+        )
+        .expect("the same pane may move its preview");
     });
     app.read_with(&vcx, |app, _| {
         let layout = app.tool_layout();
@@ -475,6 +489,7 @@ fn an_explicit_share_writes_the_screenshot_and_prompts_the_original_pane(cx: &mu
             app.workspace,
             1,
             "http://localhost:5173/app",
+            None,
             &scratch.path().to_string_lossy(),
             cx,
         )
@@ -550,6 +565,7 @@ fn a_stale_capture_answer_never_consumes_a_newer_share(cx: &mut TestAppContext) 
             app.workspace,
             1,
             "http://localhost:5173/app",
+            None,
             &scratch_path,
             cx,
         )
@@ -631,6 +647,7 @@ fn a_cancelled_share_never_reaches_the_pane_after_its_write(cx: &mut TestAppCont
             app.workspace,
             1,
             "http://localhost:5173/app",
+            None,
             &scratch_path,
             cx,
         )
@@ -742,6 +759,7 @@ fn a_restored_preview_has_no_sendable_source(cx: &mut TestAppContext) {
                 address: "http://localhost:5173/app".into(),
                 host: None,
                 title: String::new(),
+                html_path: None,
             }),
         ],
         active: TabSelectionState::Tool(Browser),
@@ -807,6 +825,7 @@ fn a_missing_source_pane_refuses_the_share_visibly(cx: &mut TestAppContext) {
             app.workspace,
             9,
             "http://localhost:5173/app",
+            None,
             &scratch.path().to_string_lossy(),
             cx,
         )
@@ -874,6 +893,7 @@ fn a_same_numbered_pane_on_another_route_never_steals_the_share(cx: &mut TestApp
             app.workspace,
             1,
             "http://localhost:5173/app",
+            None,
             &scratch_path,
             cx,
         )
@@ -941,6 +961,7 @@ fn a_remote_preview_inherits_the_windows_verified_host_binding(cx: &mut TestAppC
             host.workspace,
             7,
             "http://localhost:3000/app",
+            None,
             &scratch.path().to_string_lossy(),
             cx,
         )
@@ -970,6 +991,7 @@ fn a_preview_url_that_breaks_the_surface_policy_never_opens(cx: &mut TestAppCont
                 app.workspace,
                 1,
                 "file:///etc/passwd",
+                None,
                 "/tmp/lyrel/previews",
                 cx,
             )
@@ -982,4 +1004,383 @@ fn a_preview_url_that_breaks_the_surface_policy_never_opens(cx: &mut TestAppCont
             "the denied route never grew a page"
         );
     });
+}
+
+fn remote_terminal_harness(
+    cx: &mut TestAppContext,
+) -> (
+    gpui_kit::Entity<LyrelApp>,
+    gpui_kit::VisualTestContext,
+    RemoteRef,
+    gpui_kit::Entity<lyrel_terminal::view::TerminalView>,
+    crate::daemon::transport::Stream,
+) {
+    use crate::ui::pane::{Pane, PaneSlot};
+    use crate::ui::tab::Tab;
+    use lyrel_terminal::view::quiet_test_pane;
+
+    lyrel_ui_base::config::pin_test_config_dir();
+    cx.update(WorkspaceStore::init);
+    let target = RemoteTarget::Direct {
+        user: "dev".into(),
+        host: "remote.test".into(),
+        port: 22,
+    };
+    let client_workspace = cx
+        .update(|cx| WorkspaceStore::claim_remote(cx, RemoteRef::new(target, WorkspaceId::new())));
+    let host = cx
+        .update(|cx| WorkspaceStore::remote_ref(cx, client_workspace))
+        .expect("claimed remote workspace");
+    let (app, mut vcx) = crate::ui::app::test_window::harness_on_workspace(cx, client_workspace);
+    let (pane, stream) = app.update_in(&mut vcx, |app, window, cx| {
+        let (view, stream) = quiet_test_pane(1, window, cx);
+        let pane_ws = crate::ui::remote_workspace::pane_workspace_for(cx, client_workspace);
+        view.update(cx, |v, _| v.set_workspace(pane_ws));
+        LyrelApp::watch_terminal(&view, window, cx);
+        app.tabs
+            .push(Tab::new(Pane::leaf(PaneSlot::Ready(view.clone()))));
+        app.tabs.select(0);
+        cx.notify();
+        (view, stream)
+    });
+    vcx.background_executor.run_until_parked();
+    (app, vcx, host, pane, stream)
+}
+
+#[gpui_kit::test]
+fn terminal_url_requests_route_by_destination_and_reuse_existing_tabs(cx: &mut TestAppContext) {
+    use lyrel_ui_base::web_preview::{OpenWebPageRequested, WebOpenDestination};
+
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    let local_pane = app.read_with(&vcx, |app, _| {
+        app.tabs[0]
+            .pane
+            .first_leaf()
+            .unwrap()
+            .terminal()
+            .unwrap()
+            .clone()
+    });
+    app.update_in(&mut vcx, |_, _, cx| {
+        local_pane.update(cx, |_, cx| {
+            cx.emit(OpenWebPageRequested {
+                address: "https://example.com/local".into(),
+                destination: WebOpenDestination::Browser,
+            });
+        });
+    });
+    settle(&mut vcx);
+
+    let first_id = app.read_with(&vcx, |app, _| {
+        let layout = app.tool_layout();
+        assert_eq!(layout.web_tabs.len(), 1);
+        assert_eq!(layout.web_tabs[0].address, "https://example.com/local");
+        assert!(layout.web_tabs[0].host.is_none());
+        assert_eq!(
+            layout.active,
+            lyrel_core::core::config::RightPanelTab::Browser
+        );
+        active_web(app).expect("first tab is front")
+    });
+
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.open_web_page("https://example.com/other", None, cx);
+        assert_eq!(app.tool_layout().web_tabs.len(), 2);
+        assert_ne!(active_web(app).as_deref(), Some(first_id.as_str()));
+
+        local_pane.update(cx, |_, cx| {
+            cx.emit(OpenWebPageRequested {
+                address: "HTTPS://EXAMPLE.COM/local".into(),
+                destination: WebOpenDestination::Browser,
+            });
+        });
+    });
+    settle(&mut vcx);
+    app.read_with(&vcx, |app, _| {
+        assert_eq!(
+            app.tool_layout().web_tabs.len(),
+            2,
+            "reopening an existing URL must not create a duplicate tab"
+        );
+        assert_eq!(
+            active_web(app).as_deref(),
+            Some(first_id.as_str()),
+            "reopening focuses the existing tab"
+        );
+    });
+
+    app.update_in(&mut vcx, |_, _, cx| {
+        local_pane.update(cx, |_, cx| {
+            cx.emit(OpenWebPageRequested {
+                address: "http://localhost:3000/local".into(),
+                destination: WebOpenDestination::SystemBrowser,
+            });
+        });
+    });
+    vcx.run_until_parked();
+    assert_eq!(
+        cx.opened_url().as_deref(),
+        Some("http://localhost:3000/local")
+    );
+
+    let verifier = RecordingVerifier::new(Ok(54321));
+    cx.update(|cx| {
+        cx.set_global(BrowserForwardVerifier(verifier.clone()));
+    });
+    let (remote_app, mut remote_vcx, host, remote_pane, _stream) = remote_terminal_harness(cx);
+    remote_app.update_in(&mut remote_vcx, |_, _, cx| {
+        remote_pane.update(cx, |_, cx| {
+            cx.emit(OpenWebPageRequested {
+                address: "http://localhost:3000/app".into(),
+                destination: WebOpenDestination::Browser,
+            });
+        });
+    });
+    settle(&mut remote_vcx);
+
+    let remote_tab_id = remote_app.read_with(&remote_vcx, |app, _| {
+        let layout = app.tool_layout();
+        assert_eq!(layout.web_tabs.len(), 1);
+        assert_eq!(layout.web_tabs[0].host.as_ref(), Some(&host));
+        assert_eq!(layout.web_tabs[0].address, "http://localhost:3000/app");
+        active_web(app).expect("remote tab is front")
+    });
+    assert_eq!(verifier.calls(), [("localhost".to_string(), 3000)]);
+    assert_eq!(
+        remote_app.read_with(&remote_vcx, |app, _| {
+            app.browser_surface_commands(&remote_tab_id)
+        }),
+        [
+            BrowserCommand::SetRouteGuard {
+                guard: super::surface::RouteGuard::Origin("http://127.0.0.1:54321".into()),
+            },
+            BrowserCommand::Navigate {
+                url: "http://127.0.0.1:54321/app".into(),
+            },
+        ]
+    );
+
+    remote_app.update_in(&mut remote_vcx, |_, _, cx| {
+        remote_pane.update(cx, |_, cx| {
+            cx.emit(OpenWebPageRequested {
+                address: "http://localhost:3000/app".into(),
+                destination: WebOpenDestination::Browser,
+            });
+        });
+    });
+    settle(&mut remote_vcx);
+    remote_app.read_with(&remote_vcx, |app, _| {
+        assert_eq!(app.tool_layout().web_tabs.len(), 1);
+    });
+
+    remote_app.update_in(&mut remote_vcx, |_, _, cx| {
+        remote_pane.update(cx, |_, cx| {
+            cx.emit(OpenWebPageRequested {
+                address: "http://localhost:4000/api".into(),
+                destination: WebOpenDestination::SystemBrowser,
+            });
+        });
+    });
+    remote_vcx.run_until_parked();
+    assert_eq!(
+        verifier.calls(),
+        [
+            ("localhost".to_string(), 3000),
+            ("localhost".to_string(), 4000),
+        ]
+    );
+    assert_eq!(
+        cx.opened_url().as_deref(),
+        Some("http://127.0.0.1:54321/api")
+    );
+}
+
+#[gpui_kit::test]
+fn info_panel_ports_open_in_browser_by_default_and_system_browser_on_shift_or_menu(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::test::TestEventExt as _;
+    use gpui_kit::{Modifiers, MouseButton};
+    use lyrel_core::core::config::RightPanelTab;
+    use lyrel_core::daemon::protocol::{PaneProcs, PortEntry};
+    use lyrel_ui_base::i18n::{L10nKey, t};
+
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    vcx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(900.)));
+    let pane_id = app.read_with(&vcx, |app, cx| {
+        app.tabs[0]
+            .pane
+            .first_leaf()
+            .unwrap()
+            .terminal()
+            .unwrap()
+            .read(cx)
+            .pane_id
+    });
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.right_panel.procs_pane = Some(pane_id);
+        app.right_panel.procs_loading = true;
+        app.right_panel.procs = Some(PaneProcs {
+            ports: vec![PortEntry {
+                port: 3000,
+                pid: 101,
+                name: "vite".into(),
+                addr: "127.0.0.1".into(),
+            }],
+            ..Default::default()
+        });
+        app.set_right_panel_tab(RightPanelTab::Info, window, cx);
+    });
+    settle(&mut vcx);
+
+    vcx.update(|window, cx| {
+        let open_btn = window.find(("panel-port-open", 0usize)).bounds().center();
+        window.pointer_move(open_btn, None, cx);
+        window.pointer_down(open_btn, MouseButton::Left, cx);
+        window.pointer_up(open_btn, MouseButton::Left, cx);
+    });
+    settle(&mut vcx);
+    app.read_with(&vcx, |app, _| {
+        let layout = app.tool_layout();
+        assert_eq!(layout.web_tabs.len(), 1);
+        assert_eq!(layout.web_tabs[0].address, "http://localhost:3000");
+        assert!(active_web(app).is_some());
+    });
+
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.set_right_panel_tab(RightPanelTab::Info, window, cx);
+    });
+    settle(&mut vcx);
+    vcx.update(|window, cx| {
+        let open_btn = window.find(("panel-port-open", 0usize)).bounds().center();
+        window.change_modifiers(Modifiers::shift(), cx);
+        window.pointer_move(open_btn, None, cx);
+        window.pointer_down(open_btn, MouseButton::Left, cx);
+        window.pointer_up(open_btn, MouseButton::Left, cx);
+        window.change_modifiers(Modifiers::none(), cx);
+    });
+    vcx.run_until_parked();
+    assert_eq!(cx.opened_url().as_deref(), Some("http://localhost:3000"));
+
+    vcx.update(|window, cx| {
+        let row = window.find("panel-port-3000-101").bounds().center();
+        window.pointer_move(row, None, cx);
+        window.pointer_down(row, MouseButton::Right, cx);
+        window.pointer_up(row, MouseButton::Right, cx);
+    });
+    settle(&mut vcx);
+    vcx.update(|window, cx| {
+        let menu = window.within("popup-menu");
+        menu.find_by_label(t(L10nKey::PanelOpenInBrowser));
+        menu.find_by_label(t(L10nKey::BrowserOpenExternal));
+        let copy = menu.find_by_label(t(L10nKey::CmdCopy)).bounds().center();
+        window.pointer_down(copy, MouseButton::Left, cx);
+        window.pointer_up(copy, MouseButton::Left, cx);
+    });
+    vcx.run_until_parked();
+    assert_eq!(
+        cx.update(|cx| cx.read_from_clipboard().and_then(|item| item.text())),
+        Some("localhost:3000".to_string())
+    );
+
+    let verifier = RecordingVerifier::new(Ok(55123));
+    cx.update(|cx| {
+        cx.set_global(BrowserForwardVerifier(verifier.clone()));
+    });
+    let (remote_app, mut remote_vcx, host, remote_pane, _stream) = remote_terminal_harness(cx);
+    remote_vcx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(900.)));
+    let remote_pane_id = remote_pane.read_with(&remote_vcx, |view, _| view.pane_id);
+    remote_app.update_in(&mut remote_vcx, |app, window, cx| {
+        app.right_panel.procs_pane = Some(remote_pane_id);
+        app.right_panel.procs_loading = true;
+        app.right_panel.procs = Some(PaneProcs {
+            ports: vec![PortEntry {
+                port: 8080,
+                pid: 202,
+                name: "uvicorn".into(),
+                addr: "127.0.0.1".into(),
+            }],
+            ..Default::default()
+        });
+        app.set_right_panel_tab(RightPanelTab::Info, window, cx);
+    });
+    settle(&mut remote_vcx);
+
+    remote_vcx.update(|window, cx| {
+        let open_btn = window.find(("panel-port-open", 0usize)).bounds().center();
+        window.pointer_move(open_btn, None, cx);
+        window.pointer_down(open_btn, MouseButton::Left, cx);
+        window.pointer_up(open_btn, MouseButton::Left, cx);
+    });
+    settle(&mut remote_vcx);
+    let remote_tab_id = remote_app.read_with(&remote_vcx, |app, _| {
+        let layout = app.tool_layout();
+        assert_eq!(layout.web_tabs.len(), 1);
+        assert_eq!(layout.web_tabs[0].host.as_ref(), Some(&host));
+        assert_eq!(layout.web_tabs[0].address, "http://localhost:8080");
+        active_web(app).expect("remote port opened in Side Panel Browser")
+    });
+    assert_eq!(verifier.calls(), [("localhost".to_string(), 8080)]);
+    assert_eq!(
+        remote_app.read_with(&remote_vcx, |app, _| {
+            app.browser_surface_commands(&remote_tab_id)
+        }),
+        [
+            BrowserCommand::SetRouteGuard {
+                guard: super::surface::RouteGuard::Origin("http://127.0.0.1:55123".into()),
+            },
+            BrowserCommand::Navigate {
+                url: "http://127.0.0.1:55123".into(),
+            },
+        ]
+    );
+
+    remote_app.update_in(&mut remote_vcx, |app, window, cx| {
+        app.set_right_panel_tab(RightPanelTab::Info, window, cx);
+    });
+    settle(&mut remote_vcx);
+    remote_vcx.update(|window, cx| {
+        let open_btn = window.find(("panel-port-open", 0usize)).bounds().center();
+        window.change_modifiers(Modifiers::shift(), cx);
+        window.pointer_move(open_btn, None, cx);
+        window.pointer_down(open_btn, MouseButton::Left, cx);
+        window.pointer_up(open_btn, MouseButton::Left, cx);
+        window.change_modifiers(Modifiers::none(), cx);
+    });
+    remote_vcx.run_until_parked();
+    assert_eq!(
+        verifier.calls(),
+        [
+            ("localhost".to_string(), 8080),
+            ("localhost".to_string(), 8080),
+        ]
+    );
+    assert_eq!(cx.opened_url().as_deref(), Some("http://127.0.0.1:55123"));
+
+    remote_vcx.update(|window, cx| {
+        let row = window.find("panel-port-8080-202").bounds().center();
+        window.pointer_move(row, None, cx);
+        window.pointer_down(row, MouseButton::Right, cx);
+        window.pointer_up(row, MouseButton::Right, cx);
+    });
+    settle(&mut remote_vcx);
+    remote_vcx.update(|window, cx| {
+        let ext = window
+            .within("popup-menu")
+            .find_by_label(t(L10nKey::BrowserOpenExternal))
+            .bounds()
+            .center();
+        window.pointer_down(ext, MouseButton::Left, cx);
+        window.pointer_up(ext, MouseButton::Left, cx);
+    });
+    remote_vcx.run_until_parked();
+    assert_eq!(
+        verifier.calls(),
+        [
+            ("localhost".to_string(), 8080),
+            ("localhost".to_string(), 8080),
+            ("localhost".to_string(), 8080),
+        ]
+    );
+    assert_eq!(cx.opened_url().as_deref(), Some("http://127.0.0.1:55123"));
 }

@@ -41,6 +41,12 @@ impl LyrelApp {
     ) {
         match event {
             FileTreeEvent::OpenFile { path } => self.open_file_in_editor(path, window, cx),
+            FileTreeEvent::OpenInBrowser { host, path } => {
+                self.open_html_preview(*host, path, cx);
+            }
+            FileTreeEvent::OpenInSystemBrowser { host, path } => {
+                self.open_html_in_system_browser(*host, path, cx);
+            }
             FileTreeEvent::PathMoved { host, from, to } => {
                 self.editor_path_moved(*host, from, to, cx);
             }
@@ -54,6 +60,8 @@ impl LyrelApp {
             }
             FileTreeEvent::FsEvents { host, paths } => {
                 self.file_tree_apply_fs_events(*host, paths, cx);
+                let changed: Vec<PathBuf> = paths.iter().cloned().collect();
+                self.reload_html_previews_for_paths(*host, &changed, cx);
             }
             FileTreeEvent::CdHere { dir } => self.file_tree_cd(dir, window, cx),
             FileTreeEvent::AttachToAgent { path } => self.attach_path_to_agent(path, "", cx),

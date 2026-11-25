@@ -2158,6 +2158,12 @@ l10n_keys! {
     BrowserOpenExternal,
     // The explicit recovery action when a Host-bound page's forward is gone.
     BrowserReconnect,
+    // Retry loading an HTML preview after a file or mount error.
+    BrowserRetry,
+    // The HTML preview target file is missing on its owning Host.
+    BrowserHtmlMissing,
+    // The remote Host owning an HTML preview is disconnected.
+    BrowserHtmlHostDisconnected,
     // The Host chip under the address: a page on this machine / a bound Host.
     BrowserHostLocal,
     BrowserHostRemote,
@@ -2508,9 +2514,11 @@ l10n_keys! {
     AppMenuClearScrollback,
     AppMenuOpenLink,
     AppMenuOpenLinkWithDefaultApp,
+    AppMenuOpenInEditor,
     AppMenuRevealInFinder,
     AppMenuRevealInFolder,
     AppMenuCopyLinkPath,
+    AppMenuCopyLink,
     AppMenuEnterFullscreen,
     AppMenuDocumentation,
     AppMenuKeyboardShortcuts,

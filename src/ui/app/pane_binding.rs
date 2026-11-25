@@ -344,11 +344,12 @@ impl LyrelApp {
         Self::watch_terminal_scm(view, cx);
         Self::watch_open_file_requests(view, window, cx);
         Self::watch_open_web_requests(view, window, cx);
+        Self::watch_open_html_preview_requests(view, window, cx);
         let handle = view.read(cx).focus_handle.clone();
         Self::watch_pane_focus(&handle, view.entity_id(), window, cx);
     }
 
-    pub(super) fn watch_terminal_scm(view: &Entity<TerminalView>, cx: &mut Context<Self>) {
+    pub(crate) fn watch_terminal_scm(view: &Entity<TerminalView>, cx: &mut Context<Self>) {
         cx.subscribe(
             view,
             |_app, _view, ev: &lyrel_terminal::view::ScmRepoChanged, cx| {
@@ -457,10 +458,10 @@ impl LyrelApp {
         .detach();
     }
 
-    /// A loopback link clicked in a managed remote Workspace pane opens a
-    /// Side Panel page bound to that Workspace's Host (#392). The app builds
-    /// the durable Host binding and the browser verifies the forward before
-    /// anything loads.
+    /// A URL or loopback link clicked in a pane opens in the Side Panel
+    /// Browser by default, or in the System Browser when requested via
+    /// `Shift` (#419). A managed remote Workspace binds the page to its Host
+    /// so loopback addresses verify and forward before anything loads (#392).
     fn watch_open_web_requests(
         view: &Entity<TerminalView>,
         window: &mut Window,
@@ -470,13 +471,45 @@ impl LyrelApp {
             view,
             window,
             |app, view, ev: &lyrel_ui_base::web_preview::OpenWebPageRequested, _window, cx| {
-                let workspace = view.read(cx).workspace().map(|ws| ws.workspace);
-                let Some(host) = workspace
-                    .and_then(|id| lyrel_ui_base::session::WorkspaceStore::remote_ref(cx, id))
-                else {
+                let host = view.read(cx).workspace().and_then(|ws| {
+                    lyrel_ui_base::session::WorkspaceStore::remote_ref(cx, ws.workspace)
+                });
+                match ev.destination {
+                    lyrel_ui_base::web_preview::WebOpenDestination::Browser => {
+                        app.open_web_page(&ev.address, host, cx);
+                    }
+                    lyrel_ui_base::web_preview::WebOpenDestination::SystemBrowser => {
+                        app.open_url_in_system_browser(&ev.address, host, cx);
+                    }
+                }
+            },
+        )
+        .detach();
+    }
+
+    /// An HTML file link clicked or chosen from the context menu in a pane
+    /// opens in the Side Panel Browser by default, or in the System Browser
+    /// when requested via `Shift` or the context menu (#422).
+    fn watch_open_html_preview_requests(
+        view: &Entity<TerminalView>,
+        window: &mut Window,
+        cx: &mut Context<LyrelApp>,
+    ) {
+        cx.subscribe_in(
+            view,
+            window,
+            |app, view, ev: &lyrel_ui_base::web_preview::OpenHtmlPreviewRequested, _window, cx| {
+                if view.read(cx).host_id() != ev.host_id {
                     return;
-                };
-                app.open_web_page(&ev.address, Some(host), cx);
+                }
+                match ev.destination {
+                    lyrel_ui_base::web_preview::WebOpenDestination::Browser => {
+                        app.open_html_preview(ev.host_id, &ev.path, cx);
+                    }
+                    lyrel_ui_base::web_preview::WebOpenDestination::SystemBrowser => {
+                        app.open_html_in_system_browser(ev.host_id, &ev.path, cx);
+                    }
+                }
             },
         )
         .detach();
@@ -488,7 +521,7 @@ impl LyrelApp {
     /// Every leaf is watched, connecting slots included: a pane can be focused
     /// while it is still coming up, and if the tab is left in that moment the
     /// answer has to already be written down.
-    pub(super) fn watch_pane_focus(
+    pub(crate) fn watch_pane_focus(
         handle: &gpui_kit::FocusHandle,
         leaf: gpui_kit::EntityId,
         window: &mut Window,

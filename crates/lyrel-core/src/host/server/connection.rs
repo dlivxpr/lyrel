@@ -104,7 +104,7 @@ where
     if hello.preview {
         // A desktop's remote link consumes agent previews without turning
         // this machine into a `GuiOpen` target (#393).
-        conn.identity.register_preview();
+        conn.identity.register_preview(hello.preview_html);
     }
 
     if let Some(workspace) = hello.workspace.as_deref()

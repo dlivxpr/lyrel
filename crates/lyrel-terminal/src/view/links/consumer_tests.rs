@@ -705,3 +705,792 @@ fn ctrl_click_on_osc8_and_plain_file_urls_opens_in_builtin_editor(cx: &mut TestA
         ]
     );
 }
+
+#[gpui_kit::test]
+fn bare_loopback_addresses_are_detected_and_routed_on_local_panes(cx: &mut TestAppContext) {
+    use lyrel_ui_base::web_preview::{OpenWebPageRequested, WebOpenDestination};
+
+    let (window, mut daemon) = harness(cx);
+    let emitted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = emitted.clone();
+    window
+        .update(cx, |_, _, cx| {
+            let view = cx.entity();
+            cx.subscribe(&view, move |_, _, event: &OpenWebPageRequested, _| {
+                seen.borrow_mut()
+                    .push((event.address.clone(), event.destination));
+            })
+            .detach();
+        })
+        .unwrap();
+    DaemonMsg::Output(b"see localhost:3000/app 127.0.0.1:8080 [::1]:5173\r\n".to_vec())
+        .encode(&mut daemon)
+        .unwrap();
+    for _ in 0..200 {
+        if window
+            .update(cx, |view, _, _| {
+                view.terminal.term.lock().grid[Line(0)][Column(4)].c() == 'l'
+            })
+            .unwrap()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.hover_link_at(4, 0, true, cx));
+            assert!(view.hover_link_at(23, 0, true, cx));
+            assert!(view.hover_link_at(38, 0, true, cx));
+
+            assert!(view.open_link_at_with_modifiers(4, 0, false, window, cx));
+            assert!(view.open_link_at_with_modifiers(23, 0, true, window, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        &*emitted.borrow(),
+        &[(
+            "http://localhost:3000/app".to_string(),
+            WebOpenDestination::Browser
+        )]
+    );
+    assert_eq!(cx.opened_url().as_deref(), Some("http://127.0.0.1:8080"));
+}
+
+#[gpui_kit::test]
+fn http_and_remote_loopback_urls_route_by_shift_modifier(cx: &mut TestAppContext) {
+    use lyrel_ui_base::web_preview::{OpenWebPageRequested, WebOpenDestination};
+
+    let (window, mut daemon) = harness(cx);
+    let emitted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = emitted.clone();
+    window
+        .update(cx, |_, _, cx| {
+            let view = cx.entity();
+            cx.subscribe(&view, move |_, _, event: &OpenWebPageRequested, _| {
+                seen.borrow_mut()
+                    .push((event.address.clone(), event.destination));
+            })
+            .detach();
+        })
+        .unwrap();
+    DaemonMsg::Output(
+        b"https://example.com/docs ftp://example.com/file http://localhost:3000/app\r\n".to_vec(),
+    )
+    .encode(&mut daemon)
+    .unwrap();
+    for _ in 0..200 {
+        if window
+            .update(cx, |view, _, _| {
+                view.terminal.term.lock().grid[Line(0)][Column(0)].c() == 'h'
+            })
+            .unwrap()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.open_link_at_with_modifiers(2, 0, false, window, cx));
+            assert!(view.open_link_at_with_modifiers(2, 0, true, window, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        &*emitted.borrow(),
+        &[(
+            "https://example.com/docs".to_string(),
+            WebOpenDestination::Browser
+        )]
+    );
+    assert_eq!(cx.opened_url().as_deref(), Some("https://example.com/docs"));
+
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.open_link_at_with_modifiers(27, 0, false, window, cx));
+        })
+        .unwrap();
+    assert_eq!(cx.opened_url().as_deref(), Some("ftp://example.com/file"));
+
+    emitted.borrow_mut().clear();
+    window
+        .update(cx, |view, window, cx| {
+            bind_to_a_disconnected_remote_workspace(view, cx);
+            assert!(view.open_link_at_with_modifiers(55, 0, false, window, cx));
+            assert!(view.open_link_at_with_modifiers(55, 0, true, window, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        &*emitted.borrow(),
+        &[
+            (
+                "http://localhost:3000/app".to_string(),
+                WebOpenDestination::Browser
+            ),
+            (
+                "http://localhost:3000/app".to_string(),
+                WebOpenDestination::SystemBrowser
+            ),
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn url_context_menu_offers_browser_system_browser_and_copy_link(cx: &mut TestAppContext) {
+    use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
+    use lyrel_ui_base::actions::{
+        CopyLinkUrlUnderPointer, OpenLinkInBrowser, OpenLinkInSystemBrowser,
+    };
+    use lyrel_ui_base::i18n::{L10nKey, t};
+    use lyrel_ui_base::web_preview::{OpenWebPageRequested, WebOpenDestination};
+
+    let (window, view, mut daemon) = rooted_harness(cx);
+    let emitted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = emitted.clone();
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    vcx.update(|_, cx| {
+        cx.subscribe(&view, move |_, ev: &OpenWebPageRequested, _| {
+            seen.borrow_mut().push((ev.address.clone(), ev.destination));
+        })
+        .detach();
+    });
+    DaemonMsg::Output(b"visit https://example.com/docs\r\n".to_vec())
+        .encode(&mut daemon)
+        .unwrap();
+    for _ in 0..200 {
+        if view.read_with(&vcx, |view, _| {
+            view.terminal.term.lock().grid[Line(0)][Column(6)].c() == 'h'
+        }) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+    });
+
+    let target = view.read_with(&vcx, |view, _| {
+        let geom = view.cell_geom.expect("cell geom after render");
+        gpui_kit::point(
+            geom.origin.x + geom.cell_width * 8.5,
+            geom.origin.y + geom.line_height * 0.5,
+        )
+    });
+    vcx.update(|window, cx| {
+        window.pointer_move(target, None, cx);
+        window.pointer_down(target, gpui_kit::MouseButton::Right, cx);
+        window.pointer_up(target, gpui_kit::MouseButton::Right, cx);
+        window.render_frame(cx);
+    });
+    vcx.run_until_parked();
+
+    let expected_click = if cfg!(target_os = "macos") {
+        "Cmd+Click"
+    } else {
+        "Ctrl+Click"
+    };
+    let expected_shift_click = if cfg!(target_os = "macos") {
+        "Cmd+Shift+Click"
+    } else {
+        "Ctrl+Shift+Click"
+    };
+    vcx.update(|window, _| {
+        window.find_by_label(t(L10nKey::PanelOpenInBrowser));
+        window.find_by_label(t(L10nKey::BrowserOpenExternal));
+        window.find_by_label(t(L10nKey::AppMenuCopyLink));
+        window.find_by_label(expected_click);
+        window.find_by_label(expected_shift_click);
+    });
+
+    vcx.update(|window, cx| {
+        window.press("escape", cx);
+        view.update(cx, |view, cx| {
+            // Moving the pointer away must not lose the captured menu URL.
+            view.hover_link_at(0, 0, true, cx);
+            view.focus_handle.focus(window, cx);
+        });
+        window.dispatch_action(Box::new(CopyLinkUrlUnderPointer), cx);
+        window.dispatch_action(Box::new(OpenLinkInBrowser), cx);
+        window.dispatch_action(Box::new(OpenLinkInSystemBrowser), cx);
+    });
+    vcx.run_until_parked();
+    assert_eq!(
+        vcx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+        Some("https://example.com/docs".to_string())
+    );
+    assert_eq!(
+        &*emitted.borrow(),
+        &[(
+            "https://example.com/docs".to_string(),
+            WebOpenDestination::Browser
+        )]
+    );
+    assert_eq!(cx.opened_url().as_deref(), Some("https://example.com/docs"));
+}
+
+#[gpui_kit::test]
+fn lineless_html_links_and_file_uris_route_to_html_preview_by_shift_modifier(
+    cx: &mut TestAppContext,
+) {
+    use crate::link_probe::Existence;
+    use lyrel_ui_base::host_ops::HostId;
+    use lyrel_ui_base::web_preview::{OpenHtmlPreviewRequested, WebOpenDestination};
+
+    let dir = tempfile::tempdir().unwrap();
+    let index = dir.path().join("index.html");
+    let page = dir.path().join("page.htm");
+    let doc = dir.path().join("doc.xhtml");
+    std::fs::write(&index, "<h1>hi</h1>").unwrap();
+    std::fs::write(&page, "<p>page</p>").unwrap();
+    std::fs::write(&doc, "<html/>").unwrap();
+    let normalized = index.to_string_lossy().replace('\\', "/");
+    let file_url = format!("file:///{}", normalized.trim_start_matches('/'));
+
+    let (window, mut daemon) = harness(cx);
+    let html_emitted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let html_seen = html_emitted.clone();
+    let file_emitted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let file_seen = file_emitted.clone();
+    window
+        .update(cx, |_, _, cx| {
+            let view = cx.entity();
+            cx.subscribe(&view, move |_, _, ev: &OpenHtmlPreviewRequested, _| {
+                html_seen
+                    .borrow_mut()
+                    .push((ev.host_id, ev.path.clone(), ev.destination));
+            })
+            .detach();
+            cx.subscribe(&view, move |_, _, ev: &OpenFileRequested, _| {
+                file_seen.borrow_mut().push(ev.path.clone());
+            })
+            .detach();
+        })
+        .unwrap();
+
+    DaemonMsg::Cwd(dir.path().to_path_buf())
+        .encode(&mut daemon)
+        .unwrap();
+    let line = format!("index.html page.htm doc.xhtml {file_url}\r\n");
+    DaemonMsg::Output(line.into_bytes())
+        .encode(&mut daemon)
+        .unwrap();
+    for _ in 0..200 {
+        if window
+            .update(cx, |view, _, _| {
+                view.cwd().is_some()
+                    && view.terminal.term.lock().grid[Line(0)][Column(0)].c() == 'i'
+            })
+            .unwrap()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    let file_url_col = "index.html page.htm doc.xhtml ".len();
+    window
+        .update(cx, |view, window, cx| {
+            // Default Internal mode and System mode both route line-less HTML to HTML preview.
+            assert!(view.open_link_at_with_modifiers(0, 0, false, window, cx));
+            assert!(view.open_link_at_with_modifiers(11, 0, true, window, cx));
+            assert!(view.open_link_at_with_modifiers(20, 0, false, window, cx));
+            assert!(view.open_link_at_with_modifiers(file_url_col, 0, true, window, cx));
+
+            let mut sys_cfg = cx.global::<Config>().clone();
+            sys_cfg.link_file_open = Some(LinkFileOpen::System);
+            cx.set_global(sys_cfg);
+            assert!(view.open_link_at_with_modifiers(0, 0, false, window, cx));
+            cx.set_global(Config::default());
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    assert!(
+        file_emitted.borrow().is_empty(),
+        "line-less HTML links should not open in editor by default"
+    );
+    assert_eq!(
+        &*html_emitted.borrow(),
+        &[
+            (HostId::LOCAL, index.clone(), WebOpenDestination::Browser),
+            (HostId::LOCAL, page, WebOpenDestination::SystemBrowser),
+            (HostId::LOCAL, doc, WebOpenDestination::Browser),
+            (
+                HostId::LOCAL,
+                index.clone(),
+                WebOpenDestination::SystemBrowser
+            ),
+            (HostId::LOCAL, index, WebOpenDestination::Browser),
+        ]
+    );
+
+    // Remote pane line-less HTML paths and file:// URIs route with remote host_id.
+    html_emitted.borrow_mut().clear();
+    let (remote_win, mut remote_daemon) = harness(cx);
+    let remote_seen = html_emitted.clone();
+    remote_win
+        .update(cx, |_, _, cx| {
+            let view = cx.entity();
+            cx.subscribe(&view, move |_, _, ev: &OpenHtmlPreviewRequested, _| {
+                remote_seen
+                    .borrow_mut()
+                    .push((ev.host_id, ev.path.clone(), ev.destination));
+            })
+            .detach();
+        })
+        .unwrap();
+    DaemonMsg::Output(b"/remote/site/app.html file:///remote/site/other.xhtml\r\n".to_vec())
+        .encode(&mut remote_daemon)
+        .unwrap();
+    for _ in 0..200 {
+        if remote_win
+            .update(cx, |view, _, _| {
+                view.terminal.term.lock().grid[Line(0)][Column(1)].c() == 'r'
+            })
+            .unwrap()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    let remote_host = remote_win
+        .update(cx, |view, window, cx| {
+            bind_to_a_disconnected_remote_workspace(view, cx);
+            view.set_git_status_cwd_for_test(Some("/remote/site".into()));
+            let host = view.host_id;
+            assert!(!view.hover_link_at(1, 0, true, cx));
+            assert!(!view.hover_link_at(24, 0, true, cx));
+            let (epoch, wanted) = view.links.take_probes();
+            assert!(wanted.contains(&std::path::PathBuf::from("/remote/site/app.html")));
+            assert!(wanted.contains(&std::path::PathBuf::from("/remote/site/other.xhtml")));
+            assert!(view.links.land_probes(
+                epoch,
+                vec![
+                    ("/remote/site/app.html".into(), Existence::File),
+                    ("/remote/site/other.xhtml".into(), Existence::File),
+                ],
+            ));
+            assert!(view.open_link_at_with_modifiers(1, 0, false, window, cx));
+            assert!(view.open_link_at_with_modifiers(24, 0, true, window, cx));
+            host
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    assert_eq!(
+        &*html_emitted.borrow(),
+        &[
+            (
+                remote_host,
+                std::path::PathBuf::from("/remote/site/app.html"),
+                WebOpenDestination::Browser
+            ),
+            (
+                remote_host,
+                std::path::PathBuf::from("/remote/site/other.xhtml"),
+                WebOpenDestination::SystemBrowser
+            ),
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn html_with_location_non_html_and_command_mode_preserve_file_click_routing(
+    cx: &mut TestAppContext,
+) {
+    use lyrel_ui_base::web_preview::OpenHtmlPreviewRequested;
+
+    let dir = tempfile::tempdir().unwrap();
+    let index = dir.path().join("index.html");
+    let icon = dir.path().join("icon.svg");
+    let code = dir.path().join("main.rs");
+    std::fs::write(&index, "<h1>hi</h1>").unwrap();
+    std::fs::write(&icon, "<svg/>").unwrap();
+    std::fs::write(&code, "fn main() {}\n").unwrap();
+
+    let (window, view, mut daemon) = rooted_harness(cx);
+    let html_emitted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let html_seen = html_emitted.clone();
+    let file_emitted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let file_seen = file_emitted.clone();
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    vcx.update(|_, cx| {
+        cx.subscribe(&view, move |_, ev: &OpenHtmlPreviewRequested, _| {
+            html_seen.borrow_mut().push(ev.path.clone());
+        })
+        .detach();
+        cx.subscribe(&view, move |_, ev: &OpenFileRequested, _| {
+            file_seen
+                .borrow_mut()
+                .push((ev.path.clone(), ev.line, ev.column, ev.is_dir));
+        })
+        .detach();
+    });
+
+    DaemonMsg::Cwd(dir.path().to_path_buf())
+        .encode(&mut daemon)
+        .unwrap();
+    DaemonMsg::Output(b"index.html:42:5 icon.svg main.rs index.html\r\n".to_vec())
+        .encode(&mut daemon)
+        .unwrap();
+    for _ in 0..200 {
+        if view.read_with(&vcx, |view, _| {
+            view.cwd().is_some() && view.terminal.term.lock().grid[Line(0)][Column(0)].c() == 'i'
+        }) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    let svg_col = "index.html:42:5 ".len();
+    let rs_col = "index.html:42:5 icon.svg ".len();
+    let html_col = "index.html:42:5 icon.svg main.rs ".len();
+
+    vcx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            // HTML with :line:col opens in built-in editor at line 42 col 5.
+            assert!(view.open_link_at_with_modifiers(0, 0, false, window, cx));
+            // Non-HTML (.svg, .rs) keep existing click and Shift+click behavior.
+            assert!(view.open_link_at_with_modifiers(svg_col, 0, false, window, cx));
+            assert!(view.open_link_at_with_modifiers(svg_col, 0, true, window, cx));
+            assert!(view.open_link_at_with_modifiers(rs_col, 0, false, window, cx));
+            assert!(view.open_link_at_with_modifiers(rs_col, 0, true, window, cx));
+        });
+    });
+    vcx.run_until_parked();
+
+    assert!(html_emitted.borrow().is_empty());
+    assert_eq!(
+        &*file_emitted.borrow(),
+        &[
+            (index.clone(), Some(42), Some(5), false),
+            (icon.clone(), None, None, false),
+            (icon, None, None, false),
+            (code.clone(), None, None, false),
+            (code, None, None, false),
+        ]
+    );
+
+    // link_file_open = command runs the custom command on click (does not emit HTML preview).
+    file_emitted.borrow_mut().clear();
+    let failed_count = vcx.update(|window, cx| {
+        view.update(cx, |view, cx| {
+            let mut cfg = cx.global::<Config>().clone();
+            cfg.link_file_open = Some(LinkFileOpen::Command);
+            cfg.link_file_command = Some("lyrel-no-such-link-opener {path}".into());
+            cx.set_global(cfg);
+            assert!(view.open_link_at_with_modifiers(html_col, 0, false, window, cx));
+            cx.set_global(Config::default());
+            lyrel_ui_base::notification_history::history(cx)
+                .read(cx)
+                .records()
+                .len()
+        })
+    });
+    vcx.run_until_parked();
+
+    assert!(html_emitted.borrow().is_empty());
+    assert!(file_emitted.borrow().is_empty());
+    assert!(
+        failed_count > 0,
+        "custom command path ran on click when link_file_open = command"
+    );
+}
+
+#[gpui_kit::test]
+fn html_file_context_menu_offers_dual_browser_editor_reveal_and_copy_and_dispatches_actions(
+    cx: &mut TestAppContext,
+) {
+    use crate::link_probe::Existence;
+    use gpui_kit::test::{TestEventExt as _, TestWindowExt as _};
+    use lyrel_ui_base::actions::{
+        CopyLinkPathUnderPointer, OpenLinkInBrowser, OpenLinkInEditor, OpenLinkInSystemBrowser,
+    };
+    use lyrel_ui_base::host_ops::HostId;
+    use lyrel_ui_base::i18n::{L10nKey, t};
+    use lyrel_ui_base::web_preview::{OpenHtmlPreviewRequested, WebOpenDestination};
+
+    let dir = tempfile::tempdir().unwrap();
+    let index = dir.path().join("index.html");
+    let icon = dir.path().join("icon.svg");
+    std::fs::write(&index, "<h1>hi</h1>").unwrap();
+    std::fs::write(&icon, "<svg/>").unwrap();
+
+    let (window, view, mut daemon) = rooted_harness(cx);
+    let html_emitted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let html_seen = html_emitted.clone();
+    let file_emitted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let file_seen = file_emitted.clone();
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    vcx.update(|_, cx| {
+        cx.subscribe(&view, move |_, ev: &OpenHtmlPreviewRequested, _| {
+            html_seen
+                .borrow_mut()
+                .push((ev.host_id, ev.path.clone(), ev.destination));
+        })
+        .detach();
+        cx.subscribe(&view, move |_, ev: &OpenFileRequested, _| {
+            file_seen.borrow_mut().push((
+                ev.host_id,
+                ev.path.clone(),
+                ev.line,
+                ev.column,
+                ev.is_dir,
+            ));
+        })
+        .detach();
+    });
+
+    DaemonMsg::Cwd(dir.path().to_path_buf())
+        .encode(&mut daemon)
+        .unwrap();
+    DaemonMsg::Output(b"index.html index.html:42:5 icon.svg\r\n".to_vec())
+        .encode(&mut daemon)
+        .unwrap();
+    for _ in 0..200 {
+        if view.read_with(&vcx, |view, _| {
+            view.cwd().is_some() && view.terminal.term.lock().grid[Line(0)][Column(0)].c() == 'i'
+        }) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+    });
+
+    let geom = view.read_with(&vcx, |view, _| {
+        view.cell_geom.expect("cell geom after render")
+    });
+    let cell_center = |col: usize| {
+        gpui_kit::point(
+            geom.origin.x + geom.cell_width * (col as f32 + 0.5),
+            geom.origin.y + geom.line_height * 0.5,
+        )
+    };
+
+    let expected_click = if cfg!(target_os = "macos") {
+        "Cmd+Click"
+    } else {
+        "Ctrl+Click"
+    };
+    let expected_shift_click = if cfg!(target_os = "macos") {
+        "Cmd+Shift+Click"
+    } else {
+        "Ctrl+Shift+Click"
+    };
+    let reveal_key = if cfg!(target_os = "macos") {
+        L10nKey::AppMenuRevealInFinder
+    } else {
+        L10nKey::AppMenuRevealInFolder
+    };
+
+    // Even with link_file_open = command, right-click on line-less HTML still offers Browser & System Browser.
+    vcx.update(|_, cx| {
+        let mut cfg = cx.global::<Config>().clone();
+        cfg.link_file_open = Some(LinkFileOpen::Command);
+        cfg.link_file_command = Some("lyrel-no-such-link-opener {path}".into());
+        cx.set_global(cfg);
+    });
+
+    let html_pos = cell_center(2);
+    vcx.update(|window, cx| {
+        window.pointer_move(html_pos, None, cx);
+        window.pointer_down(html_pos, gpui_kit::MouseButton::Right, cx);
+        window.pointer_up(html_pos, gpui_kit::MouseButton::Right, cx);
+        window.render_frame(cx);
+    });
+    vcx.run_until_parked();
+
+    vcx.update(|window, _| {
+        let menu = window.within("popup-menu");
+        menu.find_by_label("index.html");
+        menu.find_by_label(t(L10nKey::PanelOpenInBrowser));
+        menu.find_by_label(t(L10nKey::BrowserOpenExternal));
+        menu.find_by_label(t(L10nKey::AppMenuOpenInEditor));
+        menu.find_by_label(t(reveal_key));
+        menu.find_by_label(t(L10nKey::AppMenuCopyLinkPath));
+        menu.find_by_label(expected_click);
+        menu.find_by_label(expected_shift_click);
+    });
+
+    // Dispatch actions from local HTML link menu.
+    vcx.update(|window, cx| {
+        window.press("escape", cx);
+        view.update(cx, |view, cx| {
+            view.focus_handle.focus(window, cx);
+        });
+        window.dispatch_action(Box::new(OpenLinkInBrowser), cx);
+        window.dispatch_action(Box::new(OpenLinkInSystemBrowser), cx);
+        window.dispatch_action(Box::new(OpenLinkInEditor), cx);
+        window.dispatch_action(Box::new(CopyLinkPathUnderPointer), cx);
+    });
+    vcx.run_until_parked();
+
+    assert_eq!(
+        &*html_emitted.borrow(),
+        &[
+            (HostId::LOCAL, index.clone(), WebOpenDestination::Browser),
+            (
+                HostId::LOCAL,
+                index.clone(),
+                WebOpenDestination::SystemBrowser
+            ),
+        ]
+    );
+    assert_eq!(
+        &*file_emitted.borrow(),
+        &[(HostId::LOCAL, index.clone(), None, None, false)]
+    );
+    assert_eq!(
+        vcx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+        Some(index.to_string_lossy().into_owned())
+    );
+
+    // HTML with :line:col and non-HTML (.svg) keep the ordinary file context menu.
+    vcx.update(|_, cx| cx.set_global(Config::default()));
+    for col in [
+        "index.html ".len() + 2,
+        "index.html index.html:42:5 ".len() + 2,
+    ] {
+        let pos = cell_center(col);
+        vcx.update(|window, cx| {
+            window.pointer_move(pos, None, cx);
+            window.pointer_down(pos, gpui_kit::MouseButton::Right, cx);
+            window.pointer_up(pos, gpui_kit::MouseButton::Right, cx);
+            window.render_frame(cx);
+        });
+        vcx.run_until_parked();
+        vcx.update(|window, _| {
+            let menu = window.within("popup-menu");
+            menu.find_by_label(t(L10nKey::AppMenuOpenLink));
+            assert!(
+                menu.try_find_by_label(t(L10nKey::PanelOpenInBrowser))
+                    .is_none()
+            );
+            assert!(
+                menu.try_find_by_label(t(L10nKey::BrowserOpenExternal))
+                    .is_none()
+            );
+            assert!(
+                menu.try_find_by_label(t(L10nKey::AppMenuOpenInEditor))
+                    .is_none()
+            );
+        });
+        vcx.update(|window, cx| window.press("escape", cx));
+        vcx.run_until_parked();
+    }
+
+    // Remote line-less HTML file omits Reveal in Folder / Finder.
+    html_emitted.borrow_mut().clear();
+    file_emitted.borrow_mut().clear();
+    let (remote_win, remote_view, mut remote_daemon) = rooted_harness(cx);
+    let remote_html_seen = html_emitted.clone();
+    let remote_file_seen = file_emitted.clone();
+    let mut rvcx = gpui_kit::VisualTestContext::from_window(remote_win.into(), cx);
+    rvcx.update(|_, cx| {
+        cx.subscribe(&remote_view, move |_, ev: &OpenHtmlPreviewRequested, _| {
+            remote_html_seen
+                .borrow_mut()
+                .push((ev.host_id, ev.path.clone(), ev.destination));
+        })
+        .detach();
+        cx.subscribe(&remote_view, move |_, ev: &OpenFileRequested, _| {
+            remote_file_seen.borrow_mut().push((
+                ev.host_id,
+                ev.path.clone(),
+                ev.line,
+                ev.column,
+                ev.is_dir,
+            ));
+        })
+        .detach();
+    });
+    DaemonMsg::Output(b"/remote/site/remote.html\r\n".to_vec())
+        .encode(&mut remote_daemon)
+        .unwrap();
+    for _ in 0..200 {
+        if remote_view.read_with(&rvcx, |view, _| {
+            view.terminal.term.lock().grid[Line(0)][Column(1)].c() == 'r'
+        }) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    rvcx.update(|window, cx| window.render_frame(cx));
+
+    let remote_host = remote_view.update(&mut rvcx, |view, cx| {
+        bind_to_a_disconnected_remote_workspace(view, cx);
+        view.set_git_status_cwd_for_test(Some("/remote/site".into()));
+        let host = view.host_id;
+        assert!(!view.hover_link_at(2, 0, true, cx));
+        let (epoch, _) = view.links.take_probes();
+        assert!(view.links.land_probes(
+            epoch,
+            vec![("/remote/site/remote.html".into(), Existence::File)]
+        ));
+        host
+    });
+    let remote_pos = remote_view.read_with(&rvcx, |view, _| {
+        let geom = view.cell_geom.expect("cell geom after render");
+        gpui_kit::point(
+            geom.origin.x + geom.cell_width * 2.5,
+            geom.origin.y + geom.line_height * 0.5,
+        )
+    });
+    rvcx.update(|window, cx| {
+        window.pointer_move(remote_pos, None, cx);
+        window.pointer_down(remote_pos, gpui_kit::MouseButton::Right, cx);
+        window.pointer_up(remote_pos, gpui_kit::MouseButton::Right, cx);
+        window.render_frame(cx);
+    });
+    rvcx.run_until_parked();
+
+    rvcx.update(|window, _| {
+        let menu = window.within("popup-menu");
+        menu.find_by_label("remote.html");
+        menu.find_by_label(t(L10nKey::PanelOpenInBrowser));
+        menu.find_by_label(t(L10nKey::BrowserOpenExternal));
+        menu.find_by_label(t(L10nKey::AppMenuOpenInEditor));
+        assert!(
+            menu.try_find_by_label(t(reveal_key)).is_none(),
+            "remote line-less HTML menu must omit Reveal"
+        );
+        menu.find_by_label(t(L10nKey::AppMenuCopyLinkPath));
+    });
+
+    rvcx.update(|window, cx| {
+        window.press("escape", cx);
+        remote_view.update(cx, |view, cx| view.focus_handle.focus(window, cx));
+        window.dispatch_action(Box::new(OpenLinkInBrowser), cx);
+        window.dispatch_action(Box::new(OpenLinkInEditor), cx);
+    });
+    rvcx.run_until_parked();
+
+    assert_eq!(
+        &*html_emitted.borrow(),
+        &[(
+            remote_host,
+            std::path::PathBuf::from("/remote/site/remote.html"),
+            WebOpenDestination::Browser
+        )]
+    );
+    assert_eq!(
+        &*file_emitted.borrow(),
+        &[(
+            remote_host,
+            std::path::PathBuf::from("/remote/site/remote.html"),
+            None,
+            None,
+            false
+        )]
+    );
+}

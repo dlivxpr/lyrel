@@ -440,6 +440,10 @@ pub(crate) struct WebTab {
     /// number cannot identify the same pane after a restart. A restored tab
     /// has no source until a fresh agent request binds one.
     pub(crate) source: Option<lyrel_core::core::session::PreviewSourceState>,
+    /// The HTML preview file path on its Host, when this tab is an HTML
+    /// preview (#420). Loopback ports and tokens are live-only and never
+    /// persisted.
+    pub(crate) html_path: Option<String>,
 }
 
 impl WebTab {
@@ -449,6 +453,7 @@ impl WebTab {
             address: self.address.clone(),
             host: self.host.clone(),
             title: self.title.clone(),
+            html_path: self.html_path.clone(),
         }
     }
 
@@ -459,6 +464,7 @@ impl WebTab {
             title: state.title.clone(),
             host: state.host.clone(),
             source: None,
+            html_path: state.html_path.clone(),
         }
     }
 }
@@ -510,7 +516,7 @@ impl ToolLayout {
     /// text, filters, expansion and drafts stay in memory, the way they
     /// always have; the page records persist, the pages' live runtimes do
     /// not.
-    fn to_state(&self) -> lyrel_core::core::session::ToolLayoutState {
+    pub(crate) fn to_state(&self) -> lyrel_core::core::session::ToolLayoutState {
         lyrel_core::core::session::ToolLayoutState {
             version: lyrel_core::core::session::ToolLayoutState::CURRENT_VERSION,
             // Tool entries in strip position order, then the page records
@@ -1696,6 +1702,7 @@ impl LyrelApp {
             let url = page
                 .map(|page| page.display_url.clone())
                 .filter(|url| !url.is_empty())
+                .or_else(|| tab.html_path.clone())
                 .unwrap_or_else(|| tab.address.clone());
             let source = self.agent_preview_source_label(tab, cx);
             let row_id = gpui_kit::SharedString::from(format!("browser-list-row-{}", tab.id));
@@ -3091,6 +3098,7 @@ impl LyrelApp {
     ) -> Option<AnyElement> {
         let ctx = ctx?;
         let pane_id = ctx.pane_id;
+        use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
         // No answer yet for this pane defaults to a probe that is fine, not a
         // broken one: the panel has nothing to doubt until it has been told
         // something.
@@ -3167,9 +3175,21 @@ impl LyrelApp {
                         t(L10nKey::PanelOpenInBrowser),
                         cx,
                     )
-                    .on_click(cx.listener(move |this, _, _window, cx| {
-                        this.open_pane_port(port, direct.clone(), preview_host.clone(), cx)
-                    })),
+                    .on_click(cx.listener(
+                        move |this, ev: &gpui_kit::ClickEvent, _window, cx| {
+                            this.open_pane_port(
+                                port,
+                                direct.clone(),
+                                preview_host.clone(),
+                                if ev.modifiers().shift {
+                                    lyrel_ui_base::web_preview::WebOpenDestination::SystemBrowser
+                                } else {
+                                    lyrel_ui_base::web_preview::WebOpenDestination::Browser
+                                },
+                                cx,
+                            )
+                        },
+                    )),
                 );
             }
             actions = actions.child(
@@ -3221,9 +3241,18 @@ impl LyrelApp {
                     })),
                 );
             }
+            let context_preview_host = ctx
+                .remote_ref
+                .clone()
+                .filter(|_| lyrel_core::daemon::protocol::PortEntry::reaches_loopback(&p.addr));
+            let context_direct = p.authority();
+            let context_port = p.port;
+            let context_authority = authority.clone();
+            let app = cx.entity().downgrade();
             list = list.child(
                 h_flex()
                     .id(id.clone())
+                    .test_support()
                     .group(id)
                     .relative()
                     .items_center()
@@ -3264,7 +3293,53 @@ impl LyrelApp {
                             .text_color(cx.theme().muted_foreground)
                             .child(format!("→ :{local}"))
                     }))
-                    .child(actions),
+                    .child(actions)
+                    .context_menu(move |mut menu, _window, _cx| {
+                        if openable {
+                            let app_browser = app.clone();
+                            let direct_browser = context_direct.clone();
+                            let host_browser = context_preview_host.clone();
+                            let app_system = app.clone();
+                            let direct_system = context_direct.clone();
+                            let host_system = context_preview_host.clone();
+                            menu = menu
+                                .item(PopupMenuItem::new(t(L10nKey::PanelOpenInBrowser)).on_click(
+                                    move |_, _window, cx| {
+                                        let _ = app_browser.update(cx, |this, cx| {
+                                            this.open_pane_port(
+                                                context_port,
+                                                direct_browser.clone(),
+                                                host_browser.clone(),
+                                                lyrel_ui_base::web_preview::WebOpenDestination::Browser,
+                                                cx,
+                                            );
+                                        });
+                                    },
+                                ))
+                                .item(PopupMenuItem::new(t(L10nKey::BrowserOpenExternal)).on_click(
+                                    move |_, _window, cx| {
+                                        let _ = app_system.update(cx, |this, cx| {
+                                            this.open_pane_port(
+                                                context_port,
+                                                direct_system.clone(),
+                                                host_system.clone(),
+                                                lyrel_ui_base::web_preview::WebOpenDestination::SystemBrowser,
+                                                cx,
+                                            );
+                                        });
+                                    },
+                                ))
+                                .separator();
+                        }
+                        let authority = context_authority.clone();
+                        menu.item(PopupMenuItem::new(t(L10nKey::CmdCopy)).on_click(
+                            move |_, _window, cx| {
+                                cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                                    authority.clone(),
+                                ));
+                            },
+                        ))
+                    }),
             );
         }
 
@@ -3346,29 +3421,64 @@ impl LyrelApp {
         port: u16,
         direct_authority: String,
         preview_host: Option<lyrel_core::core::session::RemoteRef>,
+        destination: lyrel_ui_base::web_preview::WebOpenDestination,
         cx: &mut Context<Self>,
     ) {
         use lyrel_terminal::view::PortRoute;
+        use lyrel_ui_base::web_preview::WebOpenDestination;
         match self.right_panel.port_route {
             PortRoute::Blocked => {}
-            PortRoute::Direct => cx.open_url(&format!("http://{direct_authority}")),
-            PortRoute::Forward => {
-                // A managed remote Workspace previews the page in the Side
-                // Panel, bound to its Host: the original `localhost:port`
-                // address stays the page's identity and the browser verifies
-                // the forward before load and external open (#392).
-                if let Some(host) = preview_host {
-                    self.open_web_page(&format!("http://localhost:{port}"), Some(host), cx);
-                    return;
+            PortRoute::Direct => {
+                let url = format!("http://{direct_authority}");
+                match destination {
+                    WebOpenDestination::Browser => self.open_web_page(&url, None, cx),
+                    WebOpenDestination::SystemBrowser => cx.open_url(&url),
                 }
-                if let Some(f) = self
-                    .loopback_panel
-                    .managed()
-                    .iter()
-                    .find(|m| forwards_port(m, port))
-                {
-                    cx.open_url(&format!("http://127.0.0.1:{}", f.bind_port));
-                    return;
+            }
+            PortRoute::Forward => {
+                match destination {
+                    WebOpenDestination::Browser => {
+                        // A managed remote Workspace previews the page in the Side
+                        // Panel, bound to its Host: the original `localhost:port`
+                        // address stays the page's identity and the browser verifies
+                        // the forward before load and external open (#392).
+                        if let Some(host) = preview_host {
+                            self.open_web_page(&format!("http://localhost:{port}"), Some(host), cx);
+                            return;
+                        }
+                        if let Some(f) = self
+                            .loopback_panel
+                            .managed()
+                            .iter()
+                            .find(|m| forwards_port(m, port))
+                        {
+                            self.open_web_page(
+                                &format!("http://127.0.0.1:{}", f.bind_port),
+                                None,
+                                cx,
+                            );
+                            return;
+                        }
+                    }
+                    WebOpenDestination::SystemBrowser => {
+                        if let Some(f) = self
+                            .loopback_panel
+                            .managed()
+                            .iter()
+                            .find(|m| forwards_port(m, port))
+                        {
+                            cx.open_url(&format!("http://127.0.0.1:{}", f.bind_port));
+                            return;
+                        }
+                        if let Some(host) = preview_host {
+                            self.open_url_in_system_browser(
+                                &format!("http://localhost:{port}"),
+                                Some(host),
+                                cx,
+                            );
+                            return;
+                        }
+                    }
                 }
                 let Some(route) = self.right_panel.procs_forwards.clone() else {
                     return;
@@ -3394,7 +3504,11 @@ impl LyrelApp {
                                 .entry(owner)
                                 .or_default()
                                 .insert(port);
-                            cx.open_url(&format!("http://127.0.0.1:{}", f.local_port));
+                            let url = format!("http://127.0.0.1:{}", f.local_port);
+                            match destination {
+                                WebOpenDestination::Browser => app.open_web_page(&url, None, cx),
+                                WebOpenDestination::SystemBrowser => cx.open_url(&url),
+                            }
                             if let Some(pane_id) = app.right_panel.procs_pane {
                                 app.refresh_managed_forwards(pane_id, cx);
                             }
@@ -3973,6 +4087,7 @@ mod tests {
             title: String::new(),
             host: None,
             source: None,
+            html_path: None,
         }
     }
 
@@ -4200,6 +4315,7 @@ mod tests {
             address: address.to_string(),
             host: None,
             title: String::new(),
+            html_path: None,
         }
     }
 
@@ -4557,6 +4673,7 @@ mod persistence_tests {
                 title: String::new(),
                 host: None,
                 source: None,
+                html_path: None,
             },
             "the original address is the tab's identity"
         );
@@ -4578,12 +4695,14 @@ mod persistence_tests {
                     address: "http://one.test".into(),
                     host: None,
                     title: String::new(),
+                    html_path: None,
                 }),
                 TabEntryState::Web(WebTabState {
                     id: written.web_tabs[1].id.clone(),
                     address: "https://two.test/path".into(),
                     host: None,
                     title: String::new(),
+                    html_path: None,
                 }),
             ]
         );
@@ -4663,6 +4782,7 @@ mod persistence_tests {
                     address: "http://legacy.test".into(),
                     host: None,
                     title: "Legacy page".into(),
+                    html_path: None,
                 }),
                 TabEntryState::Tool(Files),
                 TabEntryState::Web(WebTabState {
@@ -4670,6 +4790,7 @@ mod persistence_tests {
                     address: "https://legacy.test/two".into(),
                     host: None,
                     title: String::new(),
+                    html_path: None,
                 }),
             ],
             active: TabSelectionState::Web("legacy-b".into()),

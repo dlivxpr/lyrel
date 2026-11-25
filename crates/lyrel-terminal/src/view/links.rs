@@ -1,7 +1,7 @@
 //! GPUI adaptation for Host-aware link interaction. `LinkInteraction` owns
 //! targets, hover/probe transitions and retirement; this adapter supplies pane
 //! context, schedules HostOps work and delivers navigation/clipboard effects.
-use super::menus::menu_row_with_hint;
+use super::menus::{menu_row_with_hint, menu_row_with_text_hint};
 use super::{LoopbackPlan, TerminalView};
 use crate::link::{LinkAt, LinkInteraction};
 use crate::search::LinkTarget;
@@ -9,13 +9,17 @@ use gpui_kit::component::menu::PopupMenu;
 use gpui_kit::{App, ClipboardItem, Context, Window, prelude::*, px};
 use lyrel_core::core::config::LinkFileOpen;
 use lyrel_ui_base::actions::{
-    CopyLinkPathUnderPointer, OpenLinkUnderPointer, OpenLinkWithDefaultApp, RevealLinkUnderPointer,
+    CopyLinkPathUnderPointer, CopyLinkUrlUnderPointer, OpenLinkInBrowser, OpenLinkInEditor,
+    OpenLinkInSystemBrowser, OpenLinkUnderPointer, OpenLinkWithDefaultApp, RevealLinkUnderPointer,
 };
 use lyrel_ui_base::config::Config;
 use lyrel_ui_base::desktop_file::{OpenFileRequested, open_file_path, reveal_file_path};
 use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 use lyrel_ui_base::notification_history::NotificationWindowExt as _;
 use lyrel_ui_base::scm_snapshot;
+use lyrel_ui_base::web_preview::{
+    OpenHtmlPreviewRequested, OpenWebPageRequested, WebOpenDestination,
+};
 
 enum LoopbackOpen {
     Forwarded(String),
@@ -58,12 +62,29 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        self.open_link_at_with_modifiers(col, row, false, window, cx)
+    }
+
+    pub fn open_link_at_with_modifiers(
+        &mut self,
+        col: usize,
+        row: usize,
+        shift: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if !cx.global::<Config>().link_url {
             return false;
         }
-        let include_loopback = self.can_forward_loopback(cx);
-        match self.resolve_link_at(col, row, true, include_loopback, cx) {
-            LinkAt::Found(LinkTarget::Url(url), ..) => self.open_url(&url, window, cx),
+        let destination = if shift {
+            WebOpenDestination::SystemBrowser
+        } else {
+            WebOpenDestination::Browser
+        };
+        match self.resolve_link_at(col, row, true, true, cx) {
+            LinkAt::Found(LinkTarget::Url(url), ..) => {
+                self.open_url_with_destination(&url, destination, window, cx)
+            }
             LinkAt::Found(
                 LinkTarget::File {
                     path,
@@ -72,7 +93,22 @@ impl TerminalView {
                     is_dir,
                 },
                 ..,
-            ) => self.open_file_link(path, line, column, is_dir, window, cx),
+            ) => {
+                if is_lineless_html_file(&path, line, column, is_dir)
+                    && LinkInteraction::file_open_mode(
+                        self.host_id,
+                        cx.global::<Config>().file_open_mode(),
+                    ) != LinkFileOpen::Command
+                {
+                    cx.emit(OpenHtmlPreviewRequested {
+                        host_id: self.host_id,
+                        path,
+                        destination,
+                    });
+                } else {
+                    self.open_file_link(path, line, column, is_dir, window, cx);
+                }
+            }
             LinkAt::Unresolved { candidate, pending } => {
                 return self.report_unresolved_link(&candidate, pending, window, cx);
             }
@@ -81,22 +117,21 @@ impl TerminalView {
         true
     }
 
-    /// Latches the file link under a right mouse-down for the context menu.
+    /// Latches the link under a right mouse-down for the context menu.
     ///
     /// Resolving here rather than in the menu builder is what lets the menu
-    /// name a real file: the builder runs a turn later, with no event and no
-    /// pointer, and asking the grid then would be asking about wherever the
-    /// mouse has since gone.
+    /// name a real file or URL: the builder runs a turn later, with no event
+    /// and no pointer, and asking the grid then would be asking about wherever
+    /// the mouse has since gone.
     pub fn record_menu_link(&mut self, col: usize, row: usize, cx: &mut Context<Self>) {
         // The same switch that decides whether a path underlines and whether a
         // click follows one. Without this the menu would go on offering to
-        // open files in a pane where link detection is turned off.
+        // open links in a pane where link detection is turned off.
         if !cx.global::<Config>().link_url {
             self.links.forget_menu();
             return;
         }
-        let include_loopback = self.can_forward_loopback(cx);
-        let target = self.resolve_link_at(col, row, true, include_loopback, cx);
+        let target = self.resolve_link_at(col, row, true, true, cx);
         self.links.capture_menu(target);
     }
 
@@ -107,7 +142,71 @@ impl TerminalView {
 
     /// The path the context menu is about, if it is about one.
     fn menu_link_path(&self) -> Option<&std::path::Path> {
-        self.links.menu().map(|link| link.path())
+        self.links.menu().and_then(|link| link.path())
+    }
+
+    /// The URL the context menu is about, if it is about one.
+    fn menu_link_url(&self) -> Option<&str> {
+        self.links.menu().and_then(|link| link.url())
+    }
+
+    pub fn open_menu_in_browser(
+        &mut self,
+        destination: WebOpenDestination,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(link) = self.links.menu() else {
+            return;
+        };
+        match link.target() {
+            LinkTarget::Url(url) => {
+                let url = url.clone();
+                self.open_url_with_destination(&url, destination, window, cx);
+            }
+            LinkTarget::File {
+                path,
+                line,
+                column,
+                is_dir,
+            } if is_lineless_html_file(path, *line, *column, *is_dir) => {
+                cx.emit(OpenHtmlPreviewRequested {
+                    host_id: link.host(),
+                    path: path.clone(),
+                    destination,
+                });
+            }
+            LinkTarget::File { .. } => {}
+        }
+    }
+
+    pub fn open_menu_link_in_editor(&mut self, cx: &mut Context<Self>) {
+        let Some(link) = self.links.menu() else {
+            return;
+        };
+        let LinkTarget::File {
+            path,
+            line,
+            column,
+            is_dir,
+        } = link.target()
+        else {
+            return;
+        };
+        cx.emit(OpenFileRequested {
+            host_id: link.host(),
+            path: path.clone(),
+            line: *line,
+            column: *column,
+            is_dir: *is_dir,
+        });
+    }
+
+    pub fn copy_menu_link_url(&mut self, cx: &mut Context<Self>) {
+        let Some(url) = self.menu_link_url() else {
+            return;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(url.to_string()));
     }
 
     pub fn open_menu_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -259,31 +358,83 @@ impl TerminalView {
         true
     }
 
-    fn open_url(&self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
-        // A loopback link in a managed remote Workspace belongs in the Side
-        // Panel browser, bound to that Host (#392). The app owns the tab and
-        // the verified forward; the terminal must not build a system-browser
-        // URL from a port the app has not verified.
-        if matches!(self.loopback_plan(cx), LoopbackPlan::ForwardOnWorkspace(_))
-            && let Some(loopback) = crate::loopback::parse_loopback_url(url)
-        {
-            cx.emit(lyrel_ui_base::web_preview::OpenWebPageRequested {
-                address: loopback.normalized(),
-            });
+    fn notify_link_info(&self, message: String, window: &mut Window, cx: &mut Context<Self>) {
+        window.notify_app(
+            lyrel_ui_base::notification_history::Notification::info(message).pane(
+                self.owner_workspace(),
+                self.pane_id,
+                &self.pane_route(),
+            ),
+            cx,
+        );
+    }
+
+    fn open_url_with_destination(
+        &self,
+        url: &str,
+        destination: WebOpenDestination,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use lyrel_protocol::core::web::{WebRoute, classify};
+
+        let loopback = crate::loopback::parse_loopback_url(url);
+        let normalized = loopback
+            .as_ref()
+            .map(crate::loopback::LoopbackUrl::normalized)
+            .unwrap_or_else(|| url.to_string());
+        if classify(&normalized) != WebRoute::Load {
+            cx.open_url(url);
             return;
         }
-        match self.forwarded_loopback_url(url, cx) {
-            LoopbackOpen::Forwarded(url) => cx.open_url(&url),
-            LoopbackOpen::NotLoopback => cx.open_url(url),
-            LoopbackOpen::ForwardFailed(reason) => {
-                window.notify_app(
-                    lyrel_ui_base::notification_history::Notification::info(reason).pane(
-                        self.owner_workspace(),
-                        self.pane_id,
-                        &self.pane_route(),
-                    ),
-                    cx,
-                );
+
+        let plan = self.loopback_plan(cx);
+        match destination {
+            WebOpenDestination::Browser => {
+                if matches!(plan, LoopbackPlan::ForwardOnPane(_)) && loopback.is_some() {
+                    match self.forwarded_loopback_url(&normalized, cx) {
+                        LoopbackOpen::Forwarded(forwarded) => {
+                            cx.emit(OpenWebPageRequested {
+                                address: forwarded,
+                                destination: WebOpenDestination::Browser,
+                            });
+                        }
+                        LoopbackOpen::NotLoopback => {
+                            cx.emit(OpenWebPageRequested {
+                                address: normalized,
+                                destination: WebOpenDestination::Browser,
+                            });
+                        }
+                        LoopbackOpen::ForwardFailed(reason) => {
+                            self.notify_link_info(reason, window, cx);
+                        }
+                    }
+                    return;
+                }
+                cx.emit(OpenWebPageRequested {
+                    address: normalized,
+                    destination: WebOpenDestination::Browser,
+                });
+            }
+            WebOpenDestination::SystemBrowser => {
+                if matches!(plan, LoopbackPlan::ForwardOnWorkspace(_)) && loopback.is_some() {
+                    cx.emit(OpenWebPageRequested {
+                        address: normalized,
+                        destination: WebOpenDestination::SystemBrowser,
+                    });
+                    return;
+                }
+                if matches!(plan, LoopbackPlan::ForwardOnPane(_)) && loopback.is_some() {
+                    match self.forwarded_loopback_url(&normalized, cx) {
+                        LoopbackOpen::Forwarded(forwarded) => cx.open_url(&forwarded),
+                        LoopbackOpen::NotLoopback => cx.open_url(&normalized),
+                        LoopbackOpen::ForwardFailed(reason) => {
+                            self.notify_link_info(reason, window, cx);
+                        }
+                    }
+                    return;
+                }
+                cx.open_url(&normalized);
             }
         }
     }
@@ -325,10 +476,6 @@ impl TerminalView {
         }
     }
 
-    fn can_forward_loopback(&self, cx: &gpui_kit::App) -> bool {
-        !matches!(self.loopback_plan(cx), LoopbackPlan::Direct)
-    }
-
     fn sync_link_location(&mut self) {
         self.links.retarget(
             self.host_id,
@@ -353,8 +500,7 @@ impl TerminalView {
             let result = if !enabled || (!armed && self.frame.alt_screen) || blank {
                 LinkAt::None
             } else {
-                let include_loopback = self.can_forward_loopback(cx);
-                self.resolve_link_at(col, row, true, include_loopback, cx)
+                self.resolve_link_at(col, row, true, true, cx)
             };
             let (found, changed) = self.links.hover_resolved(col, row, armed, result);
             if changed {
@@ -380,15 +526,11 @@ impl TerminalView {
             return found;
         }
         self.sync_link_location();
-        let include_loopback = self.can_forward_loopback(cx);
-        let (found, changed) = self.links.resolve_hover(
-            &self.terminal.term,
-            col,
-            row,
-            armed,
-            include_loopback,
-            |host, cwd| scm_snapshot::repo_root_for(cx, host, cwd),
-        );
+        let (found, changed) =
+            self.links
+                .resolve_hover(&self.terminal.term, col, row, armed, true, |host, cwd| {
+                    scm_snapshot::repo_root_for(cx, host, cwd)
+                });
         self.request_link_work(cx);
         self.flush_link_probes(cx);
         if changed {
@@ -526,44 +668,130 @@ impl TerminalView {
         );
     }
 
-    /// The captured path is more specific than the pane commands below it.
+    /// The captured link is more specific than the pane commands below it.
     pub fn append_link_menu(&self, menu: PopupMenu, cx: &App) -> PopupMenu {
-        match self.menu_link_path() {
-            Some(path) => {
-                let local = self.links.menu().is_some_and(|link| link.host().is_local());
-                let reveal = match cfg!(target_os = "macos") {
-                    true => L10nKey::AppMenuRevealInFinder,
-                    false => L10nKey::AppMenuRevealInFolder,
-                };
-                let label = link_menu_label(path);
-                let default_app =
-                    offers_default_app_open(local, cx.global::<Config>().file_open_mode());
-                menu.min_w(px(220.))
-                    .action_context(self.focus_handle.clone())
-                    .label(label)
-                    .menu(t(L10nKey::AppMenuOpenLink), Box::new(OpenLinkUnderPointer))
-                    .when(default_app, |menu| {
-                        menu.menu(
-                            t(L10nKey::AppMenuOpenLinkWithDefaultApp),
-                            Box::new(OpenLinkWithDefaultApp),
+        if let Some(link) = self.links.menu() {
+            match link.target() {
+                LinkTarget::File {
+                    path,
+                    line,
+                    column,
+                    is_dir,
+                } => {
+                    let local = link.host().is_local();
+                    let reveal = reveal_label();
+                    let label = link_menu_label(path);
+                    if is_lineless_html_file(path, *line, *column, *is_dir) {
+                        let (click_hint, shift_click_hint) = url_click_hints(cx);
+                        return menu
+                            .min_w(px(240.))
+                            .action_context(self.focus_handle.clone())
+                            .label(label)
+                            .menu_element(
+                                Box::new(OpenLinkInBrowser),
+                                menu_row_with_text_hint(
+                                    t(L10nKey::PanelOpenInBrowser),
+                                    Some(click_hint),
+                                ),
+                            )
+                            .menu_element(
+                                Box::new(OpenLinkInSystemBrowser),
+                                menu_row_with_text_hint(
+                                    t(L10nKey::BrowserOpenExternal),
+                                    Some(shift_click_hint),
+                                ),
+                            )
+                            .menu(t(L10nKey::AppMenuOpenInEditor), Box::new(OpenLinkInEditor))
+                            .when(local, |menu| {
+                                menu.menu(t(reveal), Box::new(RevealLinkUnderPointer))
+                            })
+                            .menu(
+                                t(L10nKey::AppMenuCopyLinkPath),
+                                Box::new(CopyLinkPathUnderPointer),
+                            )
+                            .separator();
+                    }
+                    let default_app =
+                        offers_default_app_open(local, cx.global::<Config>().file_open_mode());
+                    return menu
+                        .min_w(px(220.))
+                        .action_context(self.focus_handle.clone())
+                        .label(label)
+                        .menu(t(L10nKey::AppMenuOpenLink), Box::new(OpenLinkUnderPointer))
+                        .when(default_app, |menu| {
+                            menu.menu(
+                                t(L10nKey::AppMenuOpenLinkWithDefaultApp),
+                                Box::new(OpenLinkWithDefaultApp),
+                            )
+                        })
+                        // A file on another machine has no folder here to
+                        // show it in, and naming this one's would show
+                        // whatever it happens to keep at that path.
+                        .menu_element_with_disabled(
+                            Box::new(RevealLinkUnderPointer),
+                            !local,
+                            menu_row_with_hint(t(reveal), None),
                         )
-                    })
-                    // A file on another machine has no folder here to
-                    // show it in, and naming this one's would show
-                    // whatever it happens to keep at that path.
-                    .menu_element_with_disabled(
-                        Box::new(RevealLinkUnderPointer),
-                        !local,
-                        menu_row_with_hint(t(reveal), None),
-                    )
-                    .menu(
-                        t(L10nKey::AppMenuCopyLinkPath),
-                        Box::new(CopyLinkPathUnderPointer),
-                    )
-                    .separator()
+                        .menu(
+                            t(L10nKey::AppMenuCopyLinkPath),
+                            Box::new(CopyLinkPathUnderPointer),
+                        )
+                        .separator();
+                }
+                LinkTarget::Url(_) => {
+                    let (click_hint, shift_click_hint) = url_click_hints(cx);
+                    return menu
+                        .min_w(px(240.))
+                        .action_context(self.focus_handle.clone())
+                        .menu_element(
+                            Box::new(OpenLinkInBrowser),
+                            menu_row_with_text_hint(
+                                t(L10nKey::PanelOpenInBrowser),
+                                Some(click_hint),
+                            ),
+                        )
+                        .menu_element(
+                            Box::new(OpenLinkInSystemBrowser),
+                            menu_row_with_text_hint(
+                                t(L10nKey::BrowserOpenExternal),
+                                Some(shift_click_hint),
+                            ),
+                        )
+                        .menu(
+                            t(L10nKey::AppMenuCopyLink),
+                            Box::new(CopyLinkUrlUnderPointer),
+                        )
+                        .separator();
+                }
             }
-            None => menu,
         }
+        menu
+    }
+}
+
+fn reveal_label() -> L10nKey {
+    match cfg!(target_os = "macos") {
+        true => L10nKey::AppMenuRevealInFinder,
+        false => L10nKey::AppMenuRevealInFolder,
+    }
+}
+
+fn is_lineless_html_file(
+    path: &std::path::Path,
+    line: Option<u32>,
+    column: Option<u32>,
+    is_dir: bool,
+) -> bool {
+    !is_dir
+        && line.is_none()
+        && column.is_none()
+        && lyrel_protocol::core::web::is_html_preview_path(path)
+}
+
+fn url_click_hints(cx: &App) -> (&'static str, &'static str) {
+    match cx.platform_info().os {
+        gpui_kit::OperatingSystem::Mac => ("Cmd+Click", "Cmd+Shift+Click"),
+        _ => ("Ctrl+Click", "Ctrl+Shift+Click"),
     }
 }
 

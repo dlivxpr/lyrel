@@ -49,6 +49,7 @@ pub(super) fn handshake<R: Read>(
         feature::HERMES_HISTORY.to_string(),
         feature::HERMES_STATISTICS.to_string(),
         feature::OPENCODE_STATISTICS.to_string(),
+        feature::PREVIEW_HTML.to_string(),
     ];
     if host.id().is_local() {
         features.push(feature::HOST_METRICS.to_string());

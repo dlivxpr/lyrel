@@ -109,8 +109,8 @@ pub enum Command {
     Capture(CaptureArgs),
 
     #[command(
-        about = "Ask the side panel showing this pane's workspace to open an absolute \
-                 http(s) URL as a preview, without taking the keyboard"
+        about = "Ask the side panel showing this pane's workspace to open an http(s) URL \
+                 or workspace HTML file as a preview, without taking the keyboard"
     )]
     Preview(PreviewArgs),
 
@@ -483,8 +483,9 @@ pub struct CaptureArgs {
 #[derive(Debug, Args)]
 pub struct PreviewArgs {
     #[arg(
-        value_name = "URL",
-        help = "Absolute http(s) URL; `about:blank`, local files and custom schemes are refused"
+        value_name = "URL_OR_PATH",
+        help = "Absolute http(s) URL, .html/.htm/.xhtml file path, or file:// HTML URI; \
+                non-HTML local files, `about:blank` and other schemes are refused"
     )]
     pub url: String,
 

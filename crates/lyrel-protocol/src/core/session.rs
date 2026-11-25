@@ -435,6 +435,11 @@ pub struct WebTabState {
     /// label only — the live page replaces it on the first update.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
+    /// The HTML preview file path on its Host, when this tab is an HTML
+    /// preview (#420). Loopback ports and tokens are live-only and never
+    /// persisted here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub html_path: Option<String>,
 }
 
 /// The live identity of the pane that requested one preview (#393).
@@ -1050,6 +1055,7 @@ mod tests {
                     address: "http://127.0.0.1:3000".into(),
                     host: None,
                     title: String::new(),
+                    html_path: None,
                 }),
                 TabEntryState::Tool(Scm),
             ],
@@ -1165,12 +1171,14 @@ mod tests {
                     address: "http://localhost:5173".into(),
                     host: None,
                     title: "Vite".into(),
+                    html_path: None,
                 }),
                 TabEntryState::Web(WebTabState {
                     id: "web-remote".into(),
                     address: "http://127.0.0.1:8080".into(),
                     host: Some(remote),
                     title: String::new(),
+                    html_path: Some("/remote/index.html".into()),
                 }),
             ],
             active: TabSelectionState::Web("web-remote".into()),

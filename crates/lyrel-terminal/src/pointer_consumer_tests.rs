@@ -132,6 +132,21 @@ fn pointer_real_pty_selection_and_armed_link_run_before_the_app_claim(cx: &mut T
             .as_deref(),
         Some("select-me")
     );
+    let opened_web = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen_web = opened_web.clone();
+    window
+        .update(cx, |_, _, cx| {
+            cx.subscribe(
+                &view,
+                move |_, ev: &lyrel_ui_base::web_preview::OpenWebPageRequested, _| {
+                    seen_web
+                        .borrow_mut()
+                        .push((ev.address.clone(), ev.destination));
+                },
+            )
+            .detach();
+        })
+        .unwrap();
     window
         .update(cx, |_, window, cx| {
             let modifier = Modifiers {
@@ -155,9 +170,13 @@ fn pointer_real_pty_selection_and_armed_link_run_before_the_app_claim(cx: &mut T
             );
         })
         .unwrap();
+    cx.run_until_parked();
     assert_eq!(
-        cx.opened_url().as_deref(),
-        Some("https://example.org/pointer")
+        &*opened_web.borrow(),
+        &[(
+            "https://example.org/pointer".to_string(),
+            lyrel_ui_base::web_preview::WebOpenDestination::Browser
+        )]
     );
     daemon.panes().kill(pane).unwrap();
     graphics_recovery_destroy(view, window, cx);

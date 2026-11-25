@@ -209,6 +209,13 @@ pub(crate) fn owning_workspace(
         .host
         .as_ref()
         .ok_or_else(|| RouteFailure::new("this page is not bound to a Host"))?;
+    owning_workspace_for_host(host, cx)
+}
+
+pub(crate) fn owning_workspace_for_host(
+    host: &lyrel_core::core::session::RemoteRef,
+    cx: &gpui_kit::App,
+) -> Result<PaneWorkspace, RouteFailure> {
     let client_workspace = lyrel_ui_base::session::WorkspaceStore::all(cx)
         .views
         .iter()
@@ -230,10 +237,23 @@ pub(crate) fn route_plan(
     url: &str,
     cx: &gpui_kit::App,
 ) -> Result<RoutePlan, RouteFailure> {
+    let host = tab
+        .host
+        .as_ref()
+        .ok_or_else(|| RouteFailure::new("this page is not bound to a Host"))?;
+    route_plan_for_host(host, url, cx)
+}
+
+/// What it takes to load `url` for a Workspace bound to `host`.
+pub(crate) fn route_plan_for_host(
+    host: &lyrel_core::core::session::RemoteRef,
+    url: &str,
+    cx: &gpui_kit::App,
+) -> Result<RoutePlan, RouteFailure> {
     let loopback = normalized_loopback_url(url)
         .and_then(|url| parse_loopback_url(&url))
         .ok_or_else(|| RouteFailure::new("this loopback address cannot be forwarded"))?;
-    let workspace = owning_workspace(tab, cx)?;
+    let workspace = owning_workspace_for_host(host, cx)?;
     if workspace.shares_localhost() || matches!(&workspace.target, RemoteTarget::LocalStdio { .. })
     {
         return Ok(RoutePlan::Shared {
@@ -334,6 +354,7 @@ mod tests {
             title: String::new(),
             host,
             source: None,
+            html_path: None,
         }
     }
 

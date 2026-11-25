@@ -342,14 +342,12 @@ fn run_request(
             ReplyOk::Bool(conn.identity.open_gui(path, workspace)),
             Vec::new(),
         ),
-        ControlRequest::PreviewOpen { pane, url, scratch } => {
-            let url = url.trim();
-            if !lyrel_protocol::core::web::is_preview_address(url) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "an agent preview needs an absolute http(s) URL",
-                ));
-            }
+        ControlRequest::PreviewOpen {
+            pane,
+            url,
+            scratch,
+            file,
+        } => {
             // The owning daemon is the authority on which workspace a pane
             // belongs to. A caller never supplies one, so a preview cannot be
             // steered into another window.
@@ -367,17 +365,29 @@ fn run_request(
             // A pane the tree still remembers but the process has ended is
             // no preview target either: the feedback would have nowhere to
             // go.
-            if let Some(directory) = conn.panes.as_ref()
-                && !directory
-                    .panes()
-                    .iter()
-                    .any(|info| info.pane_id == pane && info.alive)
+            let live_panes = conn.panes.as_ref().map(|directory| directory.panes());
+            if let Some(panes) = &live_panes
+                && !panes.iter().any(|info| info.pane_id == pane && info.alive)
             {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     format!("pane %{pane} is not running on this machine"),
                 ));
             }
+            let (resolved_url, resolved_file) = if let Some(raw_file) = file {
+                let canonical =
+                    resolve_preview_html_file(h, &tree, live_panes.as_deref(), pane, &raw_file)?;
+                (String::new(), Some(canonical))
+            } else {
+                let url = url.trim();
+                if !lyrel_protocol::core::web::is_preview_address(url) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "an agent preview needs an absolute http(s) URL",
+                    ));
+                }
+                (url.to_string(), None)
+            };
             let scratch = if scratch.trim().is_empty() {
                 preview_scratch_dir()
             } else {
@@ -392,9 +402,13 @@ fn run_request(
             // Delivery is targeted to the one link that holds this
             // workspace and negotiated preview support; `false` means there
             // is no eligible GUI and nothing was broadcast.
-            let delivered =
-                conn.identity
-                    .preview_open(&workspace.id.to_string(), pane, url, &scratch);
+            let delivered = conn.identity.preview_open(
+                &workspace.id.to_string(),
+                pane,
+                &resolved_url,
+                resolved_file.as_deref(),
+                &scratch,
+            );
             (ReplyOk::Bool(delivered), Vec::new())
         }
 
@@ -846,6 +860,82 @@ fn tracked_view(conn: &Conn, view: u64) -> io::Result<()> {
     } else {
         Err(crate::host::sqlite::stale_view(view))
     }
+}
+
+/// Resolves, verifies, and canonicalizes a workspace HTML file preview target
+/// against `pane`'s working directory on the owning Host (#424).
+fn resolve_preview_html_file(
+    h: &dyn Host,
+    tree: &machine::Machine,
+    live_panes: Option<&[crate::daemon::protocol::PaneInfo]>,
+    pane: u64,
+    raw_file: &str,
+) -> io::Result<String> {
+    let raw_file = raw_file.trim();
+    if raw_file.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "an HTML preview file path cannot be empty",
+        ));
+    }
+    let raw_path = PathBuf::from(raw_file);
+    let resolved = if h.is_absolute(&raw_path) {
+        if h.separator() == '\\' {
+            PathBuf::from(raw_file.replace('/', "\\"))
+        } else {
+            raw_path
+        }
+    } else {
+        let live_cwd = live_panes
+            .and_then(|panes| panes.iter().find(|info| info.pane_id == pane))
+            .and_then(|info| info.cwd.as_ref())
+            .filter(|cwd| !cwd.as_os_str().is_empty())
+            .cloned();
+        let cwd = live_cwd
+            .or_else(|| {
+                tree.panes
+                    .iter()
+                    .find(|record| record.id == pane)
+                    .and_then(|record| record.cwd.as_deref())
+                    .map(str::trim)
+                    .filter(|cwd| !cwd.is_empty())
+                    .map(PathBuf::from)
+            })
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("pane %{pane} has no working directory to resolve '{raw_file}'"),
+                )
+            })?;
+        let rel = if h.separator() == '\\' {
+            raw_file.replace('/', "\\")
+        } else {
+            raw_file.to_string()
+        };
+        h.join(&cwd, &rel)
+    };
+
+    if !lyrel_protocol::core::web::is_html_preview_path(&resolved) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "only .html, .htm, and .xhtml files can be previewed (non-HTML local files are not allowed)",
+        ));
+    }
+    let meta = h.stat(&resolved)?;
+    if meta.is_dir {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("{} is a directory, not an HTML file", resolved.display()),
+        ));
+    }
+    let canonical = h.canonicalize(&resolved)?;
+    if !lyrel_protocol::core::web::is_html_preview_path(&canonical) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "only .html, .htm, and .xhtml files can be previewed (symlink target is not an HTML file)",
+        ));
+    }
+    Ok(canonical.to_string_lossy().into_owned())
 }
 
 /// The screenshot directory the daemon offers when a caller names none. It

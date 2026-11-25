@@ -1954,12 +1954,34 @@ fn synchronized_frame_holds_text_and_caret_across_unrelated_root_redraws(cx: &mu
             .as_deref(),
         Some("宽e\u{301}")
     );
+    let opened_web = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen_web = opened_web.clone();
+    window
+        .update(cx, |_, _, cx| {
+            cx.subscribe(
+                &view,
+                move |_, ev: &lyrel_ui_base::web_preview::OpenWebPageRequested, _| {
+                    seen_web
+                        .borrow_mut()
+                        .push((ev.address.clone(), ev.destination));
+                },
+            )
+            .detach();
+        })
+        .unwrap();
     window
         .update(cx, |_, window, cx| {
             view.update(cx, |view, cx| assert!(view.open_link_at(2, 2, window, cx)));
         })
         .unwrap();
-    assert_eq!(cx.opened_url().as_deref(), Some("https://old.example/x"));
+    cx.run_until_parked();
+    assert_eq!(
+        &*opened_web.borrow(),
+        &[(
+            "https://old.example/x".to_string(),
+            lyrel_ui_base::web_preview::WebOpenDestination::Browser
+        )]
+    );
     DaemonMsg::Output(b"\x1b[?2026l".to_vec())
         .encode(&mut sender)
         .unwrap();

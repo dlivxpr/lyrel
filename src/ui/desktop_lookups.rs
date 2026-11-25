@@ -74,6 +74,20 @@ impl HostLinks {
         cx.default_global::<HostLinks>().hosts.remove(&id);
         publish_remote_home(cx, id, None);
         HostRegistry::remove(cx, id);
+        if let Some(service) =
+            cx.try_global::<crate::ui::browser::html_preview::HtmlPreviewService>()
+        {
+            service.purge_host(id);
+        }
+        if !id.is_local() && cx.has_global::<crate::ui::windows::WindowRegistry>() {
+            for (_, weak_app) in crate::ui::windows::WindowRegistry::open_windows(cx) {
+                if let Some(app) = weak_app.upgrade() {
+                    app.update(cx, |app, cx| {
+                        app.on_html_host_disconnected(id, cx);
+                    });
+                }
+            }
+        }
     }
 
     pub fn len(cx: &mut App) -> usize {
