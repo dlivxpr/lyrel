@@ -135,6 +135,40 @@ pub fn menu_row_with_hint(
     }
 }
 
+pub fn menu_row_with_text_hint(
+    label: &'static str,
+    hint: Option<&'static str>,
+) -> impl Fn(&mut Window, &mut App) -> gpui_kit::AnyElement {
+    use gpui_kit::TestSupportExt as _;
+    use gpui_kit::component::ActiveTheme as _;
+
+    move |_window, cx| {
+        let hint_el = hint.map(|text| {
+            div()
+                .id(gpui_kit::SharedString::from(format!("menu-hint-{text}")))
+                .test_support()
+                .aria_label(text)
+                .text_color(cx.theme().muted_foreground)
+                .text_xs()
+                .line_height(gpui_kit::relative(1.))
+                .whitespace_nowrap()
+                .flex_shrink_0()
+                .child(text)
+        });
+        h_flex()
+            .id(gpui_kit::SharedString::from(format!("menu-row-{label}")))
+            .test_support()
+            .aria_label(label)
+            .w_full()
+            .gap_3()
+            .items_center()
+            .justify_between()
+            .child(label)
+            .children(hint_el)
+            .into_any_element()
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn mac_only(key: &'static str) -> Option<&'static str> {
     Some(key)

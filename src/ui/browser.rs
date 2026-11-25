@@ -435,18 +435,35 @@ impl LyrelApp {
         window.focus(&chrome.input.read(cx).focus_handle(cx), cx);
     }
 
-    /// Opens `address` as a new web tab on this workspace and reveals its
-    /// document. The entry points — the `+` menu, Search Everywhere, a
-    /// terminal link — all land here; the layout API is what keeps the
-    /// Browser tool's list, the mirror and the persisted record in one
-    /// write. The surface itself starts lazily on the document's first
-    /// paint.
+    /// Opens `address` as a web tab on this workspace and reveals its
+    /// document, reusing an existing tab when `(host, normalized_url)` already
+    /// exists. The entry points — the `+` menu, Search Everywhere, a terminal
+    /// link, Info panel ports — all land here; the layout API is what keeps the
+    /// Browser tool's list, the mirror and the persisted record in one write.
+    /// The surface itself starts lazily on the document's first paint.
     pub(crate) fn open_web_page(
         &mut self,
         address: &str,
         host: Option<lyrel_core::core::session::RemoteRef>,
         cx: &mut Context<Self>,
     ) {
+        let mut layout = self.tool_layout();
+        if !policy::is_blank(address) {
+            let normalized = normalized_web_address(address);
+            if let Some(existing) = layout.web_tabs.iter().find(|tab| {
+                tab.html_path.is_none()
+                    && !policy::is_blank(&tab.address)
+                    && tab.host == host
+                    && normalized_web_address(&tab.address) == normalized
+            }) {
+                let existing_id = existing.id.clone();
+                layout.show(lyrel_core::core::config::RightPanelTab::Browser);
+                self.reveal_browser_detail(existing_id, cx);
+                self.store_tool_layout(&layout, cx);
+                cx.notify();
+                return;
+            }
+        }
         let bound = host.is_some();
         let tab = WebTab {
             id: self.new_web_tab_id(),
@@ -457,7 +474,6 @@ impl LyrelApp {
             html_path: None,
         };
         let tab_id = tab.id.clone();
-        let mut layout = self.tool_layout();
         layout.show_web(tab);
         // Raise the page's document before the layout is stored, so the very
         // first paint already finds the detail front and can start the
@@ -614,6 +630,96 @@ impl LyrelApp {
                     cx,
                 );
             });
+        }
+    }
+
+    /// Opens `address` in the OS system browser. Remote loopback addresses are
+    /// verified and forwarded first through `BrowserForwardVerifier`; if
+    /// verification fails or the Host connection changes, nothing opens.
+    pub(crate) fn open_url_in_system_browser(
+        &mut self,
+        address: &str,
+        host: Option<lyrel_core::core::session::RemoteRef>,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(
+            policy::classify(address),
+            policy::Route::Blank | policy::Route::Deny
+        ) {
+            return;
+        }
+        let Some(host) = host.filter(|_| route::is_loopback(address)) else {
+            cx.open_url(address);
+            return;
+        };
+        let plan = match route::route_plan_for_host(&host, address, cx) {
+            Ok(plan) => plan,
+            Err(failure) => {
+                log::warn!(
+                    "failed to resolve system browser route for {address}: {}",
+                    failure.message
+                );
+                return;
+            }
+        };
+        match plan {
+            route::RoutePlan::Shared { .. } => {
+                cx.open_url(address);
+            }
+            route::RoutePlan::Forward { route, loopback } => {
+                let verifier = cx
+                    .default_global::<route::BrowserForwardVerifier>()
+                    .0
+                    .clone();
+                let host_id = host.host_id();
+                let connection = crate::ui::desktop_lookups::HostLinks::get(cx, host_id);
+                let verify_host = loopback.forward_host().to_string();
+                let verify_port = loopback.port;
+                let address = address.to_string();
+                cx.spawn(async move |this, cx| {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move { verifier.verify(&route, &verify_host, verify_port) })
+                        .await;
+                    let _ = this.update(cx, |_app, cx| {
+                        let live = crate::ui::desktop_lookups::HostLinks::get(cx, host_id);
+                        let same_connection = match (&connection, &live) {
+                            (Some(before), Some(now)) => {
+                                std::sync::Arc::ptr_eq(before, now) && now.client().is_connected()
+                            }
+                            (None, None) => true,
+                            _ => false,
+                        };
+                        if !same_connection || route::owning_workspace_for_host(&host, cx).is_err()
+                        {
+                            log::warn!(
+                                "aborted system browser open for {address}: Host connection changed"
+                            );
+                            return;
+                        }
+                        match result {
+                            Ok(local_port) => {
+                                let forward =
+                                    route::VerifiedForward::from_loopback(&loopback, local_port);
+                                if let Some(target) = forward.forwarded_url(&address)
+                                    && !matches!(
+                                        policy::classify(&target),
+                                        policy::Route::Blank | policy::Route::Deny
+                                    )
+                                {
+                                    cx.open_url(&target);
+                                }
+                            }
+                            Err(message) => {
+                                log::warn!(
+                                    "failed to forward loopback URL {address} for system browser: {message}"
+                                );
+                            }
+                        }
+                    });
+                })
+                .detach();
+            }
         }
     }
 
@@ -2634,6 +2740,12 @@ pub(crate) fn browser_host_label(tab: &WebTab) -> gpui_kit::SharedString {
         }
         None => t(L10nKey::BrowserHostLocal).into(),
     }
+}
+
+fn normalized_web_address(address: &str) -> String {
+    url::Url::parse(address)
+        .map(|url| url.as_str().to_string())
+        .unwrap_or_else(|_| address.to_string())
 }
 
 impl LyrelApp {

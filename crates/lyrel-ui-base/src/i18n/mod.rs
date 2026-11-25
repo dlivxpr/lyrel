@@ -2511,6 +2511,7 @@ l10n_keys! {
     AppMenuRevealInFinder,
     AppMenuRevealInFolder,
     AppMenuCopyLinkPath,
+    AppMenuCopyLink,
     AppMenuEnterFullscreen,
     AppMenuDocumentation,
     AppMenuKeyboardShortcuts,

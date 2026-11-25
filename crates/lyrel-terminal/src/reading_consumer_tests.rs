@@ -1037,14 +1037,33 @@ fn reading_wrapped_link_uses_retained_prefix_and_hover_survives_live_output(
         view.read_with(cx, |view, _| view.links.hovered().is_some()),
         "compensating Rio offset cannot cancel a frozen hover or its pending Host probes"
     );
+    let opened_web = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen_web = opened_web.clone();
+    window
+        .update(cx, |_, _, cx| {
+            cx.subscribe(
+                &view,
+                move |_, ev: &lyrel_ui_base::web_preview::OpenWebPageRequested, _| {
+                    seen_web
+                        .borrow_mut()
+                        .push((ev.address.clone(), ev.destination));
+                },
+            )
+            .detach();
+        })
+        .unwrap();
     window
         .update(cx, |_, window, cx| {
             view.update(cx, |view, cx| assert!(view.open_link_at(1, 0, window, cx)));
         })
         .unwrap();
+    cx.run_until_parked();
     assert_eq!(
-        cx.opened_url().as_deref(),
-        Some(url.as_str()),
+        &*opened_web.borrow(),
+        &[(
+            url,
+            lyrel_ui_base::web_preview::WebOpenDestination::Browser
+        )],
         "a viewport-edge continuation keeps its offscreen frozen prefix"
     );
     daemon.panes().kill(pane).unwrap();

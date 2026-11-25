@@ -222,6 +222,25 @@ impl Render for TerminalView {
             .on_action(cx.listener(|this, _: &CopyLinkPathUnderPointer, _w, cx| {
                 this.copy_menu_link_path(cx);
             }))
+            .on_action(cx.listener(|this, _: &OpenLinkInBrowser, window, cx| {
+                this.open_menu_url(
+                    lyrel_ui_base::web_preview::WebOpenDestination::Browser,
+                    window,
+                    cx,
+                );
+            }))
+            .on_action(
+                cx.listener(|this, _: &OpenLinkInSystemBrowser, window, cx| {
+                    this.open_menu_url(
+                        lyrel_ui_base::web_preview::WebOpenDestination::SystemBrowser,
+                        window,
+                        cx,
+                    );
+                }),
+            )
+            .on_action(cx.listener(|this, _: &CopyLinkUrlUnderPointer, _w, cx| {
+                this.copy_menu_link_url(cx);
+            }))
             .on_action(cx.listener(|this, _: &InsertNewline, _w, cx| {
                 this.insert_newline_action(cx);
             }))

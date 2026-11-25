@@ -3874,6 +3874,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::AppMenuRevealInFinder => "Show in Finder",
         L10nKey::AppMenuRevealInFolder => "Show Containing Folder",
         L10nKey::AppMenuCopyLinkPath => "Copy Path",
+        L10nKey::AppMenuCopyLink => "Copy Link",
         L10nKey::AppMenuDocumentation => "lyrel Documentation",
         L10nKey::AppMenuKeyboardShortcuts => "Keyboard Shortcuts",
         L10nKey::AppMenuProjectPage => "Project page",

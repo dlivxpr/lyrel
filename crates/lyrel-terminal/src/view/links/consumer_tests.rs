@@ -705,3 +705,231 @@ fn ctrl_click_on_osc8_and_plain_file_urls_opens_in_builtin_editor(cx: &mut TestA
         ]
     );
 }
+
+#[gpui_kit::test]
+fn bare_loopback_addresses_are_detected_and_routed_on_local_panes(cx: &mut TestAppContext) {
+    use lyrel_ui_base::web_preview::{OpenWebPageRequested, WebOpenDestination};
+
+    let (window, mut daemon) = harness(cx);
+    let emitted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = emitted.clone();
+    window
+        .update(cx, |_, _, cx| {
+            let view = cx.entity();
+            cx.subscribe(&view, move |_, _, event: &OpenWebPageRequested, _| {
+                seen.borrow_mut()
+                    .push((event.address.clone(), event.destination));
+            })
+            .detach();
+        })
+        .unwrap();
+    DaemonMsg::Output(b"see localhost:3000/app 127.0.0.1:8080 [::1]:5173\r\n".to_vec())
+        .encode(&mut daemon)
+        .unwrap();
+    for _ in 0..200 {
+        if window
+            .update(cx, |view, _, _| {
+                view.terminal.term.lock().grid[Line(0)][Column(4)].c() == 'l'
+            })
+            .unwrap()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.hover_link_at(4, 0, true, cx));
+            assert!(view.hover_link_at(23, 0, true, cx));
+            assert!(view.hover_link_at(38, 0, true, cx));
+
+            assert!(view.open_link_at_with_modifiers(4, 0, false, window, cx));
+            assert!(view.open_link_at_with_modifiers(23, 0, true, window, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        &*emitted.borrow(),
+        &[(
+            "http://localhost:3000/app".to_string(),
+            WebOpenDestination::Browser
+        )]
+    );
+    assert_eq!(cx.opened_url().as_deref(), Some("http://127.0.0.1:8080"));
+}
+
+#[gpui_kit::test]
+fn http_and_remote_loopback_urls_route_by_shift_modifier(cx: &mut TestAppContext) {
+    use lyrel_ui_base::web_preview::{OpenWebPageRequested, WebOpenDestination};
+
+    let (window, mut daemon) = harness(cx);
+    let emitted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = emitted.clone();
+    window
+        .update(cx, |_, _, cx| {
+            let view = cx.entity();
+            cx.subscribe(&view, move |_, _, event: &OpenWebPageRequested, _| {
+                seen.borrow_mut()
+                    .push((event.address.clone(), event.destination));
+            })
+            .detach();
+        })
+        .unwrap();
+    DaemonMsg::Output(
+        b"https://example.com/docs ftp://example.com/file http://localhost:3000/app\r\n".to_vec(),
+    )
+    .encode(&mut daemon)
+    .unwrap();
+    for _ in 0..200 {
+        if window
+            .update(cx, |view, _, _| {
+                view.terminal.term.lock().grid[Line(0)][Column(0)].c() == 'h'
+            })
+            .unwrap()
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.open_link_at_with_modifiers(2, 0, false, window, cx));
+            assert!(view.open_link_at_with_modifiers(2, 0, true, window, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        &*emitted.borrow(),
+        &[(
+            "https://example.com/docs".to_string(),
+            WebOpenDestination::Browser
+        )]
+    );
+    assert_eq!(cx.opened_url().as_deref(), Some("https://example.com/docs"));
+
+    window
+        .update(cx, |view, window, cx| {
+            assert!(view.open_link_at_with_modifiers(27, 0, false, window, cx));
+        })
+        .unwrap();
+    assert_eq!(cx.opened_url().as_deref(), Some("ftp://example.com/file"));
+
+    emitted.borrow_mut().clear();
+    window
+        .update(cx, |view, window, cx| {
+            bind_to_a_disconnected_remote_workspace(view, cx);
+            assert!(view.open_link_at_with_modifiers(55, 0, false, window, cx));
+            assert!(view.open_link_at_with_modifiers(55, 0, true, window, cx));
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert_eq!(
+        &*emitted.borrow(),
+        &[
+            (
+                "http://localhost:3000/app".to_string(),
+                WebOpenDestination::Browser
+            ),
+            (
+                "http://localhost:3000/app".to_string(),
+                WebOpenDestination::SystemBrowser
+            ),
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn url_context_menu_offers_browser_system_browser_and_copy_link(cx: &mut TestAppContext) {
+    use gpui_kit::test::{TestEventExt as _, TestQueryExt as _, TestWindowExt as _};
+    use lyrel_ui_base::actions::{
+        CopyLinkUrlUnderPointer, OpenLinkInBrowser, OpenLinkInSystemBrowser,
+    };
+    use lyrel_ui_base::i18n::{L10nKey, t};
+    use lyrel_ui_base::web_preview::{OpenWebPageRequested, WebOpenDestination};
+
+    let (window, view, mut daemon) = rooted_harness(cx);
+    let emitted = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = emitted.clone();
+    let mut vcx = gpui_kit::VisualTestContext::from_window(window.into(), cx);
+    vcx.update(|_, cx| {
+        cx.subscribe(&view, move |_, ev: &OpenWebPageRequested, _| {
+            seen.borrow_mut().push((ev.address.clone(), ev.destination));
+        })
+        .detach();
+    });
+    DaemonMsg::Output(b"visit https://example.com/docs\r\n".to_vec())
+        .encode(&mut daemon)
+        .unwrap();
+    for _ in 0..200 {
+        if view.read_with(&vcx, |view, _| {
+            view.terminal.term.lock().grid[Line(0)][Column(6)].c() == 'h'
+        }) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    vcx.update(|window, cx| {
+        window.render_frame(cx);
+    });
+
+    let target = view.read_with(&vcx, |view, _| {
+        let geom = view.cell_geom.expect("cell geom after render");
+        gpui_kit::point(
+            geom.origin.x + geom.cell_width * 8.5,
+            geom.origin.y + geom.line_height * 0.5,
+        )
+    });
+    vcx.update(|window, cx| {
+        window.pointer_move(target, None, cx);
+        window.pointer_down(target, gpui_kit::MouseButton::Right, cx);
+        window.pointer_up(target, gpui_kit::MouseButton::Right, cx);
+        window.render_frame(cx);
+    });
+    vcx.run_until_parked();
+
+    let expected_click = if cfg!(target_os = "macos") {
+        "Cmd+Click"
+    } else {
+        "Ctrl+Click"
+    };
+    let expected_shift_click = if cfg!(target_os = "macos") {
+        "Cmd+Shift+Click"
+    } else {
+        "Ctrl+Shift+Click"
+    };
+    vcx.update(|window, _| {
+        window.find_by_label(t(L10nKey::PanelOpenInBrowser));
+        window.find_by_label(t(L10nKey::BrowserOpenExternal));
+        window.find_by_label(t(L10nKey::AppMenuCopyLink));
+        window.find_by_label(expected_click);
+        window.find_by_label(expected_shift_click);
+    });
+
+    vcx.update(|window, cx| {
+        window.press("escape", cx);
+        view.update(cx, |view, cx| {
+            // Moving the pointer away must not lose the captured menu URL.
+            view.hover_link_at(0, 0, true, cx);
+            view.focus_handle.focus(window, cx);
+        });
+        window.dispatch_action(Box::new(CopyLinkUrlUnderPointer), cx);
+        window.dispatch_action(Box::new(OpenLinkInBrowser), cx);
+        window.dispatch_action(Box::new(OpenLinkInSystemBrowser), cx);
+    });
+    vcx.run_until_parked();
+    assert_eq!(
+        vcx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text())),
+        Some("https://example.com/docs".to_string())
+    );
+    assert_eq!(
+        &*emitted.borrow(),
+        &[(
+            "https://example.com/docs".to_string(),
+            WebOpenDestination::Browser
+        )]
+    );
+    assert_eq!(cx.opened_url().as_deref(), Some("https://example.com/docs"));
+}

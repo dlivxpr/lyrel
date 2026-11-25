@@ -3465,6 +3465,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppMenuRevealInFinder => "在访达中显示",
         L10nKey::AppMenuRevealInFolder => "打开所在文件夹",
         L10nKey::AppMenuCopyLinkPath => "复制路径",
+        L10nKey::AppMenuCopyLink => "复制链接",
         L10nKey::AppMenuDocumentation => "lyrel 文档",
         L10nKey::AppMenuKeyboardShortcuts => "快捷键",
         L10nKey::AppMenuProjectPage => "项目主页",
