@@ -223,7 +223,7 @@ impl Render for TerminalView {
                 this.copy_menu_link_path(cx);
             }))
             .on_action(cx.listener(|this, _: &OpenLinkInBrowser, window, cx| {
-                this.open_menu_url(
+                this.open_menu_in_browser(
                     lyrel_ui_base::web_preview::WebOpenDestination::Browser,
                     window,
                     cx,
@@ -231,13 +231,16 @@ impl Render for TerminalView {
             }))
             .on_action(
                 cx.listener(|this, _: &OpenLinkInSystemBrowser, window, cx| {
-                    this.open_menu_url(
+                    this.open_menu_in_browser(
                         lyrel_ui_base::web_preview::WebOpenDestination::SystemBrowser,
                         window,
                         cx,
                     );
                 }),
             )
+            .on_action(cx.listener(|this, _: &OpenLinkInEditor, _w, cx| {
+                this.open_menu_link_in_editor(cx);
+            }))
             .on_action(cx.listener(|this, _: &CopyLinkUrlUnderPointer, _w, cx| {
                 this.copy_menu_link_url(cx);
             }))

@@ -344,6 +344,7 @@ impl LyrelApp {
         Self::watch_terminal_scm(view, cx);
         Self::watch_open_file_requests(view, window, cx);
         Self::watch_open_web_requests(view, window, cx);
+        Self::watch_open_html_preview_requests(view, window, cx);
         let handle = view.read(cx).focus_handle.clone();
         Self::watch_pane_focus(&handle, view.entity_id(), window, cx);
     }
@@ -479,6 +480,34 @@ impl LyrelApp {
                     }
                     lyrel_ui_base::web_preview::WebOpenDestination::SystemBrowser => {
                         app.open_url_in_system_browser(&ev.address, host, cx);
+                    }
+                }
+            },
+        )
+        .detach();
+    }
+
+    /// An HTML file link clicked or chosen from the context menu in a pane
+    /// opens in the Side Panel Browser by default, or in the System Browser
+    /// when requested via `Shift` or the context menu (#422).
+    fn watch_open_html_preview_requests(
+        view: &Entity<TerminalView>,
+        window: &mut Window,
+        cx: &mut Context<LyrelApp>,
+    ) {
+        cx.subscribe_in(
+            view,
+            window,
+            |app, view, ev: &lyrel_ui_base::web_preview::OpenHtmlPreviewRequested, _window, cx| {
+                if view.read(cx).host_id() != ev.host_id {
+                    return;
+                }
+                match ev.destination {
+                    lyrel_ui_base::web_preview::WebOpenDestination::Browser => {
+                        app.open_html_preview(ev.host_id, &ev.path, cx);
+                    }
+                    lyrel_ui_base::web_preview::WebOpenDestination::SystemBrowser => {
+                        app.open_html_in_system_browser(ev.host_id, &ev.path, cx);
                     }
                 }
             },

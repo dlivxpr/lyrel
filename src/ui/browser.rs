@@ -40,6 +40,10 @@ mod html_preview_tests;
 #[path = "browser/overlay_tests.rs"]
 mod overlay_tests;
 
+#[cfg(test)]
+#[path = "browser/terminal_html_tests.rs"]
+mod terminal_html_tests;
+
 pub(crate) use surface::{BrowserCommand, BrowserEvent, BrowserParentWindow, BrowserSurfaceHost};
 
 use gpui_kit::TestSupportExt as _;
@@ -607,10 +611,12 @@ impl LyrelApp {
             .clone();
         let path = path.to_path_buf();
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { service.mount_external(host, &path) })
-                .await;
+            let Some(result) =
+                lyrel_ui_base::host_ops::off_thread(move || service.mount_external(host, &path))
+                    .await
+            else {
+                return;
+            };
             let _ = this.update(cx, |app, cx| match result {
                 Ok(url) => cx.open_url(&url),
                 Err(err) => app.notify_html_preview_error(&err.to_string(), cx),
@@ -1855,10 +1861,13 @@ impl LyrelApp {
         let mount_path = std::path::PathBuf::from(&html_path);
         let before_host = std::sync::Arc::clone(&host);
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { service.mount_in_app(host, &mount_path) })
-                .await;
+            let Some(result) = lyrel_ui_base::host_ops::off_thread(move || {
+                service.mount_in_app(host, &mount_path)
+            })
+            .await
+            else {
+                return;
+            };
             let _ = this.update(cx, |app, cx| {
                 let current = app
                     .right_panel

@@ -3871,6 +3871,7 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::AppMenuClearScrollback => "Clear Scrollback",
         L10nKey::AppMenuOpenLink => "Open",
         L10nKey::AppMenuOpenLinkWithDefaultApp => "Open with Default App",
+        L10nKey::AppMenuOpenInEditor => "Open in Editor",
         L10nKey::AppMenuRevealInFinder => "Show in Finder",
         L10nKey::AppMenuRevealInFolder => "Show Containing Folder",
         L10nKey::AppMenuCopyLinkPath => "Copy Path",

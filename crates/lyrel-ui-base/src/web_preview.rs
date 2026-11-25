@@ -22,3 +22,11 @@ pub struct OpenWebPageRequested {
     pub address: String,
     pub destination: WebOpenDestination,
 }
+
+/// Open a workspace HTML file in the Side Panel Browser or System Browser (#422).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenHtmlPreviewRequested {
+    pub host_id: crate::host_ops::HostId,
+    pub path: std::path::PathBuf,
+    pub destination: WebOpenDestination,
+}

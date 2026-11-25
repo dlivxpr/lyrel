@@ -32,6 +32,7 @@ actions!(
         CopyLinkPathUnderPointer,
         OpenLinkInBrowser,
         OpenLinkInSystemBrowser,
+        OpenLinkInEditor,
         CopyLinkUrlUnderPointer,
         MarkTabUnread,
         HibernateTab,

@@ -3462,6 +3462,7 @@ pub fn translate_zh(key: L10nKey) -> Option<&'static str> {
         L10nKey::AppMenuClearScrollback => "清除回滚内容",
         L10nKey::AppMenuOpenLink => "打开",
         L10nKey::AppMenuOpenLinkWithDefaultApp => "用默认程序打开",
+        L10nKey::AppMenuOpenInEditor => "在编辑器中打开",
         L10nKey::AppMenuRevealInFinder => "在访达中显示",
         L10nKey::AppMenuRevealInFolder => "打开所在文件夹",
         L10nKey::AppMenuCopyLinkPath => "复制路径",

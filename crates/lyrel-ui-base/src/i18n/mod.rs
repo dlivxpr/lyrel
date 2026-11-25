@@ -2508,6 +2508,7 @@ l10n_keys! {
     AppMenuClearScrollback,
     AppMenuOpenLink,
     AppMenuOpenLinkWithDefaultApp,
+    AppMenuOpenInEditor,
     AppMenuRevealInFinder,
     AppMenuRevealInFolder,
     AppMenuCopyLinkPath,
