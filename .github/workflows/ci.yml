@@ -180,22 +180,6 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: false
 
-      # Linux headless 的编译对照达到 15% 提速门槛，macOS 未达到。
-      - name: Install sccache (Linux)
-        if: runner.os == 'Linux'
-        uses: mozilla-actions/sccache-action@v0.0.11
-        with:
-          version: v0.20.1
-      - name: Enable sccache (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          # PR 合并 ref 的缓存只能供该 PR 使用。共享缓存由 main 写入。
-          echo "SCCACHE_GHA_RW_MODE=${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}" >> "$GITHUB_ENV"
-          # 保留 daemon 统计供 action 在测试结束后读取。
-          echo "SCCACHE_IDLE_TIMEOUT=0" >> "$GITHUB_ENV"
-
       # nextest 提供每个用例的超时与更快的调度；只跑 libtest 目标，见下方 -E。
       - uses: taiki-e/install-action@v2
         with:

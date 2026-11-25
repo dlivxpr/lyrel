@@ -14,7 +14,7 @@
 ### 开发与 CI
 
 - 缩短 SQLite 与空闲控制连接测试的夹具等待（#409）。三个需真实 SSH 端点的 server 测试目标按需启用 `native-ssh-tests`（#408）。
-- CI 保留 Linux headless 的 sccache，只有 `main` 写入。macOS 停用 sccache，继续使用 `rust-cache`。
+- CI 使用 `rust-cache` 缓存 Cargo 构建依赖，停用 sccache。
 
 ## [0.5.0] - 2026-11-24
 

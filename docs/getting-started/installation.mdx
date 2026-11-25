@@ -479,7 +479,7 @@ node scripts/rerun-failed-ci.cjs <run-id>
 
 可信 main push 在三个独立 server 构建及平台断言成功后上传 `ci-server-<target>`，保存 7 天。Release 可复用同仓库、同 SHA、已完整成功的 main CI 产物；PR、fork 和手动 CI 产物不作为发布来源。下载固定 artifact ID，核验来源 run、目标、文件 SHA-256、Cargo 输入及 Rust／Zig／SDK 构建契约，再执行原有静态链接／Mach-O／签名检查。缺失、过期、下载失败或契约不匹配时正常重新构建，不放宽校验；Windows server 不参与此复用。该机制不是字节级可重现构建声明。路径裁剪未生成该 SHA 的 server artifact 时，同样由 Release 正常构建。
 
-CI 与 Release 使用独立的 Rust 缓存键，按 toolchain、target、flags 和依赖哈希隔离。Rust 归档仅在 `main` 上成功时写回。Linux headless CI 还使用 sccache，`main` 写入共享编译缓存，其他 ref 只读。参见 [GitHub 缓存访问规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)。可用 `gh api repos/dlivxpr/lyrel/actions/cache/usage` 查看实际占用。冷缓存需要完整编译，发行依赖可通过 `main` 的手动发布验证预热。
+CI 与 Release 使用独立的 Rust 缓存键，按 toolchain、target、flags 和依赖哈希隔离。Rust 归档仅在 `main` 上成功时写回。标签和 PR 可读取默认分支缓存。参见 [GitHub 缓存访问规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)。可用 `gh api repos/dlivxpr/lyrel/actions/cache/usage` 查看实际占用。冷缓存需要完整编译，发行依赖可通过 `main` 的手动发布验证预热。
 
 ```bash
 gh workflow run release.yml --repo dlivxpr/lyrel --ref main
