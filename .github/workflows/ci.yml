@@ -60,8 +60,8 @@ jobs:
       heavy_key: ${{ steps.diff.outputs.heavy_key }}
       fail_fast: ${{ steps.diff.outputs.fail_fast }}
       matrix: ${{ steps.diff.outputs.matrix }}
-      reuse: ${{ steps.reuse.outputs.reuse }}
-      release-reuse: ${{ steps.reuse.outputs.release-reuse }}
+      reuse: ${{ steps.diff.outputs.reuse }}
+      release-reuse: ${{ steps.diff.outputs.release-reuse }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -72,29 +72,26 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - id: diff
-        env:
-          GITHUB_TOKEN: ${{ github.event_name == 'workflow_dispatch' && github.token || '' }}
-        run: node .github/scripts/ci-changes.cjs
-      # squash 后只复用 GitHub 记录的完整成功门禁：commit-associated PR 恢复
-      # 合并后关系，referenced_workflows 定位不可变测试 merge SHA，REST 核对
-      # 双 parents、main 祖先、相同 tree 与门禁定义。临时 merge ref 被删或
-      # run.pull_requests 变空不影响证据；缺解析 SHA 等任何信息时仍全量。
-      # 仅跳过重复测试，main 的生产构建与 CRT 断言照常执行。
-      - name: Reuse an identical pull request gate
-        id: reuse
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      # 版本分类与自动化回归都需要 Cargo metadata；不下载依赖。
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      # Node 核对同树 PR 或版本 bump 的父提交门禁。证据不足时沿用正常 scope。
+      - name: Resolve validation scope and reuse
+        id: diff
         uses: actions/github-script@v9
         env:
-          SOURCE_SHA: ${{ github.sha }}
+          GITHUB_TOKEN: ${{ github.event_name == 'workflow_dispatch' && github.token || '' }}
         with:
           script: |
-            const { discoverComparableRun } = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/ci-main-reuse.cjs`);
-            const result = await discoverComparableRun({
-              github, repo: context.repo, sourceSha: process.env.SOURCE_SHA, log: core.info,
-            });
-            core.setOutput('reuse', String(result.reuse === true));
-            core.setOutput('release-reuse', String(result.releaseReuse === true));
+            const scripts = `${process.env.GITHUB_WORKSPACE}/.github/scripts`;
+            const { resolveGate } = require(`${scripts}/ci-changes.cjs`);
+            const { discoverComparableRun } = require(`${scripts}/ci-main-reuse.cjs`);
+            const result = await resolveGate(process.env, identity => discoverComparableRun({
+              github, repo: context.repo, log: core.info, ...identity,
+            }));
+            core.info(JSON.stringify(result));
+            for (const [key, value] of Object.entries(result)) core.setOutput(key, value);
       - name: Check automation behavior
         run: node --test .github/scripts/*.test.cjs
       - name: Validate workflow syntax
@@ -116,9 +113,6 @@ jobs:
             if ($Errors) { $Errors | Write-Output; $Failed = $true }
           }
           if ($Failed) { exit 1 }
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
       - run: cargo fmt --check
       - run: bash .github/scripts/check-host-boundary.sh
       - name: Check production dependency graph

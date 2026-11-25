@@ -3,6 +3,7 @@
 const { execFileSync } = require('node:child_process');
 const { createHash } = require('node:crypto');
 const { appendFileSync, readFileSync } = require('node:fs');
+const path = require('node:path');
 
 const FULL = { desktop: true, linux: true, server: true, release: true };
 const NONE = { desktop: false, linux: false, server: false, release: false };
@@ -75,6 +76,109 @@ function changedFiles(env, event, after = checkoutSha(env)) {
   }
   // NUL separators preserve unusual filenames; disabling renames includes both paths.
   return git('diff', '--name-only', '--no-renames', '-z', before, after, '--').split('\0').filter(Boolean);
+}
+
+function isMainPush(env) {
+  return env.GITHUB_EVENT_NAME === 'push' && env.GITHUB_REF === 'refs/heads/main';
+}
+
+function committedFile(sha, file) {
+  // Latin-1 round-trips the Git blob bytes, including CRLF and non-ASCII text.
+  return execFileSync('git', ['cat-file', 'blob', `${sha}:${file}`], {
+    encoding: 'latin1', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 4 * 1024 * 1024,
+  });
+}
+
+function canonicalTable(manifest, header) {
+  // Only accept the repository's plain TOML table syntax. A multiline string
+  // can contain text indistinguishable from a table or field to a line scanner.
+  if (/"""|'''/.test(manifest)) return undefined;
+  const sections = manifest.split(/(?=^[ \t]*\[)/m);
+  const matches = sections.map((section, index) => section.split('\n', 1)[0].trim() === header ? index : -1)
+    .filter(index => index !== -1);
+  if (matches.length === 1) return { sections, index: matches[0] };
+}
+
+const WORKSPACE_VERSION = /^version = "((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))"(\r?)$/m;
+
+function inheritedMembers(after, version) {
+  // --no-deps lets Cargo parse and identify workspace members on a cold runner
+  // without downloading the graph. The Windows production build still resolves
+  // the complete lockfile with --locked.
+  const metadata = JSON.parse(execFileSync('cargo', ['metadata', '--format-version', '1', '--locked', '--offline', '--no-deps'], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 4 * 1024 * 1024, timeout: 30_000,
+  }));
+  const packages = new Map(metadata.packages.map(pkg => [pkg.id, pkg]));
+  const names = new Set();
+  for (const id of metadata.workspace_members) {
+    const pkg = packages.get(id);
+    const file = path.relative(process.cwd(), pkg.manifest_path).split(path.sep).join('/');
+    if (pkg.source !== null || path.isAbsolute(file) || file === '..' || file.startsWith('../')) {
+      throw new Error('workspace member manifest is outside the checked-out tree');
+    }
+    const table = canonicalTable(committedFile(after, file), '[package]');
+    if (!table) throw new Error(`ambiguous workspace package table: ${file}`);
+    const packageTable = table.sections[table.index];
+    if (!/^version\.workspace = true\r?$/m.test(packageTable)) {
+      if (pkg.version === version && !WORKSPACE_VERSION.test(packageTable)) {
+        throw new Error(`ambiguous workspace version syntax: ${file}`);
+      }
+      continue;
+    }
+    if (pkg.version !== version || names.has(pkg.name)) throw new Error(`ambiguous inherited version: ${file}`);
+    names.add(pkg.name);
+  }
+  return names;
+}
+
+function previousWorkspaceLock(lock, members, current, previous) {
+  if (/"""|'''/.test(lock)) return undefined;
+  const seen = new Set();
+  const sections = lock.split(/(?=^\[\[package\]\]\r?$)/m);
+  for (let index = 1; index < sections.length; index++) {
+    const lines = sections[index].split('\n');
+    const name = /^name = "([\w-]+)"\r?$/.exec(lines[1])?.[1];
+    if (!members.has(name) || lines.some(line => /^[ \t]*source[ \t]*=/.test(line))) continue;
+    if (seen.has(name) || WORKSPACE_VERSION.exec(lines[2] ?? '')?.[1] !== current) return undefined;
+    lines[2] = lines[2].replace(`"${current}"`, `"${previous}"`);
+    sections[index] = lines.join('\n');
+    seen.add(name);
+  }
+  if (seen.size === members.size) return sections.join('');
+}
+
+function versionParent(event, files) {
+  const { before, after } = event;
+  // #408 limits reuse to Cargo's version fields. Combined changelog/release
+  // notes commits (like c69a9646) use the ordinary manifest gate.
+  if (files.length !== 2 || !files.includes('Cargo.toml') || !files.includes('Cargo.lock')) return '';
+  try {
+    if (event.ref !== 'refs/heads/main' ||
+        git('show', '-s', '--format=%P', after).trim() !== before) return '';
+    const changes = git('diff', '--raw', '--no-renames', '-z', before, after, '--').split('\0');
+    if (changes.length !== 5 || ![changes[0], changes[2]].every(change =>
+      /^:100644 100644 [0-9a-f]+ [0-9a-f]+ M$/.test(change))) return '';
+
+    const parentManifest = committedFile(before, 'Cargo.toml');
+    const oldTable = canonicalTable(parentManifest, '[workspace.package]');
+    const newTable = canonicalTable(committedFile(after, 'Cargo.toml'), '[workspace.package]');
+    if (!oldTable || !newTable) return '';
+    const previous = WORKSPACE_VERSION.exec(oldTable.sections[oldTable.index])?.[1];
+    const current = WORKSPACE_VERSION.exec(newTable.sections[newTable.index])?.[1];
+    if (!previous || !current || previous === current) return '';
+    newTable.sections[newTable.index] = newTable.sections[newTable.index].replace(WORKSPACE_VERSION,
+      (_, _version, ending) => `version = "${previous}"${ending}`);
+    if (newTable.sections.join('') !== parentManifest) return '';
+
+    git('diff', '--quiet', after, '--');
+    const members = inheritedMembers(after, current);
+    if (!members.size) return '';
+    const lock = previousWorkspaceLock(committedFile(after, 'Cargo.lock'), members, current, previous);
+    return lock === committedFile(before, 'Cargo.lock') ? before : '';
+  } catch (error) {
+    console.error(`Version evidence unavailable; using the normal manifest gate: ${error.message}`);
+    return '';
+  }
 }
 
 function heavyKey(branch, sha) {
@@ -242,15 +346,16 @@ function matrixFor(scopes, tier) {
   return { include };
 }
 
-async function main(env = process.env) {
+async function classifyEvent(env) {
   const event = readEvent(env);
   const decision = gate(env, event);
   const dispatch = env.GITHUB_EVENT_NAME === 'workflow_dispatch';
   const pr = env.GITHUB_EVENT_NAME === 'pull_request';
-  const mainPush = env.GITHUB_EVENT_NAME === 'push' && env.GITHUB_REF === 'refs/heads/main';
+  const mainPush = isMainPush(env);
   let { tier, production } = decision;
   let defer = false;
   let heavy_key = '';
+  let version_parent = '';
   let scopes;
   try {
     if (decision.invalid) throw new Error('event contains an unknown scope or label');
@@ -270,6 +375,7 @@ async function main(env = process.env) {
     } else {
       const files = changedFiles(env, event);
       scopes = decision.skip ? { ...NONE } : classify(files);
+      if (mainPush) version_parent = versionParent(event, files);
       if (pr && !decision.skip) {
         // PR 的常规桌面和 Linux 测试覆盖 core/protocol；额外静态构建仅验证特定输入。
         if (files.length > 0) scopes.server = files.some(isServerInput);
@@ -286,11 +392,35 @@ async function main(env = process.env) {
   // 快速层与手动 ci scope 都不产生需要上传的发行产物。
   if (tier !== 'full') scopes = { ...scopes, server: false, release: false };
   if (decision.packaging === false) scopes = { ...scopes, release: false };
-  const result = {
-    ...scopes, tier, production, defer, heavy_key,
+  return {
+    ...scopes, tier, production, defer, heavy_key, version_parent,
     fail_fast: pr && !decision.skip && tier === 'fast',
     matrix: matrixFor(scopes, tier),
   };
+}
+
+function finalizeGate(decision, proof) {
+  if (decision.version_parent && proof?.reuse === true && proof.versionReuse === true) {
+    const scopes = { ...NONE, desktop: true };
+    return { ...decision, ...scopes, tier: 'fast', matrix: matrixFor(scopes, 'fast'), reuse: true, 'release-reuse': false };
+  }
+  return {
+    ...decision,
+    reuse: !decision.version_parent && proof?.reuse === true,
+    'release-reuse': !decision.version_parent && proof?.releaseReuse === true,
+  };
+}
+
+async function resolveGate(env, discoverComparableRun) {
+  const decision = await classifyEvent(env);
+  const proof = discoverComparableRun && isMainPush(env)
+    ? await discoverComparableRun({ sourceSha: env.GITHUB_SHA, versionParent: decision.version_parent })
+    : undefined;
+  return finalizeGate(decision, proof);
+}
+
+async function main(env = process.env) {
+  const result = await resolveGate(env);
   if (env.GITHUB_OUTPUT) {
     // 字符串（tier）要原样输出，布尔与 matrix 才用 JSON，否则下游比较会带上引号。
     const encode = value => (typeof value === 'string' ? value : JSON.stringify(value));
@@ -302,4 +432,4 @@ async function main(env = process.env) {
 
 if (require.main === module) main();
 
-module.exports = { FULL_GATE_LABEL, classify, gate, isPreflightOnly, matrixFor };
+module.exports = { FULL_GATE_LABEL, classify, gate, isPreflightOnly, matrixFor, resolveGate };
