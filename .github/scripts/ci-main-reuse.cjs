@@ -48,7 +48,10 @@ function positiveId(value) {
 }
 
 function gitRunner(cwd) {
-  return (...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  // Latin-1 preserves every byte when comparing workflow blobs.
+  return (...args) => execFileSync('git', args, {
+    cwd, encoding: args[0] === 'cat-file' ? 'latin1' : 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
 }
 
 // run 本身的身份：仓库、workflow、事件、结论、PR 绑定、新鲜度。
@@ -145,6 +148,30 @@ function verifyRun({ repository, sourceTree, gate, workflow, run, request, jobs,
   return { runId: String(run.id), runAttempt: String(run.run_attempt), pullRequest: request.number };
 }
 
+function withoutIndependentComments(text) {
+  // 仅识别工作流惯用的顶层 block mapping 和 LF/CRLF。其他形式原样比较。
+  if (/\r(?!\n)|\xc2\x85|\xe2\x80[\xa8\xa9]/.test(text)) return text;
+  const mayKeepTrailingLines = /[|>](?:\+[1-9]?|[1-9]\+)(?=[ \t\r\n]|$)/.test(text);
+  const lines = text.split(/(?<=\n)/);
+  let atBoundary = true;
+  let trailingBlank = false;
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index];
+    if (line.startsWith('#')) {
+      // 顶层注释可能终止块标量。若后面有缩进内容或 |+ / >+ 可保留的空行，不忽略。
+      if (atBoundary && (!mayKeepTrailingLines || !trailingBlank)) lines[index] = '';
+    } else if (/^\r?\n$/.test(line)) {
+      trailingBlank = true;
+      if (atBoundary && !mayKeepTrailingLines) lines[index] = '';
+    } else {
+      atBoundary = /^[a-z][\w-]*:(?=[ \t\r\n]|$)/i.test(line);
+      if (!atBoundary && !/^[ \t]/.test(line)) return text;
+      trailingBlank = false;
+    }
+  }
+  return lines.join('');
+}
+
 // REST 按 GitHub 记录的解析 SHA 读取 merge 对象，不重新抓取临时 refs/pull/N/merge。
 async function readMerge({ github, repo, git, commit, sourceGate }) {
   requireValue(SHA.test(commit ?? ''), 'tested merge SHA is missing');
@@ -155,13 +182,11 @@ async function readMerge({ github, repo, git, commit, sourceGate }) {
   git('merge-base', '--is-ancestor', base, 'HEAD');
   const baseGate = {};
   for (const file of GATE_FILES) {
-    // 文件首部注释与门禁无关。保留 YAML 正文的每个字节，包括块字符串。
     try {
       const blob = git('rev-parse', `${base}:${file}`).trim();
       const source = sourceGate?.[file];
-      const withoutComments = text => text.replace(/^(?:#[^\r\n]*\r?\n)+/, '');
       baseGate[file] = source && blob !== source &&
-        withoutComments(git('cat-file', 'blob', blob)) === withoutComments(git('cat-file', 'blob', source))
+        withoutIndependentComments(git('cat-file', 'blob', blob)) === withoutIndependentComments(git('cat-file', 'blob', source))
         ? source : blob;
     } catch (error) {
       throw Error(`gate definition missing at the tested base: ${file}`);

@@ -197,13 +197,19 @@ function prHeavyKey(env, request) {
     ? heavyKey(head.ref, head.sha) : '';
 }
 
-async function dispatchIdentity(env, event, sha) {
+function dispatchIdentity(env, event) {
   const branch = env.GITHUB_REF?.match(/^refs\/heads\/(.+)$/)?.[1];
   const repository = env.GITHUB_REPOSITORY;
-  if (!branch || (event.ref !== branch && event.ref !== env.GITHUB_REF) || !REPOSITORY.test(repository) ||
-      event.repository?.full_name?.toLowerCase() !== repository.toLowerCase() || !env.GITHUB_TOKEN || !env.GITHUB_API_URL) {
-    throw new Error('dispatch branch, repository or API context is incomplete');
+  if (!branch || (event?.ref !== branch && event?.ref !== env.GITHUB_REF) ||
+      typeof repository !== 'string' || !REPOSITORY.test(repository) ||
+      event?.repository?.full_name?.toLowerCase() !== repository.toLowerCase()) {
+    throw new Error('dispatch branch or repository identity is incomplete');
   }
+  return { branch, repository };
+}
+
+async function hasOpenPullRequest(env, { branch, repository }, sha) {
+  if (!env.GITHUB_TOKEN || !env.GITHUB_API_URL) throw new Error('dispatch API context is incomplete');
   const url = new URL(`repos/${repository}/pulls`, `${env.GITHUB_API_URL.replace(/\/$/, '')}/`);
   url.search = new URLSearchParams({ state: 'open', head: `${repository.split('/')[0]}:${branch}`, per_page: '100' });
   const response = await fetch(url, {
@@ -227,7 +233,7 @@ async function dispatchIdentity(env, event, sha) {
   if (!defer && response.headers.get('link')?.includes('rel="next"')) {
     throw new Error('open PR lookup did not cover every candidate');
   }
-  return { defer, heavy_key: heavyKey(branch, sha) };
+  return defer;
 }
 
 // 不进入编译或打包的输入：文档站内容、仓库代理说明、issue 模板、发行说明式
@@ -358,14 +364,19 @@ async function classifyEvent(env) {
   let version_parent = '';
   let scopes;
   try {
-    if (decision.invalid) throw new Error('event contains an unknown scope or label');
     if (dispatch) {
       const after = checkoutSha(env);
-      ({ defer, heavy_key } = await dispatchIdentity(env, event, after));
+      const identity = dispatchIdentity(env, event);
+      // Queue full fallback jobs with the PR even if the lookup or diff fails.
+      heavy_key = heavyKey(identity.branch, after);
+      if (decision.invalid) throw new Error('event contains an unknown scope');
+      defer = await hasOpenPullRequest(env, identity, after);
       if (defer) {
         scopes = { ...NONE };
         production = false;
-        console.error('Deferring heavy validation to an open pull request on this branch head');
+        console.error('Deferring heavy validation to the open pull request on this branch head. ' +
+          `Mark the PR Ready for review or add ${FULL_GATE_LABEL} to run the full tier. ` +
+          'Retry failed PR CI jobs with node scripts/rerun-failed-ci.cjs <run-id>.');
       } else if (decision.packaging) {
         scopes = { ...FULL };
       } else {
@@ -373,6 +384,7 @@ async function classifyEvent(env) {
         if (!scopes.server) tier = 'fast';
       }
     } else {
+      if (decision.invalid) throw new Error('event contains an unknown label');
       const files = changedFiles(env, event);
       scopes = decision.skip ? { ...NONE } : classify(files);
       if (mainPush) version_parent = versionParent(event, files);
@@ -386,7 +398,6 @@ async function classifyEvent(env) {
     console.error(`Conservative full validation: ${error.message}`);
     scopes = { ...FULL };
     tier = 'full';
-    heavy_key = '';
   }
   if (mainPush) scopes.server = true;
   // 快速层与手动 ci scope 都不产生需要上传的发行产物。

@@ -9,7 +9,19 @@ const { test } = require('node:test');
 
 const { discoverComparableRun, GATE_FILES, PLATFORM_JOBS, verifyRun } = require('./ci-main-reuse.cjs');
 
-const CI_WORKFLOW = 'name: CI\n';
+const CI_WORKFLOW = [
+  'name: CI',
+  'on: [pull_request, push]',
+  'jobs:',
+  '  preflight:',
+  '    runs-on: ubuntu-latest',
+  '    steps:',
+  '      - run: |',
+  '          cat <<EOF',
+  '          # literal shell input',
+  '          EOF',
+  '',
+].join('\n');
 const RELEASE_WORKFLOW = 'name: Release build\n';
 const WORKFLOW_PATH = '.github/workflows/ci.yml';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -99,12 +111,18 @@ for (const [name, mutate] of [
 }
 
 // 真实 git fixture：merge ref 的抓取、tree 与门禁 blob 的比较都必须来自真对象。
-function repository(t) {
+function repository(t, { ciWorkflow = CI_WORKFLOW } = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), 'lyrel-ci-main-reuse-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const remote = path.join(directory, 'remote.git');
   const work = path.join(directory, 'work');
-  const run = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const run = (cwd, ...args) => {
+    const blob = args[0] === 'cat-file';
+    const value = execFileSync('git', args, {
+      cwd, encoding: blob ? 'latin1' : 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return blob ? value : value.trim();
+  };
   run(directory, 'init', '--quiet', '--bare', remote);
   run(directory, 'init', '--quiet', '--initial-branch=main', work);
   run(work, 'config', 'user.name', 'CI fixture');
@@ -122,7 +140,7 @@ function repository(t) {
     return run(work, 'rev-parse', 'HEAD');
   };
   commit({
-    '.github/workflows/ci.yml': CI_WORKFLOW,
+    '.github/workflows/ci.yml': ciWorkflow,
     '.github/workflows/release-build.yml': RELEASE_WORKFLOW,
     'src/lib.rs': 'pub fn base() {}\n',
   });
@@ -222,11 +240,39 @@ test('a different main tree is never accepted on the strength of the run alone',
   assert.match(reasons, /tree differs/);
 });
 
-test('a workflow-only comment change preserves comparable test evidence', async (t) => {
+test('standalone comments at the start, between workflow sections and at EOF preserve evidence', async (t) => {
   const work = repository(t);
-  const pull = work.pullRequest({ files: { [WORKFLOW_PATH]: `# maintainer note\n${CI_WORKFLOW}` } });
+  const workflow = `# maintainer note\n${CI_WORKFLOW.replace('jobs:', '# Validation stages\n\njobs:')}# eof note`;
+  const pull = work.pullRequest({ files: { [WORKFLOW_PATH]: workflow } });
   const { result } = await discover({ work, ...record(pull) });
   assert.equal(result.reuse, true);
+});
+
+test('a changed indented comment inside a shell block cannot reuse main evidence', async (t) => {
+  const work = repository(t);
+  const workflow = CI_WORKFLOW.replace('# literal shell input', '# different shell input');
+  const pull = work.pullRequest({ files: { [WORKFLOW_PATH]: workflow } });
+  const { result, reasons } = await discover({ work, ...record(pull) });
+  assert.equal(result.reuse, false);
+  assert.match(reasons, /gate definition changed/);
+});
+
+test('removing a comment that terminates a shell block cannot reuse main evidence', async (t) => {
+  const nextLine = '          # shell input if the block continues\n';
+  const work = repository(t, { ciWorkflow: `${CI_WORKFLOW}# end of shell block\n${nextLine}` });
+  const pull = work.pullRequest({ files: { [WORKFLOW_PATH]: `${CI_WORKFLOW}${nextLine}` } });
+  const { result, reasons } = await discover({ work, ...record(pull) });
+  assert.equal(result.reuse, false);
+  assert.match(reasons, /gate definition changed/);
+});
+
+test('a comment that determines trailing blank lines in a keep-chomped block is significant', async (t) => {
+  const workflow = CI_WORKFLOW.replace('run: |', 'run: |+');
+  const work = repository(t, { ciWorkflow: `${workflow}# end of shell block\n\n` });
+  const pull = work.pullRequest({ files: { [WORKFLOW_PATH]: `${workflow}\n` } });
+  const { result, reasons } = await discover({ work, ...record(pull) });
+  assert.equal(result.reuse, false);
+  assert.match(reasons, /gate definition changed/);
 });
 
 test('gate definitions changed by the pull request cannot reuse main evidence', async (t) => {

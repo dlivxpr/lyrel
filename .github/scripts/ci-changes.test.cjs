@@ -122,10 +122,11 @@ async function pullRequestApi(t, body, status = 200) {
   return { url: `http://127.0.0.1:${server.address().port}`, requests };
 }
 
-test('a manual run on an open same-repository pull request head defers all heavy jobs', async (t) => {
+test('a manual run defers all heavy jobs to a matching open draft PR', async (t) => {
   const { repo, event } = dispatchRepository(t);
   const head = repo.commit({ 'Cargo.toml': '[workspace]\n' });
-  const api = await pullRequestApi(t, [openPullRequest(head)]);
+  const request = { ...openPullRequest(head), draft: true };
+  const api = await pullRequestApi(t, [request]);
   const result = await repo.dispatch(event, head, api.url);
   assert.equal(result.defer, true);
   assert.deepEqual(scopes(result), [false, false, false, false]);
@@ -143,9 +144,9 @@ test('a manual run on an open same-repository pull request head defers all heavy
   assert.deepEqual(scopes(full), [false, false, false, false]);
   assert.equal(full.production, false);
 
+  assert.equal(api.requests.length, 2, 'defer requires no workflow run history');
   repo.git('checkout', '--quiet', 'main');
   repo.git('merge', '--quiet', '--no-ff', dispatchBranch, '-m', 'test merge');
-  const request = openPullRequest(head);
   request.base.sha = repo.before;
   const pr = repo.classify({ action: 'synchronize', pull_request: request }, undefined, 'pull_request', { GITHUB_REPOSITORY: project });
   assert.match(result.heavy_key, new RegExp(`^${head}-[0-9a-f]{64}$`));
@@ -204,24 +205,56 @@ test('standalone manual scope full keeps every platform, the production build an
     ['aarch64-apple-darwin', 'x86_64-pc-windows-msvc', 'x86_64-unknown-linux-gnu']);
 });
 
-test('unavailable dispatch evidence validates fully without competing with a PR', async (t) => {
+test('dispatch fallbacks validate fully in the same heavy group as the PR', async (t) => {
   const { repo, event } = dispatchRepository(t);
   const head = repo.commit({ 'docs/start.mdx': '# Manual update' });
+  repo.git('checkout', '--quiet', 'main');
+  repo.git('merge', '--quiet', '--no-ff', dispatchBranch, '-m', 'test merge');
+  const request = openPullRequest(head);
+  request.base.sha = repo.before;
+  const pr = repo.classify({ action: 'synchronize', pull_request: request }, undefined, 'pull_request',
+    { GITHUB_REPOSITORY: project });
+  assert.notEqual(pr.heavy_key, '');
+  repo.git('checkout', '--quiet', dispatchBranch);
   const unavailable = await pullRequestApi(t, { message: 'Forbidden' }, 403);
   const malformed = await pullRequestApi(t, [{ state: 'open', head: { sha: head } }]);
   const empty = await pullRequestApi(t, []);
   repo.git('update-ref', '-d', 'refs/remotes/origin/main');
-  for (const api of [unavailable, malformed, empty]) {
-    const result = await repo.dispatch(event, head, api.url);
+  for (const { api, overrides } of [
+    { api: unavailable },
+    { api: malformed },
+    { api: empty, overrides: { GITHUB_TOKEN: '' } },
+    { api: empty },
+  ]) {
+    const result = await repo.dispatch(event, head, api.url, overrides);
     assert.equal(result.defer, false);
-    assert.equal(result.heavy_key, '');
+    assert.equal(result.heavy_key, pr.heavy_key);
     assert.equal(result.tier, 'full');
     assert.deepEqual(scopes(result), [true, true, true, false]);
   }
   const result = await repo.dispatch({ ...event, inputs: { scope: 'unknown' } }, head, empty.url);
   assert.equal(result.defer, false);
-  assert.equal(result.heavy_key, '');
+  assert.equal(result.heavy_key, pr.heavy_key);
   assert.deepEqual(scopes(result), [true, true, true, true]);
+  assert.equal(empty.requests.length, 1, 'missing credentials and invalid scope skip the PR lookup');
+});
+
+test('dispatch with an unverified branch, repository or checkout has no shared key', async (t) => {
+  const { repo, event } = dispatchRepository(t);
+  const head = repo.commit({ 'docs/start.mdx': '# Manual update' });
+  const api = await pullRequestApi(t, [openPullRequest(head)]);
+  for (const [payload, sha] of [
+    [{ ...event, ref: 'refs/heads/other' }, head],
+    [{ ...event, repository: { full_name: 'other/repo' } }, head],
+    [event, repo.before],
+  ]) {
+    const result = await repo.dispatch(payload, sha, api.url);
+    assert.equal(result.defer, false);
+    assert.equal(result.heavy_key, '');
+    assert.equal(result.tier, 'full');
+    assert.deepEqual(scopes(result), [true, true, true, false]);
+  }
+  assert.equal(api.requests.length, 0);
 });
 
 test('a multi-commit push ending in documentation still validates the earlier core change', (t) => {
