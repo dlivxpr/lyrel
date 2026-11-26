@@ -433,6 +433,7 @@ fn sqlite_fixture(dir: &Path, name: &str) -> (std::path::PathBuf, rusqlite::Conn
 
 fn sqlite_wal_busy(path: &Path) -> i64 {
     let connection = rusqlite::Connection::open(path).unwrap();
+    connection.busy_timeout(Duration::ZERO).unwrap();
     connection
         .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
         .unwrap()

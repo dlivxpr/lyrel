@@ -239,6 +239,7 @@ fn a_wal_writer_sees_the_read_view_keep_its_snapshot_until_refresh() {
          CREATE TABLE items(id INTEGER PRIMARY KEY, value TEXT);\
          INSERT INTO items(value) VALUES ('one'), ('two'), ('three'), ('four'), ('five');",
     );
+    writer.busy_timeout(Duration::ZERO).unwrap();
     let service = SqliteService::new();
     let cancel = SqliteCancel::default();
     let opened = service.open(&path, &cancel).unwrap();

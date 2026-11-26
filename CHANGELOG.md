@@ -7,6 +7,18 @@
 
 ## [Unreleased]
 
+### 修复
+
+- Windows 进程树快照中的父 PID 形成循环时，若该链未到达当前窗格，结束进程操作明确拒绝该目标。
+
+### 开发与 CI
+
+- 缩短 SQLite 与空闲控制连接测试的夹具等待（#409）。三个需真实 SSH 端点的 server 测试目标按需启用 `native-ssh-tests`（#408）。
+- CI 使用 `rust-cache` 缓存 Cargo 构建依赖，停用 sccache。
+- Windows 和 macOS CI 的 library 单测编译上限提高到 60 分钟，覆盖恢复缓存归档后仍需大量重编的运行。
+- 图形测试等待 PTY 确认时依赖生产通知安排重绘，减少重复构建绘制网格（#414）。
+- Windows Cargo wrapper 缩短根包 `lyrel` 的测试编译时间，采用 `test` profile 的 `opt-level=0`（#415）。
+
 ## [0.5.0] - 2026-11-24
 
 ### 新增

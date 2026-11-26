@@ -55,9 +55,10 @@ Host 边界脚本要求 LF；遇到 `$'\r': command not found` 或 `invalid opti
 ## Linux
 
 - 优先使用兼容目标 libc、依赖和运行时的轻量 Docker Linux 容器，参照 CI 准备完整环境。仅在 Docker 不可用或容器不能覆盖目标行为（如 WSL 专项）时回退 WSL，并记录原因。
-- Linux headless 的 `cargo build/test --locked --workspace --all-features` 排除 `lyrel`、`lyrel-markdown-editor`、`lyrel-updater`、`lyrel-ui-base`、`lyrel-terminal`、`lyrel-workbench-editor` 与 `lyrel-content-diff`；完整命令见安装指南。文档格式引擎、insights 的 skills／统计／GitHub 查询及共享测试夹具参与 headless 验证；用量账户与浏览器读取器只在桌面构建。
+- Linux headless 的 `cargo build/test --locked --workspace` 排除 `lyrel`、`lyrel-markdown-editor`、`lyrel-updater`、`lyrel-ui-base`、`lyrel-terminal`、`lyrel-workbench-editor` 与 `lyrel-content-diff`；按安装指南显式启用常规 feature。文档格式引擎、insights 的 skills／统计／GitHub 查询及共享测试夹具参与 headless 验证；用量账户与浏览器读取器只在桌面构建。
 - 完整 features 需要 MIT Kerberos 开发依赖及 `LIBGSSAPI_IMPL=mit`。Pi 桥契约需要当前平台 Node 22.19+ 在 `PATH`，不能用 Windows 的 `node.exe` 替代 Linux Node。
 - 很多 server 集成用例受 `cfg(unix)` 限制，Windows 通过不能替代 Unix 验证；联网及真实 SSH/LSP 的 ignored 用例只在具备前提时显式执行。
+- 编译并运行 `native_ssh_graphics`、`native_ssh_lifecycle` 或 `native_ssh_surface` 时，按 `docs/remote/ssh.mdx` 启用 `lyrel-server` 的 `native-ssh-tests`，指定测试目标并传入 `--ignored`。普通 headless 测试按安装指南选择 feature，避免 `--all-features` 编译这三个目标。
 
 ## 测试与实际验收
 

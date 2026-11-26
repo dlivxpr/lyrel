@@ -68,6 +68,7 @@ test('Windows Cargo wrapper streams rendered diagnostics before Cargo exits', { 
   assert.doesNotMatch(output, /"reason":"compiler-message"/, 'diagnostics must be rendered, not leaked as JSON');
   const calls = readFileSync(f.env.CARGO_FIXTURE_CALLS, 'utf8').trim().split('\n').map(JSON.parse);
   assert.equal(calls.length, 1, 'test execution must not invoke Cargo a second time');
+  assert.ok(calls[0].includes('profile.test.package.lyrel.opt-level=0'));
 });
 
 test('Windows Cargo wrapper preserves a failed Cargo exit status', { skip: !windows }, (t) => {
@@ -76,6 +77,8 @@ test('Windows Cargo wrapper preserves a failed Cargo exit status', { skip: !wind
     cwd: root, env: { ...f.env, CARGO_FIXTURE_EXIT: '37' }, encoding: 'utf8',
   });
   assert.equal(result.status, 37, result.stdout + result.stderr);
+  const args = JSON.parse(readFileSync(f.env.CARGO_FIXTURE_CALLS, 'utf8').trim());
+  assert.ok(!args.some(arg => arg.startsWith('profile.test.')));
 });
 
 test('Windows Cargo wrapper rejects equal-length corruption before invoking Cargo', { skip: !windows }, (t) => {

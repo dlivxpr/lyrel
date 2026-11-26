@@ -1688,6 +1688,7 @@ pub fn sqlite_wal_writer_keeps_one_read_view(h: &dyn Host, sb: &dyn Sandbox) {
     use crate::host::sqlite::SqliteCancel;
     let path = h.join(sb.path(), "wal.sqlite");
     let writer = rusqlite::Connection::open(&path).unwrap();
+    writer.busy_timeout(Duration::ZERO).unwrap();
     writer
         .execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;\

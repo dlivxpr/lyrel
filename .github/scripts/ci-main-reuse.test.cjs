@@ -9,7 +9,19 @@ const { test } = require('node:test');
 
 const { discoverComparableRun, GATE_FILES, PLATFORM_JOBS, verifyRun } = require('./ci-main-reuse.cjs');
 
-const CI_WORKFLOW = 'name: CI\n';
+const CI_WORKFLOW = [
+  'name: CI',
+  'on: [pull_request, push]',
+  'jobs:',
+  '  preflight:',
+  '    runs-on: ubuntu-latest',
+  '    steps:',
+  '      - run: |',
+  '          cat <<EOF',
+  '          # literal shell input',
+  '          EOF',
+  '',
+].join('\n');
 const RELEASE_WORKFLOW = 'name: Release build\n';
 const WORKFLOW_PATH = '.github/workflows/ci.yml';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -99,12 +111,18 @@ for (const [name, mutate] of [
 }
 
 // 真实 git fixture：merge ref 的抓取、tree 与门禁 blob 的比较都必须来自真对象。
-function repository(t) {
+function repository(t, { ciWorkflow = CI_WORKFLOW } = {}) {
   const directory = mkdtempSync(path.join(tmpdir(), 'lyrel-ci-main-reuse-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const remote = path.join(directory, 'remote.git');
   const work = path.join(directory, 'work');
-  const run = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  const run = (cwd, ...args) => {
+    const blob = args[0] === 'cat-file';
+    const value = execFileSync('git', args, {
+      cwd, encoding: blob ? 'latin1' : 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return blob ? value : value.trim();
+  };
   run(directory, 'init', '--quiet', '--bare', remote);
   run(directory, 'init', '--quiet', '--initial-branch=main', work);
   run(work, 'config', 'user.name', 'CI fixture');
@@ -122,7 +140,7 @@ function repository(t) {
     return run(work, 'rev-parse', 'HEAD');
   };
   commit({
-    '.github/workflows/ci.yml': CI_WORKFLOW,
+    '.github/workflows/ci.yml': ciWorkflow,
     '.github/workflows/release-build.yml': RELEASE_WORKFLOW,
     'src/lib.rs': 'pub fn base() {}\n',
   });
@@ -186,7 +204,31 @@ test('the real merge ref and tree of a matching pull request run are reused', as
   const work = repository(t);
   const pull = work.pullRequest({});
   const { result } = await discover({ work, ...record(pull) });
-  assert.deepEqual(result, { reuse: true, runId: '4242', runAttempt: '2', pullRequest: 1, tree: pull.tree });
+  assert.deepEqual(result, { reuse: true, releaseReuse: false, runId: '4242', runAttempt: '2', pullRequest: 1, tree: pull.tree });
+});
+
+test('release-validation is reusable only when all release build and package jobs succeeded', async (t) => {
+  const work = repository(t);
+  const pull = work.pullRequest({});
+  const value = record(pull);
+  const prefix = 'release-validation / ';
+  const release = [
+    'build (x86_64-pc-windows-msvc)', 'build (aarch64-apple-darwin)',
+    'pack (x86_64-pc-windows-msvc)', 'pack (aarch64-apple-darwin)',
+    'server-musl (x86_64-unknown-linux-musl, lyrel-server-linux-x86_64-musl)',
+    'server-musl (aarch64-unknown-linux-musl, lyrel-server-linux-aarch64-musl)',
+    'server-macos (aarch64-apple-darwin, arm64, lyrel-server-macos-aarch64)',
+    'server-windows (x86_64-pc-windows-msvc, lyrel-server-windows-x86_64.zip)',
+  ].map(name => ({ ...value.jobs[0], name: `${prefix}${name}` }));
+  value.jobs = value.jobs.filter(job => !job.name.startsWith(prefix));
+  value.jobs.push(...release.slice(1));
+  assert.equal((await discover({ work, ...value })).result.releaseReuse, false);
+  value.jobs.push(release[0]);
+  assert.equal((await discover({ work, ...value })).result.releaseReuse, true);
+  value.jobs = value.jobs.filter(job => !PLATFORM_JOBS.includes(job.name));
+  const scoped = (await discover({ work, ...value })).result;
+  assert.equal(scoped.reuse, false);
+  assert.equal(scoped.releaseReuse, true);
 });
 
 test('a different main tree is never accepted on the strength of the run alone', async (t) => {
@@ -198,9 +240,44 @@ test('a different main tree is never accepted on the strength of the run alone',
   assert.match(reasons, /tree differs/);
 });
 
+test('standalone comments at the start, between workflow sections and at EOF preserve evidence', async (t) => {
+  const work = repository(t);
+  const workflow = `# maintainer note\n${CI_WORKFLOW.replace('jobs:', '# Validation stages\n\njobs:')}# eof note`;
+  const pull = work.pullRequest({ files: { [WORKFLOW_PATH]: workflow } });
+  const { result } = await discover({ work, ...record(pull) });
+  assert.equal(result.reuse, true);
+});
+
+test('a changed indented comment inside a shell block cannot reuse main evidence', async (t) => {
+  const work = repository(t);
+  const workflow = CI_WORKFLOW.replace('# literal shell input', '# different shell input');
+  const pull = work.pullRequest({ files: { [WORKFLOW_PATH]: workflow } });
+  const { result, reasons } = await discover({ work, ...record(pull) });
+  assert.equal(result.reuse, false);
+  assert.match(reasons, /gate definition changed/);
+});
+
+test('removing a comment that terminates a shell block cannot reuse main evidence', async (t) => {
+  const nextLine = '          # shell input if the block continues\n';
+  const work = repository(t, { ciWorkflow: `${CI_WORKFLOW}# end of shell block\n${nextLine}` });
+  const pull = work.pullRequest({ files: { [WORKFLOW_PATH]: `${CI_WORKFLOW}${nextLine}` } });
+  const { result, reasons } = await discover({ work, ...record(pull) });
+  assert.equal(result.reuse, false);
+  assert.match(reasons, /gate definition changed/);
+});
+
+test('a comment that determines trailing blank lines in a keep-chomped block is significant', async (t) => {
+  const workflow = CI_WORKFLOW.replace('run: |', 'run: |+');
+  const work = repository(t, { ciWorkflow: `${workflow}# end of shell block\n\n` });
+  const pull = work.pullRequest({ files: { [WORKFLOW_PATH]: `${workflow}\n` } });
+  const { result, reasons } = await discover({ work, ...record(pull) });
+  assert.equal(result.reuse, false);
+  assert.match(reasons, /gate definition changed/);
+});
+
 test('gate definitions changed by the pull request cannot reuse main evidence', async (t) => {
   const work = repository(t);
-  const pull = work.pullRequest({ files: { '.github/workflows/ci.yml': `${CI_WORKFLOW}# narrowed\n` } });
+  const pull = work.pullRequest({ files: { [WORKFLOW_PATH]: 'name: Narrowed CI\n' } });
   const { result, reasons } = await discover({ work, ...record(pull) });
   assert.equal(result.reuse, false);
   assert.match(reasons, /gate definition changed/);
@@ -250,7 +327,7 @@ test('a checkout that is not the event SHA is never used as evidence', async (t)
   assert.equal(result.reuse, false);
 });
 
-test('a merged run with an empty PR list reuses its immutable tested workflow commit after the merge ref is deleted', async (t) => {
+test('a PR associated with the squash commit can prove the tested tree after its merge ref is deleted', async (t) => {
   const work = repository(t);
   const pull = work.pullRequest({});
   const { run, jobs } = record(pull);
@@ -267,6 +344,7 @@ test('a merged run with an empty PR list reuses its immutable tested workflow co
   work.git('push', '--quiet', 'origin', ':refs/pull/1/merge');
   const squash = work.git('commit-tree', pull.tree, '-p', pull.base, '-m', 'squash');
   work.git('update-ref', 'refs/heads/main', squash);
+  request.merge_commit_sha = squash;
   const github = {
     rest: {
       actions: {
@@ -280,11 +358,44 @@ test('a merged run with an empty PR list reuses its immutable tested workflow co
         return { data: { sha: pull.merge, tree: { sha: pull.tree }, parents: [{ sha: pull.base }, { sha: pull.head }] } };
       } },
     },
-    paginate: async (route) => route === github.rest.repos.listPullRequestsAssociatedWithCommit ? [request] : jobs,
+    paginate: async (route, params) => route === github.rest.repos.listPullRequestsAssociatedWithCommit
+      ? (params.commit_sha === squash ? [request] : []) : jobs,
   };
   const result = await discoverComparableRun({
     github, repo: { owner: 'owner', repo: 'repo' }, sourceSha: squash,
     git: (...args) => work.git(...args), log: () => {},
   });
-  assert.deepEqual(result, { reuse: true, runId: '4242', runAttempt: '2', pullRequest: 1, tree: pull.tree });
+  assert.deepEqual(result, { reuse: true, releaseReuse: false, runId: '4242', runAttempt: '2', pullRequest: 1, tree: pull.tree });
+});
+
+test('a version-only push needs executed tests at its immediate main parent', async (t) => {
+  const work = repository(t);
+  const parent = work.git('rev-parse', 'HEAD');
+  const source = work.advance({ 'Cargo.toml': '[workspace.package]\nversion = "1.0.1"\n' });
+  const value = evidence();
+  const run = { ...value.run, head_sha: parent, event: 'push', head_branch: 'main' };
+  const jobs = value.jobs.slice(0, 4).map(job => ({ ...job, head_sha: parent, steps: [
+    { name: 'Test desktop library and headless', status: 'completed', conclusion: 'success' },
+    { name: 'Test Linux headless', status: 'completed', conclusion: 'success' },
+  ] }));
+  const github = {
+    rest: {
+      actions: {
+        getWorkflow: async () => ({ data: value.workflow }),
+        listWorkflowRuns: async ({ event, head_sha }) => ({ data: {
+          workflow_runs: event === 'push' && head_sha === parent ? [run] : [],
+        } }),
+        listJobsForWorkflowRun: () => {},
+      },
+      repos: { listPullRequestsAssociatedWithCommit: () => {} },
+    },
+    paginate: async (route) => route === github.rest.actions.listJobsForWorkflowRun ? jobs : [],
+  };
+  const check = () => discoverComparableRun({
+    github, repo: { owner: 'owner', repo: 'repo' }, sourceSha: source, versionParent: parent,
+    git: work.git, now: NOW, log: () => {},
+  });
+  assert.equal((await check()).versionReuse, true);
+  jobs[1].steps[0].conclusion = 'skipped';
+  assert.notEqual((await check()).versionReuse, true);
 });

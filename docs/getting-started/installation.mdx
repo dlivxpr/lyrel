@@ -172,6 +172,8 @@ Windows PowerShell 每条命令写成一行，不复制 Bash 的续行符。单�
 将 Tokio paused clock 与 Host 契约测试留在测试图中，不进入默认产品。GUI-free 单包测试
 仍可独立运行，不为追求相同指纹而编译整套 GUI；生产与测试、不同包选择仍可能产生合法重编。
 开发 profile 使用 `codegen-units = 256`，Release 的 thin LTO／单 CGU 不变。
+Windows Cargo wrapper 对 `test` profile 中的根包 `lyrel` 使用 `opt-level=0`，覆盖普通、原生测试
+和 nextest 的编译入口。macOS 的同项实验触发 `__eh_frame` 链接警告，保留默认优化级别（#415）。
 
 Windows wrapper 实时显示 Cargo 的诊断与非 JSON 输出。普通 `test` 仅调用一次 Cargo，
 由官方 target runner 在每个测试二进制启动前校验并暂存固定 ConPTY；不凭大小或时间戳
@@ -187,11 +189,9 @@ CI 的 Draft PR 默认仅运行所需的 Linux headless／Windows 验证；Ready
 只有 `scope=full` 才额外执行完整生产构建和发行验证。Windows PR／`scope=ci` 的静态 CRT 门禁检查
 测试图生成的 GUI、CLI、server 可执行文件，并单独构建普通 `lyrel-updater.exe`，而不是检查其测试 harness。
 相同 tree 的测试晋升只有在可验证的完整 PR 门禁已经成功时才允许，证据不完整即全量测试。
-冷缓存的生产构建、desktop library 单测编译各保留 45 分钟上限，job 为 120 分钟；
-这是依据实际冷编译超时调整的运行预算，不是性能提升声明，逐例测试超时与失败不写缓存策略不变。
-CI 的 sccache 关闭 incremental 以缓存可复用 Rust 编译；本地仍默认保留 incremental，
-可按单次命令选择 `RUSTC_WRAPPER=sccache CARGO_INCREMENTAL=0`，不修改全局 Cargo 配置。
-实际收益须在相同工具链、feature、target 与缓存条件下计时，不保证固定提速比例。
+桌面生产构建上限为 45 分钟，Windows 和 macOS 的 library 单测编译上限为 60 分钟。
+job 上限为 120 分钟，逐例测试超时与失败不写缓存策略不变。
+CI 关闭增量编译以缩小 `rust-cache` 的目标目录归档。本地开发默认使用 Cargo 增量编译。
 
 `lyrel-test-support` 是独立的测试夹具包。桌面图形消费者使用其中不链接 GUI 的 `lyrel-graphics-fixture` 进程，驱动真实 daemon／PTY；CLI、core 与 server 用 dev-dependency 复用同一包的夹具库。
 完整桌面测试前可用 `cargo build --locked --workspace --features native-markdown-tests,test-support --bin lyrel-graphics-fixture`
@@ -283,12 +283,13 @@ CPU／RAM 的 refresh 方法仍返回 `()`，没有可传播的刷新错误；�
     sudo apt-get install -y pkg-config cmake clang libzstd-dev libssl-dev libkrb5-dev
     headless=(--workspace --exclude lyrel --exclude lyrel-markdown-editor --exclude lyrel-updater \
       --exclude lyrel-ui-base --exclude lyrel-terminal --exclude lyrel-workbench-editor \
-      --exclude lyrel-content-diff --all-features)
+      --exclude lyrel-content-diff \
+      --features lyrel-core/gssapi,lyrel-core/remote-install,lyrel-core/test-support,lyrel-document/formats,lyrel-document/test-fixtures,lyrel-insights/test-support,lyrel-protocol/test-support)
     LIBGSSAPI_IMPL=mit cargo build --release --locked "${headless[@]}"
     LIBGSSAPI_IMPL=mit cargo test --locked "${headless[@]}"
     ```
 
-    不需要可选客户端功能时，可省略 `--all-features`；独立静态 server 使用下文的 musl 构建入口。
+    这组 feature 保留普通 headless 验证范围。`cargo test --all-features` 还会编译三个真实 SSH 专项测试目标，具备端点时按[真实 SSH 回归](/remote/ssh#native-ssh-tests)单独启用。独立静态 server 使用下文的 musl 构建入口。
 
     资源受限时使用 `-j1`；若继承的 wrapper 不可用，可仅对本次命令设置 `RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WRAPPER=`，不要改用户全局 Cargo 配置。完整测试会复制真实 runner 并创建 Unix socket，`TMPDIR` 与 target 必须有足够空间；本轮 `/tmp` 是有限 tmpfs，实际 ENOSPC 后将任务自有 target 迁至原生 ext4，并仅在进程中设置较短的自有 `TMPDIR`。不要删除用户缓存或通过缩小测试范围绕过资源失败。项目仍使用 stable Rust，不把本轮 Rust/Cargo `1.99.1` 固定为项目要求。
 
@@ -443,22 +444,18 @@ bash .github/scripts/generate-checksums.sh <asset-dir>
 
 ### GitHub CI 与发布
 
-`.github/workflows/ci.yml` 在 `main` push、pull request 和手动触发时，先用同一个 `preflight` job 验证格式、Host 边界、工作流／发布脚本语法和自动化行为回归，再按完整变更范围选择重型 job。任何前置检查失败都阻止后续构建；PR 检查实际合并结果相对 base 的差异，push 检查完整 `before…after`，不会只看最后一个 commit。首次 push、强制改写、手动触发、范围不可取得或 checkout 不匹配时执行完整验证。
+`.github/workflows/ci.yml` 先通过 `preflight` 检查格式、Host 边界、工作流与发布脚本语法以及自动化行为。PR 检查合并结果相对 base 的差异，push 检查完整 `before…after`，独立手动触发检查相对 `main` 合并基点的差异。当前分支有开放 PR 时，手动运行交给 PR 的 CI，跳过重型 job。首次 push、强制改写或无法核实范围时按完整门禁处理。
 Node.js 22 显式安装，用于自动化回归、Host 检查和 pi 桥测试；Windows 构建先准备固定官方 ConPTY。Linux runner 固定为 `ubuntu-24.04`；checkout 使用 Node.js 24 runtime 的 `actions/checkout@v7`。
 
-| 变更范围 | 保留验证 |
-| --- | --- |
-| 仅根 `src/`、根 `build.rs`，可附带非编译文档 | Windows／macOS 完整 build & test；不重复验证无依赖关系的 Linux headless 与三个独立 server 构建 |
-| 仅 CLI、`lyrel-document`、`lyrel-test-support` 源码或 `crates/lyrel-core/tests/`、`crates/lyrel-server/tests/` | 桌面与 Linux headless build & test；跳过独立 server release-profile 构建 |
-| 仅 `docs/**/*.md(x)` 或根级 `*.md` | `preflight`；该规则同时适用于 main push 和 PR |
-| 仅发布工作流、打包／汇总脚本及非编译文档 | `preflight` 加真实 Release 构建、打包与平台断言；不重复执行无关 Rust CI |
-| protocol/core/server 生产源码、任意 Cargo manifest／lockfile、嵌入资源或未知输入 | 完整 Rust CI；共享发布断言变化还验证 Release 流程 |
+Draft PR 默认走快速层，按作用域选择 Windows 和 Linux。标记 Ready 或添加 `ci:full` 后可运行 macOS 和独立 server 构建。PR 的独立 server 构建只响应 Cargo manifest／lockfile、`.cargo/`、`lyrel-server` 以及静态链接和 Mach-O 断言的变化。普通 `main` push 保留独立 server 的静态链接和 Mach-O 验证。文档变更无需重新编译桌面或 Linux 测试。
+
+`main` 可复用同仓库已合并 PR 的三平台成功记录。复用要求匹配实际测试的 Git tree 和门禁定义。发行验证还需要该 tree 上的构建与打包均已成功。只有工作区版本字段和对应锁文件版本变化、并且直接父提交有完整绿色测试证据时，`main` 才使用版本提交的快速路径，保留生产构建和 Windows CRT 断言。证据不足时恢复普通验证。
 
 分类入口为 `.github/scripts/ci-changes.cjs`；新增编译输入时同步检查允许跳过的路径。`LICENSE` 被 server 内嵌，`skills/` 等目录不能按 Markdown 后缀当作纯文档。分类使用 `--no-renames` 保留重命名两端，移出源码目录仍会验证删除的影响。检查名称由原来的 `changes`／`rustfmt`／`host boundary` 收敛为 `preflight`；设置合并门禁时使用新名称及所需平台检查，不引用已移除的名称。
 
-桌面发行构建独立的 `lyrel-updater` 包，保留 Windows `+crt-static` 和 CRT 断言。普通桌面测试覆盖全 workspace，其中 `lyrel-document` 的格式引擎也随工作台编译；原生字体目标 `native_markdown` 与 `native_terminal` 独立执行。Linux headless 使用上文的 workspace 成员选择启用 `--all-features`，包含文档引擎与共享测试夹具。各平台实际结果分别记录。
+桌面 CI 的 `preflight` 解析并检查锁定的生产依赖图。`main` 的桌面生产构建及 `scope=full` 的手动构建保留独立 updater 和 Windows CRT 断言。默认 PR 测试在统一的 `native-markdown-tests,test-support` 图中编译真实二进制，Windows 同时构建图形夹具和待检查的 updater。原生字体 `native_markdown`、`native_terminal` 与 CLI 端到端 harness 独立执行，doctest 也单独运行。
 
-普通桌面／headless 测试先以相同 package／feature 集合和 `--lib --no-run` 完成 library 单元测试编译，再以不带目标过滤的 `--no-run` 编译全部普通目标；后一步复用已有产物，保留 binary、integration test 与后续完整执行时的 doctest 范围。该调度避免同包的普通 library 与大型 libtest 同时争用资源，不改变编译 profile。普通完整目标、原生 Markdown 和原生 terminal 各有独立编译步骤，所有编译步骤仍为 30 分钟；实际普通测试执行为 20 分钟，原生执行为 10 分钟。普通测试使用 `--no-fail-fast` 收集各目标结果，其断言失败后仍执行已可编译的原生目标；编译失败或取消不冒充执行成功。生产检查与构建各为 30 分钟，job 总上限仍为 90 分钟，作为全部步骤共享的最终保护，不保证每一步同时耗尽自身上限。各轮使用相同显式 `--target`，编译日志与执行日志分别定位失败，不把测试编译耗时计作消费者运行耗时。
+Linux headless 的普通 nextest 运行启用文档引擎、GSSAPI 和共享测试夹具。三个 `native_ssh_*` 集成目标需要显式启用 `lyrel-server/native-ssh-tests` 和真实 SSH 主机，见 [SSH 专项验收](/remote/ssh)。生产构建仍可用 `--all-features`。编译、逐例测试和整个 job 各有独立的超时限制，实际值见工作流。
 
 `239a1b4c` 的 macOS 日志中，测试编译于 `14:48:12` 开始，根包于 `14:55:35` 开始编译，未使用代码诊断持续至 `15:07:00`，`15:18:25` 达到 30 分钟上限，尚未进入测试执行。旧入口把 `src/main.rs` 同时作为产品 binary 与原生 test target，并随自定义 runner 编译全部 `cfg(test)` 模块。共享 library 与独立 feature-gated 原生入口移除这个重复编译边界；步骤拆分不延长原有 30 分钟编译上限，也不据日志推断所有耗时均来自警告或断言卡死。新候选仍须取得自己的完整平台结果。
 
@@ -473,7 +470,7 @@ node scripts/rerun-failed-ci.cjs <run-id> --dry-run
 node scripts/rerun-failed-ci.cjs <run-id>
 ```
 
-该入口仅接受当前仓库已结束且有失败／取消项的 CI 或 Release，使用 `gh run rerun --failed`；确定性代码失败应先修复再跑新提交。main 每个提交的验证记录、PR 旧运行取消策略和矩阵 `fail-fast: false` 保持不变。
+该入口仅接受当前仓库已结束且有失败或取消项的 CI 或 Release，使用 `gh run rerun --failed`。确定性代码错误应先修复，再验证新提交。`main` 和 Release 矩阵继续收集各平台结果。PR 可以取消过时运行，快速层可在一个平台失败时取消同矩阵的其余平台。
 
 发布时将 `v<version>` 标签指向已通过 CI 的提交；`.github/workflows/release.yml` 汇总八件平台资产
 及 `checksums.txt`，创建草稿。核对同一提交的 CI、资产及 SHA-256，补充发布说明和签名限制后再发布为 stable。
@@ -484,7 +481,7 @@ node scripts/rerun-failed-ci.cjs <run-id>
 
 可信 main push 在三个独立 server 构建及平台断言成功后上传 `ci-server-<target>`，保存 7 天。Release 可复用同仓库、同 SHA、已完整成功的 main CI 产物；PR、fork 和手动 CI 产物不作为发布来源。下载固定 artifact ID，核验来源 run、目标、文件 SHA-256、Cargo 输入及 Rust／Zig／SDK 构建契约，再执行原有静态链接／Mach-O／签名检查。缺失、过期、下载失败或契约不匹配时正常重新构建，不放宽校验；Windows server 不参与此复用。该机制不是字节级可重现构建声明。路径裁剪未生成该 SHA 的 server artifact 时，同样由 Release 正常构建。
 
-CI 与 Release 使用独立的稳定缓存键，保留 toolchain、target、flags 和依赖哈希隔离。仅 `main` 保存缓存，标签和 PR 只读取；不同标签不能读取彼此保存的缓存，但可以读取默认分支缓存，见 [GitHub 缓存访问规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)。冷缓存仍需完整编译，可在 `main` 手动预热发行依赖：
+CI 与 Release 使用独立的 Rust 缓存键，按 toolchain、target、flags 和依赖哈希隔离。Rust 归档仅在 `main` 上成功时写回。标签和 PR 可读取默认分支缓存。参见 [GitHub 缓存访问规则](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching#restrictions-for-accessing-a-cache)。可用 `gh api repos/dlivxpr/lyrel/actions/cache/usage` 查看实际占用。冷缓存需要完整编译，发行依赖可通过 `main` 的手动发布验证预热。
 
 ```bash
 gh workflow run release.yml --repo dlivxpr/lyrel --ref main

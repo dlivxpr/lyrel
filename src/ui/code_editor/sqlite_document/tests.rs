@@ -108,7 +108,7 @@ fn cells_contain(dump: &(Vec<String>, Vec<Vec<String>>), needle: &str) -> bool {
 /// exact values the reader must preserve.
 fn people_database(dir: &Path, name: &str, marker: &str, rows: usize) -> PathBuf {
     let path = dir.join(name);
-    let connection = rusqlite::Connection::open(&path).expect("fixture database opens");
+    let mut connection = rusqlite::Connection::open(&path).expect("fixture database opens");
     connection
         .execute_batch(
             "CREATE TABLE people(
@@ -123,7 +123,8 @@ fn people_database(dir: &Path, name: &str, marker: &str, rows: usize) -> PathBuf
              CREATE TABLE z_orders(id INTEGER, total REAL);",
         )
         .expect("fixture schema");
-    let mut insert = connection
+    let transaction = connection.transaction().expect("fixture transaction");
+    let mut insert = transaction
         .prepare("INSERT INTO people(id, name, score, avatar, note) VALUES(?1, ?2, ?3, ?4, ?5)")
         .expect("insert statement");
     insert
@@ -165,7 +166,7 @@ fn people_database(dir: &Path, name: &str, marker: &str, rows: usize) -> PathBuf
             .expect("generated row");
     }
     drop(insert);
-    drop(connection);
+    transaction.commit().expect("commit fixture rows");
     path
 }
 
