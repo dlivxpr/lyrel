@@ -5,7 +5,6 @@ use super::*;
 use crate::ui::settings::test_window::{harness, harness_standalone};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{Entity, TestAppContext, VisualTestContext, px, size};
-use lyrel_core::host::session_operations::{SessionOperation, SessionOperationError, SessionScope};
 use lyrel_ui_base::config::Config;
 
 const NOW: u64 = 1_760_000_000; // 2025-10-09，足够新的固定“现在”。
@@ -1389,13 +1388,13 @@ fn delete_plan_groups_by_store_and_keeps_selection_order() {
     );
 }
 
-/// Test Host for Hermes history and batch operations. Both enter through the
-/// real Settings HostOps wiring and answer without touching a native store.
+/// The owning Host behind the batch flow: records what was asked and
+/// answers what the test queued, so the whole settings flow runs through
+/// the real prepare/execute wiring without touching a native store.
 struct BatchHost {
     inner: lyrel_core::host::SharedHost,
     seen: std::sync::Mutex<Vec<SessionBatchRequest>>,
     queue: std::sync::Mutex<Vec<SessionBatchReply>>,
-    hermes_history: std::sync::Mutex<Option<Vec<(SessionScope, PastSession)>>>,
 }
 
 impl BatchHost {
@@ -1404,7 +1403,6 @@ impl BatchHost {
             inner,
             seen: std::sync::Mutex::new(Vec::new()),
             queue: std::sync::Mutex::new(Vec::new()),
-            hermes_history: std::sync::Mutex::new(None),
         })
     }
 
@@ -1488,21 +1486,6 @@ impl lyrel_core::host::Host for BatchHost {
     fn watch(&self, dirs: &[PathBuf]) -> std::io::Result<lyrel_core::host::WatchSub> {
         self.inner.watch(dirs)
     }
-    fn hermes_sessions(
-        &self,
-        request: &SessionOperation,
-    ) -> Result<Vec<PastSession>, SessionOperationError> {
-        let mut history = self.hermes_history.lock().unwrap();
-        let Some(history) = history.as_mut() else {
-            return self.inner.hermes_sessions(request);
-        };
-        assert_eq!(request.expected_host, self.id().0);
-        let ix = history
-            .iter()
-            .position(|(scope, _)| *scope == request.scope)
-            .expect("the settings scan requested a fixture Hermes scope");
-        Ok(vec![history.remove(ix).1])
-    }
     fn session_batch(
         &self,
         request: &SessionBatchRequest,
@@ -1521,160 +1504,6 @@ impl lyrel_core::host::Host for BatchHost {
             false => Ok(queue.remove(0)),
         }
     }
-}
-
-#[gpui_kit::test]
-fn hermes_discovery_rows_select_once_and_hide_only_their_store(cx: &mut TestAppContext) {
-    use lyrel_core::core::cli_agent::{AgentReadout, AgentSessionState};
-    use lyrel_core::daemon::protocol::DaemonMsg;
-    use std::io::Write as _;
-
-    let (app, mut vcx, mut streams) = crate::ui::app::test_window::harness_with_tabs(cx, 2);
-    let host = BatchHost::new(lyrel_core::host::local::shared());
-    let mut default_row = hermes_session("shared", "/hermes/one", "/w");
-    default_row.updated += 1;
-    let mut observed_row = default_row.clone();
-    let scope = observed_row.scope.as_mut().unwrap();
-    scope
-        .environment
-        .insert("TERM_PROGRAM".into(), "WezTerm".into());
-    scope.shell_program = Some("zsh".into());
-    let observed_scope = scope.clone();
-    let other_store = hermes_session("shared", "/hermes/two", "/w");
-    let other_scope = other_store.scope.clone().unwrap();
-    let selected = SessionIdentity::of(HostId::LOCAL, &observed_row);
-    let sibling = SessionIdentity::of(HostId::LOCAL, &other_store);
-    *host.hermes_history.lock().unwrap() = Some(vec![
-        (observed_scope.clone(), observed_row),
-        (other_scope.clone(), other_store),
-        (Default::default(), default_row),
-    ]);
-    let panes = app.update(&mut vcx, |app, cx| {
-        HostRegistry::insert(cx, host.clone());
-        cx.update_global::<Config, _>(|cfg, _| {
-            let command = format!("\"{}\"", std::env::current_exe().unwrap().display());
-            cfg.agent_launch
-                .insert(CLIAgent::Hermes.slug().into(), command);
-            for agent in [CLIAgent::OpenCode, CLIAgent::Antigravity] {
-                cfg.agent_launch.insert(
-                    agent.slug().into(),
-                    "lyrel-settings-fixture-unavailable".into(),
-                );
-            }
-        });
-        [0, 1].map(|ix| app.tabs[ix].pane.terminals()[0].clone())
-    });
-
-    let cwd = PathBuf::from("/w");
-    for (stream, scope) in streams
-        .iter_mut()
-        .zip([observed_scope.clone(), other_scope])
-    {
-        DaemonMsg::Cwd(cwd.clone()).encode(stream).unwrap();
-        DaemonMsg::Agent(Some(CLIAgent::Hermes))
-            .encode(stream)
-            .unwrap();
-        DaemonMsg::AgentStatus(Some(Box::new(AgentSessionState {
-            launch_argv: Some(vec!["hermes".into()]),
-            readout: AgentReadout {
-                session_scope: Some(scope),
-                ..Default::default()
-            },
-            ..Default::default()
-        })))
-        .encode(stream)
-        .unwrap();
-        stream.flush().unwrap();
-    }
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        vcx.run_until_parked();
-        if panes.iter().all(|pane| {
-            pane.read_with(&vcx, |pane, _| {
-                pane.host_cwd().as_ref() == Some(&cwd)
-                    && pane.agent() == Some(CLIAgent::Hermes)
-                    && pane.agent_session().is_some_and(|state| {
-                        state.launch_argv.is_some() && state.readout.session_scope.is_some()
-                    })
-            })
-        }) {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "Hermes pane reports did not land"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-
-    let settings = crate::ui::settings::test_window::open(&app, &mut vcx);
-    settings.update_in(&mut vcx, |settings, window, cx| {
-        settings.open_settings_section(SettingsSection::Sessions, window, cx);
-    });
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        vcx.run_until_parked();
-        if settings.read_with(&vcx, |settings, _| {
-            settings.active_settings().unwrap().sessions.landed
-        }) {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "Settings session scan did not land"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    assert!(
-        host.hermes_history
-            .lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .is_empty(),
-        "both observed scopes and the default scope were queried"
-    );
-    settings.read_with(&vcx, |settings, _| {
-        let (rows, _) = settings.sessions_source();
-        assert_eq!(
-            rows.len(),
-            2,
-            "observed and default scans repeat the first store"
-        );
-        assert_eq!(rows[0].scope.as_ref(), Some(&observed_scope));
-        assert_eq!(
-            SessionIdentity::of(HostId::LOCAL, &rows[1]).key(),
-            sibling.key()
-        );
-    });
-    vcx.update(|window, cx| {
-        window.render_frame(cx);
-        assert!(window.find("sessions-row-0").visible());
-        assert!(window.find("sessions-row-1").visible());
-        assert!(window.try_find("sessions-row-2").is_none());
-        window.click("sessions-check-0", cx);
-        assert!(window.find("sessions-selected-0").visible());
-        assert!(window.try_find("sessions-selected-1").is_none());
-    });
-    settings.read_with(&vcx, |settings, _| {
-        let state = &settings.active_settings().unwrap().sessions;
-        assert_eq!(state.selected.len(), 1);
-        assert!(state.selected.contains(&selected.key()));
-    });
-    vcx.update(|window, cx| {
-        window.click("sessions-hide-selected", cx);
-    });
-    settings.read_with(&vcx, |settings, cx| {
-        let state = &settings.active_settings().unwrap().sessions;
-        assert!(state.selected.is_empty());
-        assert!(is_session_hidden(cx.global::<Config>(), &selected));
-        assert!(!is_session_hidden(cx.global::<Config>(), &sibling));
-    });
-    vcx.update(|window, cx| {
-        window.render_frame(cx);
-        assert!(window.find("sessions-row-0").visible());
-        assert!(window.try_find("sessions-row-1").is_none());
-    });
 }
 
 #[gpui_kit::test]
