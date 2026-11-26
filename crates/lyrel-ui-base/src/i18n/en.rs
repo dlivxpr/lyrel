@@ -2865,6 +2865,13 @@ pub fn translate_en(key: L10nKey) -> &'static str {
         L10nKey::PanelSessionsEmptyHint => {
             "Run an agent here and its saved conversations will show up."
         }
+        L10nKey::PanelSessionsSearch => "Search session titles",
+        L10nKey::PanelSessionsSearchHost => "This host",
+        L10nKey::PanelSessionsSearchHere => "Selected directory",
+        L10nKey::PanelSessionsSearchElsewhere => "Other directories",
+        L10nKey::PanelSessionsMatchCount => "Matches: {count}",
+        L10nKey::PanelSessionsNoMatch => "No matching session titles",
+        L10nKey::PanelSessionsNoMatchHint => "Try a shorter search or clear the field.",
         L10nKey::PanelSessionsDisconnected => "This host is disconnected.",
         L10nKey::PanelSessionsDisconnectedHint => {
             "Reconnect to browse the saved sessions on that machine."

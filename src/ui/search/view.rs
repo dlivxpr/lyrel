@@ -1180,7 +1180,7 @@ const TABS_H: f32 = 34.;
 /// title the row picks out. `None` for an empty query, or one the fuzzy
 /// scorer matched as scattered letters — picking out stray letters reads as
 /// noise, not as an answer.
-fn match_range(title: &str, query: &str) -> Option<std::ops::Range<usize>> {
+pub(in crate::ui) fn match_range(title: &str, query: &str) -> Option<std::ops::Range<usize>> {
     let query = query.trim();
     if query.is_empty() {
         return None;

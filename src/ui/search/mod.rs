@@ -24,6 +24,7 @@ pub(crate) use lifecycle::SearchState;
 pub(crate) use lyrel_ui_base::file_search::FileList;
 pub(crate) use sources::{Catalog, LiveQuery};
 pub(crate) use view::is_edit_gesture;
+pub(super) use view::match_range;
 pub(crate) use view::{KEY_CONTEXT, SearchEvent, SearchView};
 
 use lyrel_ui_base::i18n::{L10nKey, t};

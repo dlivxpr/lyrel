@@ -631,6 +631,8 @@ cargo test --locked -p lyrel-terminal --lib view::gpui_tests::graphics_consumer_
 
 源码中的测试断言不是执行结果。production paint claim 也不是 GPU 最终像素；原生窗口图文对齐、交互以及真实 SSH／远端组合须单独验收。旧版本静态重放的历史通过记录不能计作新身份或 live streaming 通过。
 
+omp `19.2.1` 的 assistant transcript 在输出期间将 SVG 围栏交给 Markdown 路径，内容停止流式更新后才提取图形。它的提取器还要求围栏闭合。这会推迟向终端发送图像，Lyrel 的 Kitty 渲染器只能在收到图像后绘制。上面的 `18.18.6` 夹具锁定版本，覆盖的是该版本的中间帧行为。[assistant transcript](https://github.com/can1357/oh-my-pi/blob/v19.2.1/packages/coding-agent/src/ui/transcript/messages/assistant-message.tsx#L438-L450) · [SVG 围栏提取](https://github.com/can1357/oh-my-pi/blob/v19.2.1/packages/coding-agent/src/ui/transcript/figures/figure-markdown.tsx#L77-L86)
+
 上游接口依据：[正式版本 provider 格式](https://github.com/can1357/oh-my-pi/blob/v18.18.6/docs/models.md)、[原生终端诊断](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/apps/debug/terminal-info.ts)、[smooth reveal 设置](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/coding-agent/src/modes/settings.ts)、[逐 grapheme 揭示与关闭后仍保留 transient 更新](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/coding-agent/src/modes/controllers/streaming-reveal.ts)、[部分 SVG 修补](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/chat/svg-source.ts)、[SvgFigure 完整修订替换](https://github.com/can1357/oh-my-pi/blob/v18.18.6/packages/tui/src/chat/svg-figure.ts) 和[原生 SVG 栅格尺寸／透明 padding](https://github.com/can1357/oh-my-pi/blob/v18.18.6/crates/pi-natives/src/svg.rs)。
 
 

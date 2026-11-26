@@ -19,7 +19,8 @@
 use std::path::{Path, PathBuf};
 
 use gpui_kit::TestSupportExt as _;
-use gpui_kit::base::actions::{Confirm, SelectDown, SelectUp};
+use gpui_kit::base::actions::{Cancel, Confirm, SelectDown, SelectUp};
+use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme as _, Sizable as _, h_flex, v_flex};
 use gpui_kit::{
@@ -34,7 +35,7 @@ use lyrel_core::host::session_operations::{
 use lyrel_terminal::view::TerminalView;
 use lyrel_ui_base::config::Config;
 use lyrel_ui_base::host_ops::{HostId, HostOps};
-use lyrel_ui_base::i18n::{L10nKey, t};
+use lyrel_ui_base::i18n::{L10nKey, t, t_fmt};
 
 use crate::core::cli_agent::CLIAgent;
 use crate::ui::app::LyrelApp;
@@ -1112,6 +1113,9 @@ pub(crate) struct SessionHistoryPanel {
     /// The deletion revision the current bound was taken at.
     bound_deletions: u64,
     listing: SessionListing,
+    search_input: Option<Entity<InputState>>,
+    query: String,
+    bound_search: bool,
     generation: u64,
     scanning: bool,
     landed: bool,
@@ -1197,10 +1201,19 @@ impl SessionHistoryPanel {
     }
 }
 
-/// Height of the directory selector row and of one session row; the list's
-/// fixed pitch, used to scroll the keyboard's selection into view.
+/// Row heights used by the list and its keyboard scrolling.
 const SCOPE_ROW_H: f32 = 30.;
 const ROW_H: f32 = 28.;
+const SEARCH_GROUP_H: f32 = 22.;
+const SEARCH_PATH_ROW_H: f32 = 43.;
+
+fn listed_in_directory(session: &PastSession, directory: Option<&Path>, separator: char) -> bool {
+    directory
+        .zip(session.cwd.as_deref())
+        .is_some_and(|(dir, cwd)| {
+            crate::core::agent_history::directory_matches_with(cwd, dir, separator)
+        })
+}
 /// The agent disc, the same size Search Everywhere's session rows use.
 const ROW_AVATAR: f32 = 18.;
 
@@ -1291,7 +1304,9 @@ impl LyrelApp {
             repo,
             dir,
         };
+        let searching = !self.session_history.query.is_empty();
         if self.session_history.bound == wanted
+            && self.session_history.bound_search == searching
             && self.session_history.bound_deletions == self.session_history.deletions
         {
             return;
@@ -1305,9 +1320,10 @@ impl LyrelApp {
         self.session_history.selected = None;
         self.session_history.close_actions(cx);
         self.session_history.bound_deletions = self.session_history.deletions;
-        // No directory (no pane yet): nothing to match, and scanning a
-        // made-up home would list sessions the tool cannot scope.
-        let Some(dir) = wanted.dir.clone() else {
+        self.session_history.bound_search = searching;
+        self.session_history.generation += 1;
+        // A title search is host-wide, including when no cwd has arrived.
+        if wanted.dir.is_none() && !searching {
             self.session_history.bound = wanted;
             self.session_history.scanning = false;
             self.session_history.landed = true;
@@ -1335,7 +1351,7 @@ impl LyrelApp {
         // to re-bind a bound that has already moved on.
         self.session_history.bound = wanted;
         self.session_history.scanning = true;
-        self.session_history.generation += 1;
+        let dir = self.session_history.bound.dir.clone();
         let generation = self.session_history.generation;
         let panes: Vec<Entity<TerminalView>> = self
             .tabs
@@ -1343,18 +1359,27 @@ impl LyrelApp {
             .flat_map(|tab| tab.pane.terminals())
             .collect();
         let agents = self.offered_agents(cx);
+        let default_cwd = if searching {
+            pane.as_ref()
+                .filter(|pane| pane.read(cx).host_id() == self.session_history.bound.host)
+                .and_then(|pane| pane.read(cx).host_cwd())
+                .or_else(|| {
+                    crate::ui::desktop_lookups::home_for_host(cx, self.session_history.bound.host)
+                })
+        } else {
+            dir.clone()
+        };
         let mut scan = plan_scan(
             self.session_history.bound.host,
             &panes,
             &agents,
-            &dir,
+            default_cwd.as_deref().unwrap_or_else(|| Path::new("")),
             &cx.global::<Config>().agent_launch.clone(),
             cx,
         );
-        // The tool lists one directory: the owning Host filters its
-        // file-scanned stores to it before the recent cap, and service
-        // sources are filtered to it when the listing merges.
-        scan.directory = Some(dir);
+        if !searching {
+            scan.directory = dir;
+        }
         let host_id = self.session_history.bound.host;
         let connection = self.session_history.bound.connection;
         // The native portion answers in milliseconds; it lands on its own,
@@ -1494,7 +1519,9 @@ impl LyrelApp {
         self.session_history.listing = listing;
         self.session_history.landed = true;
         let new_rows = self.session_rows(window, cx);
-        let same_row = |a: &PastSession, b: &PastSession| a.agent == b.agent && a.id == b.id;
+        let same_row = |a: &PastSession, b: &PastSession| {
+            same_listed_session(a, b) && a.cwd == b.cwd && a.scope == b.scope
+        };
         self.session_history.selected = self
             .session_history
             .selected
@@ -1513,40 +1540,106 @@ impl LyrelApp {
         cx.notify();
     }
 
-    /// The rows the tool would draw right now: the landed listing filtered
-    /// by the current directory and the user's hidden sessions, recent
-    /// first. Shared by the render and the keyboard handlers so selection
-    /// always names the row it names on screen.
+    /// One row projection for painting, keyboard selection and activation.
     fn session_rows(&self, window: &Window, cx: &App) -> Vec<PastSession> {
-        let Some(dir) = self.session_history.wanted_dir(
+        let panel = &self.session_history;
+        let dir = panel.wanted_dir(
             self.context_pane(window, cx)
                 .and_then(|pane| pane.read(cx).host_cwd()),
-        ) else {
-            return Vec::new();
-        };
+        );
         let cfg = cx.global::<Config>();
-        let host = self.session_history.bound.host;
-        // The rows judge the owning Host's records by the owning Host's
-        // path semantics (a remote Linux host stays case-sensitive even
-        // under a Windows client), not by this machine's.
-        let host_separator =
-            lyrel_ui_base::host_registry::HostRegistry::lookup(cx, self.session_history.bound.host)
-                .map_or(std::path::MAIN_SEPARATOR, |host| host.separator());
-        let mut rows: Vec<PastSession> = self
-            .session_history
+        let host = panel.bound.host;
+        let separator = self.session_history_separator(cx);
+        let visible = panel
             .listing
             .sessions
             .iter()
-            .filter(|s| !is_session_hidden(cfg, &SessionIdentity::of(host, s)))
-            .filter(|s| {
-                s.cwd.as_deref().is_some_and(|cwd| {
-                    crate::core::agent_history::directory_matches_with(cwd, &dir, host_separator)
-                })
+            .filter(|session| !is_session_hidden(cfg, &SessionIdentity::of(host, session)));
+        if panel.query.is_empty() {
+            let mut rows: Vec<_> = visible
+                .filter(|session| listed_in_directory(session, dir.as_deref(), separator))
+                .cloned()
+                .collect();
+            rows.sort_by_key(|s| std::cmp::Reverse(s.updated));
+            return rows;
+        }
+
+        let mut hits: Vec<_> = visible
+            .filter_map(|session| {
+                let score = lyrel_ui_base::fuzzy::fuzzy_score(&panel.query, &session.title)?;
+                let elsewhere = !listed_in_directory(session, dir.as_deref(), separator);
+                Some((
+                    (
+                        elsewhere,
+                        std::cmp::Reverse(score),
+                        std::cmp::Reverse(session.updated),
+                    ),
+                    session,
+                ))
             })
-            .cloned()
             .collect();
-        rows.sort_by_key(|s| std::cmp::Reverse(s.updated));
-        rows
+        hits.sort_by_key(|(key, _)| *key);
+        hits.into_iter()
+            .map(|(_, session)| session.clone())
+            .collect()
+    }
+
+    fn session_history_separator(&self, cx: &App) -> char {
+        lyrel_ui_base::host_registry::HostRegistry::lookup(cx, self.session_history.bound.host)
+            .map_or(std::path::MAIN_SEPARATOR, |host| host.separator())
+    }
+
+    fn session_history_search(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let input = self
+            .session_history
+            .search_input
+            .get_or_insert_with(|| {
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder(t(L10nKey::PanelSessionsSearch))
+                        .clean_on_escape()
+                });
+                cx.subscribe_in(&input, window, |this, input, event, window, cx| {
+                    if matches!(event, InputEvent::Change) {
+                        let value = input.read(cx).value();
+                        let query = value.trim();
+                        if this.session_history.query != query {
+                            this.session_history.query.clear();
+                            this.session_history.query.push_str(query);
+                            this.session_history.selected = None;
+                            this.session_history.close_actions(cx);
+                            this.right_panel
+                                .scroll
+                                .set_offset(gpui_kit::point(px(0.), px(0.)));
+                            this.sync_session_history(window, cx);
+                        }
+                    }
+                })
+                .detach();
+                input
+            })
+            .clone();
+        v_flex()
+            .id("panel-sessions-search")
+            .test_support()
+            .capture_key_down(
+                cx.listener(|this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "down"
+                        && !event.keystroke.modifiers.modified()
+                        && !this.session_rows(window, cx).is_empty()
+                    {
+                        this.session_history_focus.focus(window, cx);
+                        this.move_history_selection(true, window, cx);
+                        cx.stop_propagation();
+                    }
+                }),
+            )
+            .child(self.panel_search(&input, cx))
+            .into_any_element()
     }
 
     pub(crate) fn render_panel_sessions(
@@ -1556,31 +1649,56 @@ impl LyrelApp {
     ) -> AnyElement {
         self.sync_session_history(window, cx);
         let title = self.panel_title(t(L10nKey::PanelSessionsTitle), None, None, window, cx);
+        let searching = !self.session_history.query.is_empty();
         let dir = self.session_history.wanted_dir(
             self.context_pane(window, cx)
                 .and_then(|pane| pane.read(cx).host_cwd()),
         );
-        let Some(dir) = dir else {
+        let host = self.session_history.bound.host;
+        let home = crate::ui::desktop_lookups::home_for_host(cx, host);
+        let selector = dir
+            .as_deref()
+            .map(|dir| self.session_history_selector(window, dir, home.as_deref(), cx));
+        let search = self.session_history_search(window, cx);
+        let mut header = v_flex()
+            .flex_none()
+            .child(title)
+            .children(selector)
+            .child(search);
+        if dir.is_none() && !searching {
             let body = self.panel_empty(
                 t(L10nKey::PanelNoWorkingDirectory),
                 Some(t(L10nKey::PanelNoWorkingDirectoryHint)),
                 cx,
             );
-            return self.panel_scroll(body, title);
-        };
+            return self.panel_scroll(body, header.into_any_element());
+        }
         let rows = self.session_rows(window, cx);
-        let home = crate::ui::desktop_lookups::home_for_host(cx, self.session_history.bound.host);
+        let separator = self.session_history_separator(cx);
         let health = self.session_history.listing.health(rows.len());
-        let selector = self.session_history_selector(window, &dir, home.as_deref(), cx);
+        if searching {
+            let count = rows.len().to_string();
+            header = header.child(
+                h_flex()
+                    .justify_between()
+                    .px(px(TEXT_INSET))
+                    .pt(px(6.))
+                    .pb(px(3.))
+                    .text_size(rems(META))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t(L10nKey::PanelSessionsSearchHost))
+                    .child(t_fmt(
+                        L10nKey::PanelSessionsMatchCount,
+                        &[("count", &count)],
+                    )),
+            );
+        }
         let body: AnyElement = match health {
-            SessionHealth::Disconnected => v_flex()
-                .child(selector)
-                .child(self.panel_empty(
-                    t(L10nKey::PanelSessionsDisconnected),
-                    Some(t(L10nKey::PanelSessionsDisconnectedHint)),
-                    cx,
-                ))
-                .into_any_element(),
+            SessionHealth::Disconnected => self.panel_empty(
+                t(L10nKey::PanelSessionsDisconnected),
+                Some(t(L10nKey::PanelSessionsDisconnectedHint)),
+                cx,
+            ),
             // Loading covers the first trip, every later scope change, and
             // however long the service portion is still out: with a scan in
             // flight, zero rows — Empty or Unsupported — is the trip's
@@ -1590,13 +1708,10 @@ impl LyrelApp {
             SessionHealth::Empty | SessionHealth::Unsupported
                 if !self.session_history.landed || self.session_history.scanning =>
             {
-                v_flex()
-                    .child(selector)
-                    .child(self.panel_empty(t(L10nKey::PanelLoading), None, cx))
-                    .into_any_element()
+                self.panel_empty(t(L10nKey::PanelLoading), None, cx)
             }
             SessionHealth::Unsupported => {
-                let mut body = v_flex().child(selector).child(self.panel_empty(
+                let mut body = v_flex().child(self.panel_empty(
                     t(L10nKey::PanelSessionsUnsupported),
                     Some(t(L10nKey::PanelSessionsUnsupportedHint)),
                     cx,
@@ -1617,11 +1732,15 @@ impl LyrelApp {
                 // membership is known) with other sources failing beside
                 // still says which ones could not be listed, with their own
                 // errors and limits.
-                let mut body = v_flex().child(selector).child(self.panel_empty(
-                    t(L10nKey::PanelSessionsEmpty),
-                    Some(t(L10nKey::PanelSessionsEmptyHint)),
-                    cx,
-                ));
+                let (label, hint) = if searching {
+                    (
+                        L10nKey::PanelSessionsNoMatch,
+                        L10nKey::PanelSessionsNoMatchHint,
+                    )
+                } else {
+                    (L10nKey::PanelSessionsEmpty, L10nKey::PanelSessionsEmptyHint)
+                };
+                let mut body = v_flex().child(self.panel_empty(t(label), Some(t(hint)), cx));
                 if !self.session_history.listing.errors.is_empty() {
                     body = body.child(session_source_diagnostics(
                         &self.session_history.listing.errors,
@@ -1662,15 +1781,62 @@ impl LyrelApp {
                                 cx.stop_propagation();
                             }
                         }),
-                    );
+                    )
+                    .on_action(cx.listener(|this, _: &Cancel, window, cx| {
+                        if !this.session_history.query.is_empty()
+                            && let Some(input) = &this.session_history.search_input
+                        {
+                            input.update(cx, |input, cx| {
+                                input.clean(window, cx);
+                                input.focus(window, cx);
+                            });
+                        }
+                    }));
+                let mut previous_group = None;
                 for (ix, session) in rows.iter().enumerate() {
-                    list =
-                        list.child(self.session_history_row(ix, session, selected == Some(ix), cx));
+                    let here = listed_in_directory(session, dir.as_deref(), separator);
+                    if searching && previous_group != Some(here) {
+                        previous_group = Some(here);
+                        list = list.child(
+                            div()
+                                .h(px(SEARCH_GROUP_H))
+                                .px(px(TEXT_INSET))
+                                .text_size(rems(META))
+                                .text_color(cx.theme().muted_foreground)
+                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                .child(t(if here {
+                                    L10nKey::PanelSessionsSearchHere
+                                } else {
+                                    L10nKey::PanelSessionsSearchElsewhere
+                                })),
+                        );
+                    }
+                    let path = if searching && !here {
+                        Some(session.cwd.as_deref().map_or_else(
+                            || t(L10nKey::PanelNoWorkingDirectory).to_string(),
+                            |dir| crate::ui::home::display_path(dir, home.as_deref()),
+                        ))
+                    } else {
+                        None
+                    };
+                    list = list.child(self.session_history_row(
+                        ix,
+                        session,
+                        selected == Some(ix),
+                        path,
+                        cx,
+                    ));
                 }
-                v_flex().child(selector).child(list).into_any_element()
+                if searching && !self.session_history.listing.errors.is_empty() {
+                    list = list.child(session_source_diagnostics(
+                        &self.session_history.listing.errors,
+                        cx,
+                    ));
+                }
+                list.into_any_element()
             }
         };
-        self.panel_scroll(body, title)
+        self.panel_scroll(body, header.into_any_element())
     }
 
     /// The header's one row: the scope label, the directory it means, and
@@ -1816,6 +1982,7 @@ impl LyrelApp {
         ix: usize,
         session: &PastSession,
         selected: bool,
+        path: Option<String>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let sf = cx.global::<lyrel_ui_base::presets::Surfaces>().sidebar;
@@ -1839,13 +2006,28 @@ impl LyrelApp {
             .actions_row
             .filter(|row| *row == ix)
             .and_then(|_| self.session_history.actions_menu.clone());
+        let title = gpui_kit::SharedString::from(session.title.clone());
+        let title = match crate::ui::search::match_range(&title, &self.session_history.query) {
+            Some(range) => gpui_kit::StyledText::new(title).with_highlights([(
+                range,
+                gpui_kit::HighlightStyle {
+                    font_weight: Some(gpui_kit::FontWeight::SEMIBOLD),
+                    ..Default::default()
+                },
+            )]),
+            None => gpui_kit::StyledText::new(title),
+        };
 
         let mut row = h_flex()
             .id(id.clone())
             .test_support()
             .group(id.clone())
             .w_full()
-            .h(px(ROW_H))
+            .h(px(if path.is_some() {
+                SEARCH_PATH_ROW_H
+            } else {
+                ROW_H
+            }))
             .px(px(TEXT_INSET))
             .items_center()
             .gap(px(8.))
@@ -1869,13 +2051,25 @@ impl LyrelApp {
                 cx,
             ))
             .child(
-                div()
+                v_flex()
                     .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .text_size(rems(TEXT))
-                    .text_color(fg)
-                    .child(session.title.clone()),
+                    .child(
+                        div()
+                            .truncate()
+                            .text_size(rems(TEXT))
+                            .text_color(fg)
+                            .child(title),
+                    )
+                    .children(path.map(|path| {
+                        div()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis_start()
+                            .text_size(rems(META))
+                            .text_color(muted)
+                            .child(path)
+                    })),
             )
             .child(
                 div()
@@ -1884,7 +2078,7 @@ impl LyrelApp {
                     .text_color(muted)
                     .child(crate::ui::home::relative_time(now, session.updated)),
             );
-        if selected {
+        if selected && self.session_history.query.is_empty() {
             row = row.child(
                 h_flex()
                     .flex_none()
@@ -2102,11 +2296,28 @@ impl LyrelApp {
         };
         if self.session_history.selected != Some(next) {
             self.session_history.selected = Some(next);
-            // Keep the keyboard's row in view: rows share one fixed pitch
-            // under the selector, so the offset is arithmetic.
-            self.right_panel.scroll.set_offset(gpui_kit::point(
+            let scroll = &self.right_panel.scroll;
+            let mut top = next as f32 * ROW_H;
+            let mut height = ROW_H;
+            if !self.session_history.query.is_empty() {
+                let dir = self.session_history.bound.dir.as_deref();
+                let separator = self.session_history_separator(cx);
+                let here = rows.partition_point(|row| listed_in_directory(row, dir, separator));
+                top += SEARCH_GROUP_H;
+                if next >= here {
+                    if here > 0 {
+                        top += SEARCH_GROUP_H;
+                    }
+                    top += (next - here) as f32 * (SEARCH_PATH_ROW_H - ROW_H);
+                    height = SEARCH_PATH_ROW_H;
+                }
+            }
+            let visible_top = -scroll.offset().y;
+            let viewport = scroll.bounds().size.height;
+            let target = visible_top.min(px(top)).max(px(top + height) - viewport);
+            scroll.set_offset(gpui_kit::point(
                 px(0.),
-                px(SCOPE_ROW_H + next as f32 * ROW_H),
+                -target.clamp(px(0.), scroll.max_offset().y),
             ));
             cx.notify();
         }
@@ -3384,6 +3595,68 @@ mod tests {
                 "the source that failed is named in the empty state: {text}"
             );
         });
+
+        app.update_in(&mut vcx, |app, window, cx| {
+            let input = app
+                .session_history
+                .search_input
+                .as_ref()
+                .expect("session title search field");
+            input.update(cx, |input, cx| input.focus(window, cx));
+        });
+        let set_search = |vcx: &mut gpui_kit::VisualTestContext, text: &str| {
+            vcx.update(|window, cx| {
+                window.press("secondary-a", cx);
+                window.input(text, cx);
+            });
+        };
+        set_search(&mut vcx, "mpn title");
+        wait_for_history(&mut vcx, |vcx| {
+            app.update_in(vcx, |app, window, cx| {
+                !app.session_history.scanning
+                    && ids(&app.session_rows(window, cx)) == ["omp-native"]
+            })
+        });
+        vcx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(
+                observed(window, "panel-sessions-row-0"),
+                "a fuzzy title match outside the selected directory is shown"
+            );
+        });
+        vcx.update(|window, cx| window.press("down", cx));
+        assert!(
+            app.update_in(&mut vcx, |app, window, _cx| {
+                app.session_history_focus.is_focused(window)
+                    && app.session_history.selected == Some(0)
+            }),
+            "Down moves focus from search into the first result"
+        );
+        app.update_in(&mut vcx, |app, window, cx| {
+            if let Some(input) = &app.session_history.search_input {
+                input.update(cx, |input, cx| input.focus(window, cx));
+            }
+        });
+
+        set_search(&mut vcx, "project");
+        settle(&mut vcx);
+        assert!(
+            app.update_in(&mut vcx, |app, window, cx| app
+                .session_rows(window, cx)
+                .is_empty()),
+            "matching a directory path alone does not return a session"
+        );
+
+        vcx.update(|window, cx| window.press("escape", cx));
+        wait_for_history(&mut vcx, |vcx| {
+            app.update_in(vcx, |app, window, cx| {
+                !app.session_history.scanning && app.session_rows(window, cx).is_empty()
+            })
+        });
+        assert_eq!(
+            pane_dir(&app, &mut vcx).as_deref(),
+            Some(Path::new("/empty"))
+        );
     }
 
     fn ids(sessions: &[PastSession]) -> Vec<&str> {
