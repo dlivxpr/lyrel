@@ -367,11 +367,18 @@ fn file_scheme_remains_denied_while_local_html_preview_renders_via_loopback(
         assert_eq!(page.status, PageStatus::Ready);
     });
 
+    // Reloading stays on the linked document, including its native history.
+    let reload_commands = app.update_in(&mut vcx, |app, _, cx| {
+        app.browser_reload(&tab_id, cx);
+        app.browser_surface_commands(&tab_id)
+    });
+    assert_eq!(reload_commands.last(), Some(&BrowserCommand::Reload));
+
     // Opening the same HTML file again focuses and reloads the existing tab (no duplicate tab).
     app.update_in(&mut vcx, |app, _window, cx| {
         app.open_html_preview(HostId::LOCAL, &html_file, cx);
     });
-    let cmds_after_reopen = wait_for_commands(&app, &mut vcx, &tab_id, 4);
+    let cmds_after_reopen = wait_for_commands(&app, &mut vcx, &tab_id, reload_commands.len() + 3);
     assert!(matches!(
         &cmds_after_reopen[cmds_after_reopen.len() - 1],
         BrowserCommand::Navigate { url } if url.ends_with("/index.html")
@@ -927,6 +934,152 @@ fn remote_host_disconnect_marks_html_preview_disconnected_and_reconnect_remounts
 }
 
 #[gpui_kit::test]
+fn remote_html_preview_departure_keeps_webpage_live_and_restores_saved_file(
+    cx: &mut TestAppContext,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = Path::new("/index.html");
+    std::fs::write(dir.path().join("index.html"), "<h1>Starting preview</h1>").unwrap();
+    let remote = RemoteRef::new(
+        RemoteTarget::Direct {
+            user: "dev".into(),
+            host: "departure.test".into(),
+            port: 22,
+        },
+        WorkspaceId::new(),
+    );
+    let host_id = remote.host_id();
+    let host = RemotePosixTestHost::shared(host_id, dir.path().to_path_buf());
+    let (app, mut vcx, _streams) = harness_with_tabs(cx, 1);
+    let workspace = cx.update(|cx| {
+        WorkspaceStore::init(cx);
+        HostRegistry::insert(cx, host.clone());
+        let id = WorkspaceStore::claim_remote(cx, remote);
+        WorkspaceStore::claim(cx, Some(id))
+    });
+    let tab_id = app.update_in(&mut vcx, |app, window, cx| {
+        app.workspace = workspace;
+        app.adopt_tool_layout(workspace, cx);
+        let weak = cx.entity().downgrade();
+        crate::ui::windows::WindowRegistry::register(cx, workspace, window.window_handle(), weak);
+        app.open_html_preview(host_id, path, cx);
+        app.active_browser_detail().unwrap().to_string()
+    });
+    let commands = wait_for_commands(&app, &mut vcx, &tab_id, 2);
+    let initial_url = match &commands[1] {
+        BrowserCommand::Navigate { url } => url,
+        other => panic!("expected HTML preview navigation, got {other:?}"),
+    };
+    assert_eq!(http_get(initial_url).1, "<h1>Starting preview</h1>");
+
+    let site = "https://example.test/redirect-target";
+    app.update_in(&mut vcx, |app, _, cx| {
+        app.on_browser_event(
+            &tab_id,
+            BrowserEvent::Navigated {
+                url: "about:blank".into(),
+                can_back: false,
+                can_forward: false,
+            },
+            cx,
+        );
+        assert_eq!(
+            app.right_panel.web_pages[&tab_id].display_url,
+            "/index.html"
+        );
+        assert_eq!(
+            app.right_panel.web_pages[&tab_id].status,
+            PageStatus::Starting
+        );
+        app.on_browser_event(
+            &tab_id,
+            BrowserEvent::LoadFailed {
+                url: "https://example.test/unavailable".into(),
+                message: "server unavailable".into(),
+            },
+            cx,
+        );
+        assert_eq!(
+            app.right_panel.web_pages[&tab_id].display_url,
+            "/index.html"
+        );
+        assert_eq!(cx.global::<HtmlPreviewService>().active_mount_count(), 1);
+        app.on_browser_event(
+            &tab_id,
+            BrowserEvent::Navigated {
+                url: site.into(),
+                can_back: true,
+                can_forward: false,
+            },
+            cx,
+        );
+    });
+    settle(&mut vcx);
+    app.read_with(&vcx, |app, cx| {
+        let tab = app.web_tab(&tab_id).unwrap();
+        assert_eq!(tab.address, "/index.html");
+        assert_eq!(tab.html_path.as_deref(), Some("/index.html"));
+        assert_eq!(
+            app.browser_chrome
+                .as_ref()
+                .unwrap()
+                .input
+                .read(cx)
+                .value()
+                .as_str(),
+            site
+        );
+        assert!(!cx.global::<HtmlPreviewService>().is_running());
+        assert_eq!(
+            app.browser_surface_commands(&tab_id).last(),
+            Some(&BrowserCommand::SetRouteGuard {
+                guard: RouteGuard::DenyLoopback,
+            })
+        );
+    });
+
+    cx.update(|cx| crate::ui::desktop_lookups::HostLinks::remove(cx, host_id));
+    app.update_in(&mut vcx, |app, _, cx| {
+        assert_eq!(app.right_panel.web_pages[&tab_id].status, PageStatus::Ready);
+        app.browser_reload(&tab_id, cx);
+        assert_eq!(
+            app.browser_surface_commands(&tab_id).last(),
+            Some(&BrowserCommand::Reload)
+        );
+        app.browser_open_external(&tab_id, cx);
+    });
+    assert_eq!(cx.opened_url().as_deref(), Some(site));
+
+    cx.update(|cx| HostRegistry::insert(cx, host));
+    let (restored, mut restored_vcx) =
+        crate::ui::app::test_window::open_window_on(cx, Some(workspace));
+    let _stream = attach_quiet_tab(&restored, &mut restored_vcx);
+    restored.update_in(&mut restored_vcx, |app, window, cx| {
+        app.reveal_browser_page(&tab_id, window, cx);
+    });
+    let commands = wait_for_commands(&restored, &mut restored_vcx, &tab_id, 2);
+    let restored_url = match &commands[1] {
+        BrowserCommand::Navigate { url } => url,
+        other => panic!("expected restored HTML preview navigation, got {other:?}"),
+    };
+    assert_eq!(http_get(restored_url).1, "<h1>Starting preview</h1>");
+
+    let min_commands = app.update_in(&mut vcx, |app, _, cx| {
+        let commands = app.browser_surface_commands(&tab_id).len();
+        app.open_html_preview(host_id, path, cx);
+        assert_eq!(app.active_browser_detail(), Some(tab_id.as_str()));
+        assert_eq!(app.tool_layout().web_tabs.len(), 1);
+        commands + 3
+    });
+    let commands = wait_for_commands(&app, &mut vcx, &tab_id, min_commands);
+    let reopened_url = match commands.last().unwrap() {
+        BrowserCommand::Navigate { url } => url,
+        other => panic!("expected reopened HTML preview navigation, got {other:?}"),
+    };
+    assert_eq!(http_get(reopened_url).1, "<h1>Starting preview</h1>");
+}
+
+#[gpui_kit::test]
 fn html_preview_auto_reloads_on_editor_save_and_fs_events(cx: &mut TestAppContext) {
     lyrel_ui_base::config::pin_test_config_dir();
     cx.executor().allow_parking();
@@ -1014,6 +1167,64 @@ fn html_preview_auto_reloads_on_editor_save_and_fs_events(cx: &mut TestAppContex
         reload_count_before_unrelated
     );
 
+    let webpage = "https://example.test/current";
+    app.update_in(&mut vcx, |app, window, cx| {
+        app.on_browser_event(
+            &tab_id,
+            BrowserEvent::Navigated {
+                url: webpage.into(),
+                can_back: true,
+                can_forward: false,
+            },
+            cx,
+        );
+        assert_eq!(
+            app.browser_surface_commands(&tab_id).last(),
+            Some(&BrowserCommand::SetRouteGuard {
+                guard: RouteGuard::Open
+            })
+        );
+        editor_input.update(cx, |input, cx| {
+            input.set_value("<p>saved after leaving preview</p>", window, cx);
+        });
+        app.editor_save_active(window, cx);
+        app.on_file_tree_event(
+            &FileTreeEvent::FsEvents {
+                host: HostId::LOCAL,
+                paths: HashSet::from([html_file.clone()]),
+            },
+            window,
+            cx,
+        );
+    });
+    wait_until(&mut vcx, "editor save after preview departure", |vcx| {
+        app.read_with(vcx, |app, cx| app.editor_unsaved(cx).is_empty())
+            && std::fs::read_to_string(&html_file)
+                .is_ok_and(|body| body == "<p>saved after leaving preview</p>")
+    });
+    app.read_with(&vcx, |app, cx| {
+        assert_eq!(app.right_panel.web_pages[&tab_id].display_url, webpage);
+        assert_eq!(
+            app.browser_surface_commands(&tab_id)
+                .iter()
+                .filter(|cmd| matches!(cmd, BrowserCommand::Reload))
+                .count(),
+            reload_count_before_unrelated
+        );
+        assert!(!cx.global::<HtmlPreviewService>().is_running());
+    });
+
+    let min_commands = app.update_in(&mut vcx, |app, _, cx| {
+        let commands = app.browser_surface_commands(&tab_id).len();
+        app.open_html_preview(HostId::LOCAL, &html_file, cx);
+        commands + 3
+    });
+    let commands = wait_for_commands(&app, &mut vcx, &tab_id, min_commands);
+    let mount_url = match commands.last().unwrap() {
+        BrowserCommand::Navigate { url } => url,
+        other => panic!("expected reopened HTML preview navigation, got {other:?}"),
+    };
+
     // External modification + FileTreeEvent::FsEvents for html_file triggers Reload & serves fresh bytes.
     std::fs::write(&html_file, "<p>external-edit</p>").unwrap();
     app.update_in(&mut vcx, |app, window, cx| {
@@ -1028,5 +1239,5 @@ fn html_preview_auto_reloads_on_editor_save_and_fs_events(cx: &mut TestAppContex
     });
     let cmds_after_fs = wait_for_reload_count(&app, &mut vcx, &tab_id, 2);
     assert_eq!(cmds_after_fs.last(), Some(&BrowserCommand::Reload));
-    assert_eq!(http_get(&mount_url).1, "<p>external-edit</p>");
+    assert_eq!(http_get(mount_url).1, "<p>external-edit</p>");
 }

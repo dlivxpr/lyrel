@@ -471,34 +471,39 @@ impl Host {
             )?;
         }
 
-        // URL and title keep the chrome and the tab label honest.
+        // Same-document changes have no ContentLoading event.
         let source_shared = shared.clone();
         unsafe {
             webview.add_SourceChanged(
-                &SourceChangedEventHandler::create(Box::new(move |webview, _| {
-                    let Some(webview) = webview else {
+                &SourceChangedEventHandler::create(Box::new(move |webview, args| {
+                    let (Some(webview), Some(args)) = (webview, args) else {
                         return Ok(());
                     };
-                    let mut source = PWSTR::null();
-                    if webview.Source(&mut source).is_err() {
-                        return Ok(());
+                    let mut new_document = windows::core::BOOL(0);
+                    args.IsNewDocument(&mut new_document)?;
+                    if !new_document.as_bool() {
+                        emit_navigated(&source_shared, &webview);
                     }
-                    let url = take_pwstr(source);
-                    let (can_back, can_forward) = {
-                        let mut back = windows::core::BOOL(0);
-                        let mut forward = windows::core::BOOL(0);
-                        let _ = webview.CanGoBack(&mut back);
-                        let _ = webview.CanGoForward(&mut forward);
-                        (back.as_bool(), forward.as_bool())
+                    Ok(())
+                })),
+                &mut token,
+            )?;
+        }
+
+        // A new source alone can be a browser error page. Wait for a real
+        // document so a failed navigation doesn't release the HTML mount.
+        let content_shared = shared.clone();
+        unsafe {
+            webview.add_ContentLoading(
+                &ContentLoadingEventHandler::create(Box::new(move |webview, args| {
+                    let (Some(webview), Some(args)) = (webview, args) else {
+                        return Ok(());
                     };
-                    emit(
-                        &source_shared,
-                        BrowserEvent::Navigated {
-                            url,
-                            can_back,
-                            can_forward,
-                        },
-                    );
+                    let mut error_page = windows::core::BOOL(0);
+                    args.IsErrorPage(&mut error_page)?;
+                    if !error_page.as_bool() {
+                        emit_navigated(&content_shared, &webview);
+                    }
                     Ok(())
                 })),
                 &mut token,
@@ -538,8 +543,10 @@ impl Host {
                     let mut success = windows::core::BOOL(0);
                     let _ = args.IsSuccess(&mut success);
                     if success.as_bool() {
-                        // Both engines report a finished top-level load the
-                        // same way: Navigated on the way, Ready at the end.
+                        // History may have changed after ContentLoading.
+                        if let Some(webview) = webview.as_ref() {
+                            emit_navigated(&load_shared, webview);
+                        }
                         emit(&load_shared, BrowserEvent::Ready);
                         return Ok(());
                     }
@@ -712,6 +719,28 @@ impl Host {
         }
         Ok(())
     }
+}
+
+fn emit_navigated(shared: &Rc<RefCell<Shared>>, webview: &ICoreWebView2) {
+    let mut source = PWSTR::null();
+    let mut back = windows::core::BOOL(0);
+    let mut forward = windows::core::BOOL(0);
+    let url = unsafe {
+        if webview.Source(&mut source).is_err() {
+            return;
+        }
+        let _ = webview.CanGoBack(&mut back);
+        let _ = webview.CanGoForward(&mut forward);
+        take_pwstr(source)
+    };
+    emit(
+        shared,
+        BrowserEvent::Navigated {
+            url,
+            can_back: back.as_bool(),
+            can_forward: forward.as_bool(),
+        },
+    );
 }
 
 fn finish_capture(shared: &RefCell<Shared>) {

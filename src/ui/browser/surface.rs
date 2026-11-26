@@ -43,7 +43,7 @@ pub enum BrowserEvent {
     /// The surface exists and its first page committed. The panel may start
     /// sending commands; anything queued before this is dropped by the host.
     Ready,
-    /// The top-level page changed — a load, a redirect, back or forward.
+    /// A top-level document committed or changed its same-document address.
     /// Carries the history state the chrome needs for its buttons.
     Navigated {
         url: String,
@@ -72,7 +72,7 @@ pub enum BrowserEvent {
     NewWindow {
         url: String,
     },
-    /// A navigation failed after it was allowed.
+    /// An allowed navigation failed. It may not have committed.
     LoadFailed {
         url: String,
         message: String,

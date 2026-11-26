@@ -206,6 +206,11 @@ impl HtmlPreviewMount {
         &self.origin
     }
 
+    pub(super) fn has_origin(&self, url: &str) -> bool {
+        url.strip_prefix(&self.origin)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with(['/', '?', '#']))
+    }
+
     pub(crate) fn canonical_file(&self) -> &Path {
         &self.canonical_file
     }
@@ -219,8 +224,11 @@ impl HtmlPreviewMount {
     /// address bar.
     pub(crate) fn display_path_for_url(&self, url: &str) -> Option<String> {
         let stripped = strip_query_and_fragment(url);
-        let prefix = format!("{}/p/{}/", self.origin, self.token);
-        let raw_rel = stripped.strip_prefix(&prefix)?;
+        let raw_rel = stripped
+            .strip_prefix(self.origin.as_str())?
+            .strip_prefix("/p/")?
+            .strip_prefix(self.token.as_str())?
+            .strip_prefix('/')?;
         let segments = decode_rel_segments(raw_rel).ok()?;
         if segments.is_empty() {
             return None;
