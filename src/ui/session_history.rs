@@ -146,22 +146,24 @@ pub(crate) fn match_open_session_scope(
                     false => OpenSessionMatch::Distinct,
                 };
             }
-            let (saved_profile, saved_roots, saved_connection) = store_selectors(saved);
-            let (live_profile, live_roots, live_connection) = store_selectors(live);
-            if saved_profile.is_some() != live_profile.is_some()
+            let mut saved_roots = store_roots(saved);
+            let live_roots = store_roots(live);
+            let saved_connection = store_connection(saved);
+            let live_connection = store_connection(live);
+            if saved.profile.is_some() != live.profile.is_some()
                 || saved.session_dir.is_some() != live.session_dir.is_some()
                 || saved_connection.is_empty() != live_connection.is_empty()
                 || !saved_roots
-                    .iter()
+                    .clone()
                     .map(|(key, _)| key)
-                    .eq(live_roots.iter().map(|(key, _)| key))
+                    .eq(live_roots.clone().map(|(key, _)| key))
             {
                 return OpenSessionMatch::Unconfirmed;
             }
             let same_path = |a: &Path, b: &Path| {
                 lyrel_core::core::agent_history::directory_matches_with(a, b, host_separator)
             };
-            if saved_profile != live_profile
+            if saved.profile != live.profile
                 || saved_connection != live_connection
                 || saved
                     .session_dir
@@ -169,15 +171,15 @@ pub(crate) fn match_open_session_scope(
                     .zip(live.session_dir.as_deref())
                     .is_some_and(|(a, b)| !same_path(a, b))
                 || saved_roots
-                    .iter()
-                    .zip(&live_roots)
+                    .clone()
+                    .zip(live_roots)
                     .any(|((_, a), (_, b))| !same_path(Path::new(a), Path::new(b)))
             {
                 return OpenSessionMatch::Distinct;
             }
-            if saved_profile.is_none()
+            if saved.profile.is_none()
                 && saved.session_dir.is_none()
-                && saved_roots.is_empty()
+                && saved_roots.next().is_none()
                 && saved_connection.is_empty()
                 && (saved.session_file.is_some() || live.session_file.is_some())
             {
@@ -217,11 +219,10 @@ impl SessionListing {
 /// Search Everywhere and Sessions settings (#366) all name a session by
 /// this, so a hide in one place reads the same in the others.
 ///
-/// `key()` is the spelling `Config::hidden_agent_sessions` has always used —
-/// `<agent slug>:<session id>`, host-independent — so preferences written
-/// before Sessions settings existed keep matching. Everything else the
-/// listing preserved (`cwd`, `scope`) rides along so a future consumer can
-/// resolve the exact store the session lives in without rescanning.
+/// `key()` names the host and durable store. `legacy_key()` retains the
+/// older host-independent `<agent slug>:<session id>` spelling for reads.
+/// The full `cwd` and `scope` also travel with the identity for consumers
+/// that need the launch context.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SessionIdentity {
     pub(crate) host: HostId,
@@ -303,26 +304,26 @@ fn store_root(
     }
 }
 
-/// The durable selectors that decide store identity — profile, store-root
-/// environment, and OpenCode's saved connection — with live bridges dropped.
-/// Terminal/rendering environment and the shell program deliberately stay
-/// out: they describe a pane, not a store, and comparing them would miss a
-/// live writer running in another terminal.
-fn store_selectors(
-    scope: &lyrel_core::host::session_operations::SessionScope,
-) -> (Option<String>, Vec<(String, String)>, Vec<String>) {
-    let scope = lyrel_core::host::session_operations::durable_scope(scope);
-    let roots = scope
+/// Store-root selectors in persisted key order. Every key here also belongs
+/// to `durable_scope`'s allow-list, but no terminal environment does.
+fn store_roots(scope: &SessionScope) -> impl Iterator<Item = (&String, &String)> + Clone {
+    scope
         .environment
         .iter()
         .filter(|(key, _)| STORE_ROOT_ENV.contains(&key.as_str()))
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    let connection = scope
+}
+
+fn store_connection(scope: &SessionScope) -> &[String] {
+    scope
         .opencode
-        .map(|opencode| opencode.connection_argv)
-        .unwrap_or_default();
-    (scope.profile, roots, connection)
+        .as_ref()
+        .map_or(&[], |opencode| opencode.connection_argv.as_slice())
+}
+
+fn same_store_selectors(a: &SessionScope, b: &SessionScope) -> bool {
+    a.profile == b.profile
+        && store_connection(a) == store_connection(b)
+        && store_roots(a).eq(store_roots(b))
 }
 
 impl SessionIdentity {
@@ -422,7 +423,7 @@ fn same_store_scope(
 ) -> bool {
     match (a, b) {
         (None, None) => true,
-        (Some(a), Some(b)) => store_selectors(a) == store_selectors(b),
+        (Some(a), Some(b)) => same_store_selectors(a, b),
         _ => false,
     }
 }
@@ -437,9 +438,8 @@ fn scoped_store_key(scope: Option<&lyrel_core::host::session_operations::Session
     let Some(scope) = scope else {
         return "none".into();
     };
-    let (profile, roots, connection) = store_selectors(scope);
     let mut parts: Vec<String> = Vec::new();
-    if let Some(profile) = &profile {
+    if let Some(profile) = &scope.profile {
         parts.push(format!("p={}", escape_key_component(profile)));
     }
     if let Some(dir) = &scope.session_dir {
@@ -454,13 +454,14 @@ fn scoped_store_key(scope: Option<&lyrel_core::host::session_operations::Session
             escape_key_component(&file.to_string_lossy())
         ));
     }
-    for (key, value) in &roots {
+    for (key, value) in store_roots(scope) {
         parts.push(format!(
             "e={}={}",
             escape_key_component(key),
             escape_key_component(value)
         ));
     }
+    let connection = store_connection(scope);
     if !connection.is_empty() {
         let argv = connection
             .iter()
@@ -952,12 +953,11 @@ pub(crate) fn merge_listing(
         .sort_by_key(|s| std::cmp::Reverse(s.updated));
 }
 
-/// Whether `incoming` is the row `existing` already lists: the identity the
-/// portions dedup on. Same agent and id, plus the service-scoped selectors a
-/// service row carries — an OpenCode row repeats on its server and
-/// connection argv, a Hermes row on its whole scope — while the native
-/// agents hold one row per id, so the agent and id are the whole identity
-/// there.
+/// Both portions belong to one Host. Native rows repeat by agent and id;
+/// OpenCode also requires the same service and connection argv. Hermes
+/// requests can differ at launch but return the same resolved store. Compare
+/// its saved selectors as the visibility key does, retaining the first
+/// row's full scope for resume.
 fn same_listed_session(existing: &PastSession, incoming: &PastSession) -> bool {
     if existing.agent != incoming.agent || existing.id != incoming.id {
         return false;
@@ -975,7 +975,25 @@ fn same_listed_session(existing: &PastSession, incoming: &PastSession) -> bool {
                     .and_then(|scope| scope.opencode.as_ref())
                     .map(|scope| (&scope.server, &scope.connection_argv))
         }
-        CLIAgent::Hermes => existing.scope == incoming.scope,
+        CLIAgent::Hermes => {
+            let (Some(a), Some(b)) = (&existing.scope, &incoming.scope) else {
+                return false;
+            };
+            // A successful Hermes scan resolves HERMES_HOME. A profile
+            // alone cannot establish that two rows came from one store.
+            let confirmed = a.session_file.is_some()
+                || a.session_dir.is_some()
+                || a.environment
+                    .get("HERMES_HOME")
+                    .is_some_and(|home| !home.is_empty());
+            confirmed
+                // The persisted key uses the original path spelling.
+                && a.session_file.as_deref().map(Path::as_os_str)
+                    == b.session_file.as_deref().map(Path::as_os_str)
+                && a.session_dir.as_deref().map(Path::as_os_str)
+                    == b.session_dir.as_deref().map(Path::as_os_str)
+                && same_store_selectors(a, b)
+        }
         _ => true,
     }
 }
@@ -3347,6 +3365,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hermes_discovery_folds_repeated_store_rows_and_keeps_restore_scope() {
+        let mut fixture = SessionFixture::merged();
+        let mut first = session_row("shared", CLIAgent::Hermes, "/project", 100);
+        let scope = SessionScope {
+            profile: Some("default".into()),
+            environment: [
+                ("HERMES_HOME".into(), "/hermes/one".into()),
+                ("TERM_PROGRAM".into(), "WezTerm".into()),
+            ]
+            .into(),
+            shell_program: Some("zsh".into()),
+            ..Default::default()
+        };
+        first.scope = Some(scope.clone());
+        let mut repeated = first.clone();
+        let default_scope = repeated.scope.as_mut().unwrap();
+        default_scope.environment.remove("TERM_PROGRAM");
+        default_scope.shell_program = None;
+        let mut other_store = repeated.clone();
+        let other_scope = other_store.scope.as_mut().unwrap();
+        other_scope
+            .environment
+            .insert("HERMES_HOME".into(), "/hermes/two".into());
+        let other_scope = other_scope.clone();
+        let mut other_id = repeated.clone();
+        other_id.id = "other".into();
+        fixture.hermes = [vec![first], vec![other_store], vec![repeated, other_id]].into();
+        let (host, _) = fixture_host(fixture);
+        let mut scan = service_scan(host.id());
+        let mut observed = scan.hermes[0].clone();
+        observed.scope = scope.clone();
+        let mut other = observed.clone();
+        other.scope = other_scope;
+        scan.hermes.insert(0, other);
+        scan.hermes.insert(0, observed);
+        let listing = collect_sessions(&*host, scan);
+        let rows: Vec<_> = listing
+            .sessions
+            .iter()
+            .filter(|row| row.agent == CLIAgent::Hermes)
+            .collect();
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["shared", "shared", "other"]
+        );
+        assert_eq!(rows[0].scope.as_ref(), Some(&scope));
+        let other_scope = rows[1].scope.as_ref().unwrap();
+        assert_eq!(other_scope.environment["HERMES_HOME"], "/hermes/two");
+    }
+
     /// End to end through the production window: the native rows paint
     /// while a service source is held pending, a scope change drops the old
     /// rows immediately and retires the superseded service landing on its
@@ -3762,6 +3831,7 @@ mod tests {
     struct SessionFixture {
         native: Vec<PastSession>,
         opencode: Vec<PastSession>,
+        hermes: std::collections::VecDeque<Vec<PastSession>>,
         stale_marker: Option<String>,
         service_released: bool,
         service_calls: usize,
@@ -3781,6 +3851,7 @@ mod tests {
                     session_row("oc-service", CLIAgent::OpenCode, "/other", 250),
                     session_row("oc-service", CLIAgent::OpenCode, "/other", 250),
                 ],
+                hermes: Default::default(),
                 stale_marker: Some("stale-generation marker".into()),
                 service_released: false,
                 service_calls: 0,
@@ -3802,6 +3873,7 @@ mod tests {
                     session_row("oc-service", CLIAgent::OpenCode, "/project", 250),
                     session_row("oc-elsewhere", CLIAgent::OpenCode, "/elsewhere", 300),
                 ],
+                hermes: Default::default(),
                 stale_marker: None,
                 service_released: true,
                 service_calls: 0,
@@ -3968,9 +4040,11 @@ mod tests {
         }
         fn hermes_sessions(
             &self,
-            request: &SessionOperation,
+            _request: &SessionOperation,
         ) -> Result<Vec<PastSession>, SessionOperationError> {
-            let _ = request;
+            if let Some(sessions) = self.fixture.lock().unwrap().hermes.pop_front() {
+                return Ok(sessions);
+            }
             Err(SessionOperationError {
                 kind: SessionErrorKind::Unsupported,
                 message: "fixture hermes is unavailable".into(),
