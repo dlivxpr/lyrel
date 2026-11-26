@@ -137,10 +137,6 @@ impl RemoteStatus {
         }
     }
 
-    #[allow(
-        dead_code,
-        reason = "reached through `workspace_accepts_input`, whose callers are in terminal/view.rs"
-    )]
     pub fn accepts_input(&self) -> bool {
         matches!(self, RemoteStatus::Attached)
     }
@@ -341,19 +337,11 @@ impl Backoff {
 }
 
 #[derive(Default)]
-#[allow(
-    dead_code,
-    reason = "the prompt relay that calls this is the other half of D7's start-up connect"
-)]
 pub struct AuthSheetQueue {
     holder: Option<HostId>,
     waiting: std::collections::VecDeque<HostId>,
 }
 
-#[allow(
-    dead_code,
-    reason = "the prompt relay that calls this is the other half of D7's start-up connect"
-)]
 impl AuthSheetQueue {
     pub fn request(&mut self, who: HostId) -> bool {
         match self.holder {
@@ -379,18 +367,6 @@ impl AuthSheetQueue {
         }
         self.holder = self.waiting.pop_front();
         self.holder
-    }
-
-    pub fn withdraw(&mut self, who: HostId) {
-        self.waiting.retain(|w| *w != who);
-    }
-
-    pub fn holder(&self) -> Option<HostId> {
-        self.holder
-    }
-
-    pub fn waiting(&self) -> usize {
-        self.waiting.len()
     }
 }
 
@@ -1171,10 +1147,6 @@ pub(crate) struct RemoteLinks {
     /// the user closed the sheet on rather than answered.
     suspended: std::collections::HashSet<HostId>,
     instances: std::collections::HashMap<HostId, String>,
-    #[allow(
-        dead_code,
-        reason = "read by the prompt relay's drain, which lands with the routed auth sheet"
-    )]
     pub(crate) auth: AuthSheetQueue,
     pumping: bool,
 }
@@ -2541,10 +2513,6 @@ fn panes_of(
     app.read(cx).panes()
 }
 
-#[allow(
-    dead_code,
-    reason = "the five keystroke entry points that call this live in terminal/view.rs"
-)]
 pub(crate) fn workspace_accepts_input(cx: &gpui_kit::App, workspace: WorkspaceId) -> bool {
     RemoteLinks::status_of(cx, workspace)
         .or_else(|| crate::ui::local_link::LocalLink::status_of(cx, workspace))
@@ -3129,15 +3097,15 @@ mod tests {
         assert!(q.request(a), "the first asker goes straight through");
         assert!(!q.request(b));
         assert!(!q.request(c));
-        assert_eq!(q.waiting(), 2);
-        assert_eq!(q.holder(), Some(a));
+        assert_eq!(q.waiting.len(), 2);
+        assert_eq!(q.holder, Some(a));
 
         assert_eq!(q.release(a), Some(b));
-        assert_eq!(q.waiting(), 1);
+        assert_eq!(q.waiting.len(), 1);
         assert_eq!(q.release(b), Some(c));
         assert_eq!(q.release(c), None);
-        assert_eq!(q.holder(), None);
-        assert_eq!(q.waiting(), 0);
+        assert_eq!(q.holder, None);
+        assert!(q.waiting.is_empty());
     }
 
     #[test]
@@ -3146,11 +3114,11 @@ mod tests {
         let a = host("ssh-alias:a");
         assert!(q.request(a));
         assert!(q.request(a));
-        assert_eq!(q.waiting(), 0);
+        assert!(q.waiting.is_empty());
     }
 
     #[test]
-    fn a_connect_that_gave_up_leaves_the_queue() {
+    fn releasing_a_waiting_machine_removes_it_from_the_queue() {
         let mut q = AuthSheetQueue::default();
         let (a, b, c) = (
             host("ssh-alias:a"),
@@ -3161,12 +3129,12 @@ mod tests {
         q.request(b);
         q.request(c);
 
-        q.withdraw(b);
-        assert_eq!(q.waiting(), 1);
+        assert_eq!(q.release(b), None);
+        assert_eq!(q.waiting.len(), 1);
         assert_eq!(q.release(a), Some(c), "b is gone, c is next");
 
         assert_eq!(q.release(b), None);
-        assert_eq!(q.holder(), Some(c));
+        assert_eq!(q.holder, Some(c));
     }
 
     #[test]
@@ -3176,7 +3144,7 @@ mod tests {
         assert!(q.request(a));
         assert!(!q.request(b));
         assert!(q.request(a));
-        assert_eq!(q.waiting(), 1);
+        assert_eq!(q.waiting.len(), 1);
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! - [`prepaint`]: pointer hitboxes + caret/selection/table-affordance geometry.
 //! - [`paint`]: row + widget painters, window-level drag listeners, the
 //!   per-frame hit-map commit, and the horizontal scrollbar.
-//! - [`props`]: the `key:: value` property panel + file-chip widgets.
+//! - [`props`]: the `key:: value` property panel.
 //!
 //! `EditorElement` stays the thin coordinator: `request_layout` measures the
 //! content height (publishing the shape memo), `prepaint` builds the geometry
@@ -63,9 +63,7 @@ pub(crate) struct PrepaintState {
     /// paint can set the resize cursor over each (hitboxes must be inserted in
     /// prepaint). Parallels the images paint walks, indexed by image count.
     image_grips: Vec<Hitbox>,
-    /// Pointer-cursor hitboxes (`(line, hitbox)`) for clickable gutter checkboxes
-    /// and file chips, so the cursor flips to a hand over them (like the image
-    /// grips' resize cursor). Set in paint via `set_cursor_style`.
+    /// Pointer-cursor hitboxes for task checkboxes, keyed by line.
     checkbox_grips: Vec<(usize, Hitbox)>,
     /// Per-code-block chrome (lang tag + Copy), laid out here so paint and the
     /// click rects agree. Hover-revealed: only the hovered card's chips.
@@ -73,7 +71,6 @@ pub(crate) struct PrepaintState {
     /// Every code card's full bounds (`(first body line, rect)`), committed for
     /// the hover tracking in `on_mouse_move`.
     code_card_rects: Vec<(usize, Bounds<Pixels>)>,
-    chip_grips: Vec<(usize, Hitbox)>,
     /// Pointer-cursor hitboxes over foldable-callout chevrons, keyed by line.
     alert_fold_grips: Vec<(usize, Hitbox)>,
     /// Heading fold chevrons to paint: `(line, folded, x)` — x is line-local,
@@ -152,16 +149,12 @@ impl Element for EditorElement {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         let id = window.request_measured_layout(style, move |known, available, window, cx| {
-            let mut compensate = None;
             let editor = editor.read(cx);
             let base_lh = font_size * LINE_HEIGHT_RATIO;
             let wrap_width = match available.width {
                 AvailableSpace::Definite(w) => Some(w),
                 _ => known.width,
             };
-            // Scroll anchoring: set when an async height change lands above
-            // the viewport (see below); called after the borrow of `editor`
-            // ends, before returning.
             let height = if editor.content.is_empty() {
                 // Placeholder rows at the base size.
                 let rows = shape_all(
@@ -208,8 +201,6 @@ impl Element for EditorElement {
                     caret_row,
                     geometry_row,
                     editor.block_image.as_ref(),
-                    editor.block_chip.as_ref(),
-                    editor.embed_view.as_ref(),
                     editor.block_mermaid.as_ref(),
                     editor.block_math.as_ref(),
                     editor.code_highlight.as_ref(),
@@ -239,7 +230,7 @@ impl Element for EditorElement {
                     &shaped.wrap_rows,
                 );
                 let total = walked.max(base_lh).max(needed);
-                compensate = scroll_compensation(editor, &new_tops, total, wrap_width, sf);
+                compensate_scroll(editor, &new_tops, total, wrap_width, sf);
                 // Hand the shaping to this frame's prepaint (see ShapeMemo).
                 *editor.frame.shape_memo.borrow_mut() = Some(ShapeMemo {
                     wrap_width,
@@ -252,9 +243,6 @@ impl Element for EditorElement {
                 total
             };
             let width = wrap_width.or(known.width).unwrap_or(px(0.));
-            if let Some((f, delta)) = compensate {
-                f(delta, window, cx);
-            }
             size(width, height)
         });
         (id, ())
@@ -481,23 +469,21 @@ fn measure_line_tops(
 /// the last paint means no edit happened — so a height difference here is an
 /// ASYNC change (a math/mermaid/image raster arriving, collapsing raw lines to
 /// a rendered block). If the first changed row sits above the window's
-/// viewport, everything the user is reading would shift; hand the delta to the
-/// host NOW (this measure runs before the scroll container places its children)
-/// so its scroll offset absorbs it in the same frame.
-fn scroll_compensation(
+/// viewport, shift this presentation's scroll offset during measure, before
+/// the scroll container places its children.
+fn compensate_scroll(
     editor: &EditorState,
     new_tops: &[Pixels],
     total: Pixels,
     wrap_width: Option<Pixels>,
     sf: f32,
-) -> Option<(ScrollCompensatorFn, Pixels)> {
-    let mut compensate = None;
+) {
     // ONLY at the real, final width: taffy also measures at
     // intrinsic (None / min-content) widths, whose unwrapped
     // heights diverge wildly from the wrapped layout at a narrow
     // window — a compensation from one of those yanks the scroll
     // offset by thousands of px and fights the user's scrolling.
-    if let (Some(f), Some(last)) = (&editor.scroll_compensator, editor.frame.last_bounds)
+    if let Some(last) = editor.frame.last_bounds
         && editor.frame.content_gen == editor.frame.last_paint_gen
         && !editor.frame.line_tops.is_empty()
         && wrap_width.is_some_and(|w| (w - last.size.width).abs() < px(1.))
@@ -555,9 +541,11 @@ fn scroll_compensation(
                 .unwrap_or(last.size.height);
             if last.origin.y + changed_y < viewport_top && !editor.frame.compensated.get() {
                 editor.frame.compensated.set(true);
-                compensate = Some((f.clone(), delta));
+                let scroll = &editor.frame.scroll;
+                let mut offset = scroll.offset();
+                offset.y -= delta;
+                scroll.set_offset(offset);
             }
         }
     }
-    compensate
 }

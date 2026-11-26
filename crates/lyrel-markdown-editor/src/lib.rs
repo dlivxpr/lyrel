@@ -279,10 +279,6 @@ const CODE_PAD: f32 = 8.;
 /// room for the left border (2px) + a gap, matching the reading view's `pl(12)`.
 const QUOTE_INSET: f32 = 14.;
 
-/// Vertical padding (px) inside a file chip (e.g. a PDF embed), above + below its
-/// label, so the chip box reads as a button rather than a bare line of text.
-const CHIP_PAD: f32 = 5.;
-
 /// Total vertical breathing room (px) reserved around an inline image — split
 /// above + below — so consecutive images (a bulleted photo list) don't touch.
 const IMG_ROW_PAD: f32 = 12.;
@@ -518,9 +514,7 @@ pub enum EditorEvent {
     /// The document text changed via a user edit (typing, delete, paste, IME,
     /// applying a suggestion). Not emitted for programmatic `set_text`.
     Changed,
-    /// A file chip (e.g. a PDF embed) or an inline `[text](url)` link was
-    /// left-clicked — the host opens the `src`/url (http externally, files
-    /// via its own resolution). A navigation hint; the text is untouched.
+    /// An inline `[text](url)` link was activated. The host opens the URL or resolves the file.
     OpenLink(SharedString),
     /// A `[[wiki-link]]` or `#tag` was left-clicked — the host opens the page
     /// with this title (Logseq semantics, matching the reading view).
@@ -605,23 +599,11 @@ type SuggestFn = Box<dyn Fn(&str) -> Vec<String>>;
 /// returns `None` while still decoding / on failure (the line shows raw source).
 type BlockImageFn = Box<dyn Fn(&str) -> Option<Arc<RenderImage>>>;
 
-/// Classifies an `![](src)` reference as a file chip (e.g. a PDF) rather than an
-/// image, returning its display label. Set via
-/// [`EditorState::set_block_chip_provider`]; the editor renders such a line as a
-/// clickable chip (left-click emits [`EditorEvent::OpenLink`]).
-type BlockChipFn = Box<dyn Fn(&str) -> Option<SharedString>>;
-
 /// Host-supplied clipboard writer for Copy/Cut — receives the markdown text
 /// the editor would put on the clipboard, so a host can add flavors gpui's
 /// clipboard can't (e.g. rendered HTML beside the plain string). See
 /// [`EditorState::set_clipboard_writer`].
 pub type ClipboardWriter = std::rc::Rc<dyn Fn(&str, &mut App)>;
-
-/// Resolves a standalone `![[target]]` embed line to the host view that renders
-/// the transclusion, plus the row height to reserve for it (the host estimates
-/// and caps it; long content scrolls inside the view). `None` falls back to the
-/// embed chip.
-type EmbedViewFn = Box<dyn Fn(&str) -> Option<(gpui_kit::AnyView, Pixels)>>;
 
 /// Host-owned native Mermaid result, keyed by the opening source row and exact source.
 /// Pending and failed results remain visible and source-editable.
@@ -845,10 +827,6 @@ pub struct EditorState {
     /// Resolves a standalone image line's `src` to a decoded image for inline
     /// rendering (W4); set by the host via [`Self::set_block_image_provider`].
     block_image: Option<BlockImageFn>,
-    /// Classifies an `![](src)` as a file chip (e.g. a PDF) + its label; set by
-    /// the host via [`Self::set_block_chip_provider`].
-    block_chip: Option<BlockChipFn>,
-    embed_view: Option<EmbedViewFn>,
     /// Resolves a ` ```mermaid ` block's source to a rendered diagram; set by the
     /// host via [`Self::set_block_mermaid_provider`].
     block_mermaid: Option<BlockMermaidFn>,
@@ -871,8 +849,6 @@ pub struct EditorState {
     /// Languages the host's highlighter supports, offered in the code block's
     /// language picker. Empty (the default) disables the picker.
     code_langs: Vec<SharedString>,
-    /// See [`ScrollCompensatorFn`].
-    scroll_compensator: Option<ScrollCompensatorFn>,
     /// A `$$…$$` block being edited in-line: its byte range + the host-supplied view (the
     /// structural editor) painted in a reserved gap at the block's spot. `None` = none.
     editing_block: Option<EditingBlock>,
@@ -931,7 +907,6 @@ impl EditorState {
         let content = document.read(cx).snapshot().text_handle();
         let revision = document.read(cx).revision();
         let scroll = ScrollHandle::new();
-        let anchored_scroll = scroll.clone();
         let document_subscription =
             cx.subscribe(&document, |this, _, event: &DocumentEvent, cx| {
                 if event.revision() <= this.frame.content_gen {
@@ -988,8 +963,6 @@ impl EditorState {
             labels: Labels::default(),
             suggest: None,
             block_image: None,
-            block_chip: None,
-            embed_view: None,
             block_mermaid: None,
             block_math: None,
             block_math_em: None,
@@ -997,11 +970,6 @@ impl EditorState {
             auto_replace: None,
             last_replaced: None,
             code_langs: Vec::new(),
-            scroll_compensator: Some(std::rc::Rc::new(move |delta, _, _| {
-                let mut offset = anchored_scroll.offset();
-                offset.y -= delta;
-                anchored_scroll.set_offset(offset);
-            })),
             editing_block: None,
             editing_inline: None,
             frame: FrameState::new(scroll, revision),
@@ -1135,14 +1103,6 @@ impl EditorState {
         self.code_langs = langs;
     }
 
-    /// Install the scroll-anchoring hook (see [`ScrollCompensatorFn`]): when
-    /// an async block render (math/mermaid/image) changes heights above the
-    /// window viewport, the host receives the delta and shifts its scroll
-    /// offset so the visible content stays put (Cditor's anchor-restore).
-    pub fn set_scroll_compensator(&mut self, f: impl Fn(Pixels, &mut Window, &mut App) + 'static) {
-        self.scroll_compensator = Some(std::rc::Rc::new(f));
-    }
-
     pub fn set_markdown_style(&mut self, style: SyntaxStyle, cx: &mut Context<Self>) {
         // A plain-source presentation is not Markdown; styling would re-enable
         // marker hiding and its editing affordances over arbitrary text.
@@ -1186,28 +1146,6 @@ impl EditorState {
         provider: impl Fn(&str) -> Option<Arc<RenderImage>> + 'static,
     ) {
         self.block_image = Some(Box::new(provider));
-    }
-
-    /// Install the provider that classifies an `![](src)` reference as a file chip
-    /// (e.g. a PDF) and supplies its label. With it, such lines render as a
-    /// clickable chip when the caret is elsewhere; a left-click emits
-    /// [`EditorEvent::OpenLink`] and a right-click places the caret to edit.
-    pub fn set_block_chip_provider(
-        &mut self,
-        provider: impl Fn(&str) -> Option<SharedString> + 'static,
-    ) {
-        self.block_chip = Some(Box::new(provider));
-    }
-
-    /// Install the provider that resolves a standalone `![[target]]` line to a
-    /// host view rendering the transclusion + the height to reserve for it.
-    /// With it, such lines show the embedded content in place (raw on caret);
-    /// without (or when it returns `None`) they fall back to a clickable chip.
-    pub fn set_embed_provider(
-        &mut self,
-        provider: impl Fn(&str) -> Option<(gpui_kit::AnyView, Pixels)> + 'static,
-    ) {
-        self.embed_view = Some(Box::new(provider));
     }
 
     /// Install the Host's native diagram/cache lookup. The opening row disambiguates
@@ -1520,51 +1458,6 @@ impl EditorState {
             Some(&s) => &self.content[s..self.line_end(row)],
             None => "",
         }
-    }
-
-    /// The host-supplied embed views, each positioned in the gap its
-    /// `![[target]]` line reserved (from the last paint's line tops) — the
-    /// editing-block overlay generalized to N transclusions. Absolute children
-    /// of the editor's `relative` root, so they scroll with the content; the
-    /// caret's own line shows raw source instead (its gap wasn't reserved).
-    fn embed_overlays(&self, window: &Window) -> Vec<gpui_kit::Div> {
-        let Some(provider) = &self.embed_view else {
-            return Vec::new();
-        };
-        if self.markdown_style.is_none() {
-            return Vec::new();
-        }
-        let caret_row = self
-            .focus_handle
-            .is_focused(window)
-            .then(|| self.row_col(self.cursor_offset()).0);
-        let mut out = Vec::new();
-        for (row, line) in self.content.split('\n').enumerate() {
-            if caret_row == Some(row) {
-                continue;
-            }
-            let Some(inner) = zorite_markdown::syntax::embed_line(line) else {
-                continue;
-            };
-            let (Some(top), Some((view, height))) =
-                (self.frame.line_tops.get(row), provider(inner))
-            else {
-                continue;
-            };
-            out.push(
-                div()
-                    .absolute()
-                    .top(*top)
-                    .left(px(0.))
-                    .w_full()
-                    .h(height)
-                    // Clicks/wheel belong to the embed (it may scroll its own
-                    // content), not the text layer underneath.
-                    .occlude()
-                    .child(view),
-            );
-        }
-        out
     }
 
     /// The host-supplied editor view for an in-line math edit, positioned in the gap its
@@ -3347,16 +3240,6 @@ impl EditorState {
             self.toggle_heading_row(row, cx);
             return;
         }
-        // Left-click a file chip (e.g. a PDF embed) opens it rather than editing —
-        // the host handles the link. Right-click edits (see on_right_mouse_down).
-        if let Some((src, wiki)) = self.chip_at(event.position) {
-            cx.emit(if wiki {
-                EditorEvent::OpenWikiLink(src)
-            } else {
-                EditorEvent::OpenLink(src)
-            });
-            return;
-        }
         // Left-click an inline `$…$` formula opens its structural editor at the formula's spot
         // (the host seats it). Shift extends a selection; Control-click is the secondary button.
         if !event.modifiers.shift
@@ -3901,19 +3784,14 @@ impl EditorState {
     }
 
     /// If logical line `row` renders as an inline image (a standalone `![](src)`
-    /// or list-item image in markdown mode — not a file chip), the byte range of
+    /// or list-item image in markdown mode), the byte range of
     /// the whole line plus its trailing newline: the atomic unit Word-style
     /// deletion removes. `None` with styling off (raw mode edits as plain text).
     fn image_row_range(&self, row: usize) -> Option<Range<usize>> {
         self.markdown_style.as_ref()?;
         let start = *self.line_starts().get(row)?;
         let end = self.line_end(row);
-        let (src, ..) = markdown_syntax::image_row(&self.content[start..end])?;
-        if let Some(chip) = &self.block_chip
-            && chip(src).is_some()
-        {
-            return None; // a chip's line edits as text (reveal-on-caret)
-        }
+        markdown_syntax::image_row(&self.content[start..end])?;
         Some(start..(end + 1).min(self.content.len()))
     }
 
@@ -3977,15 +3855,6 @@ impl EditorState {
             self.focus(window, cx);
             self.overlay_menu.open_property(row, event.position);
             cx.notify();
-            return;
-        }
-        // Right-click a file chip places the caret to edit its source (the line
-        // then reveals raw `![](src)`), instead of opening the spell menu.
-        if self.chip_at(event.position).is_some() {
-            self.overlay_menu.dismiss();
-            self.focus(window, cx);
-            let offset = self.index_for_mouse_position(event.position);
-            self.move_to(offset, cx);
             return;
         }
         // Right-click a $$…$$ block: emit a MathMenu event so the host can show a
@@ -4837,25 +4706,6 @@ impl EditorState {
         self.replace_text_in_range(None, "", window, cx);
     }
 
-    /// The `src` of a file chip on the row at window `position`, if that row is a
-    /// chip (from the last paint) — left-click opens it, right-click edits.
-    fn chip_at(&self, position: Point<Pixels>) -> Option<(SharedString, bool)> {
-        if self.frame.wrapped.is_empty() || self.affordances.chip_rows.iter().all(Option::is_none) {
-            return None;
-        }
-        let bounds = self.frame.last_bounds.as_ref()?;
-        let rel_y = position.y - bounds.top();
-        let mut row = self.frame.wrapped.len() - 1;
-        for i in 0..self.frame.wrapped.len() {
-            let h = self.line_h(i) * self.row_span(i) as f32;
-            if rel_y < self.frame.line_tops[i] + h {
-                row = i;
-                break;
-            }
-        }
-        self.affordances.chip_rows.get(row).and_then(Option::clone)
-    }
-
     /// The inline `$…$` formula under `position` (its absolute byte range + inner LaTeX), from
     /// the last paint's window-space `inline_math_rects` — so a click opens its editor.
     fn inline_math_at(&self, position: Point<Pixels>) -> Option<(Range<usize>, SharedString)> {
@@ -5619,9 +5469,7 @@ struct InlineMath {
     height: Pixels,
 }
 
-/// A line rendered as a block widget instead of its source text: a standalone
-/// image, or a clickable file chip (e.g. a PDF — left-click opens it, right-click
-/// edits). Shown only while the caret is off the line ("raw on caret").
+/// A block rendered in place of a logical line's source text.
 #[derive(Clone)]
 enum Block {
     Image(BlockImg),
@@ -5629,18 +5477,6 @@ enum Block {
         text: std::rc::Rc<Vec<WrappedLine>>,
         line_height: Pixels,
         height: Pixels,
-    },
-    Chip {
-        src: SharedString,
-        label: SharedString,
-        /// Label color (accent, signalling clickable), box fill, box border.
-        link: Hsla,
-        bg: Hsla,
-        border: Hsla,
-        height: Pixels,
-        /// `src` is a wiki target (an `![[embed]]` chip → OpenWikiLink, which
-        /// navigates + jumps to any anchor) vs a file path (→ OpenLink).
-        wiki: bool,
     },
     /// A run of `key:: value` properties as a two-column panel (the reader's
     /// `render_property_table` twin). Painted on the region's first line; the
@@ -5690,7 +5526,6 @@ impl Block {
         match self {
             Block::Image(i) => i.height,
             Block::MermaidStatus { height, .. } => *height,
-            Block::Chip { height, .. } => *height,
             Block::Properties(p) => p.height,
         }
     }
@@ -6193,50 +6028,6 @@ pub fn find_in_source(content: &str, query: &str) -> Vec<Range<usize>> {
         .collect()
 }
 
-/// Paint a flat, line-art document glyph (a page with a folded top-right corner +
-/// two text lines) in `color`, the chip's file icon. Drawn with strokes — not a
-/// font emoji — so it reads flat and on-theme at the text's size. Public so a
-/// host's read-only view can draw the identical icon on its own file chips
-/// (cross-view parity).
-pub fn paint_doc_icon(
-    x: Pixels,
-    y: Pixels,
-    w: Pixels,
-    h: Pixels,
-    color: Hsla,
-    window: &mut Window,
-) {
-    let f = w * 0.33; // folded-corner size
-    // Page silhouette, with the top-right corner cut away for the fold.
-    let mut outline = PathBuilder::stroke(px(1.3));
-    outline.move_to(point(x, y));
-    outline.line_to(point(x + w - f, y));
-    outline.line_to(point(x + w, y + f));
-    outline.line_to(point(x + w, y + h));
-    outline.line_to(point(x, y + h));
-    outline.line_to(point(x, y));
-    if let Ok(p) = outline.build() {
-        window.paint_path(p, color);
-    }
-    // The folded corner (dog-ear).
-    let mut fold = PathBuilder::stroke(px(1.3));
-    fold.move_to(point(x + w - f, y));
-    fold.line_to(point(x + w - f, y + f));
-    fold.line_to(point(x + w, y + f));
-    if let Ok(p) = fold.build() {
-        window.paint_path(p, color);
-    }
-    // Two short text lines below the fold.
-    for fy in [0.6_f32, 0.78] {
-        let mut ln = PathBuilder::stroke(px(1.));
-        ln.move_to(point(x + w * 0.26, y + h * fy));
-        ln.line_to(point(x + w * 0.74, y + h * fy));
-        if let Ok(p) = ln.build() {
-            window.paint_path(p, color);
-        }
-    }
-}
-
 /// How many wrap rows table row `cells` need at `col_widths` — 1 for content
 /// that fits; more once a drag-narrowed column forces its text to wrap.
 /// The gutter grip's left edge for an editor whose content starts at
@@ -6312,12 +6103,6 @@ fn line_run_epoch(font: &Font, st: Option<&SyntaxStyle>) -> u64 {
     }
     h.finish()
 }
-
-/// Host hook for scroll anchoring: called from the measure pass when an
-/// ASYNC height change (a math/mermaid/image raster arriving) lands ABOVE
-/// the window's viewport, with the height delta — the host shifts its scroll
-/// container's offset by it so the content being read doesn't jump.
-pub type ScrollCompensatorFn = std::rc::Rc<dyn Fn(Pixels, &mut Window, &mut App)>;
 
 /// Content-derived structural scans — tables, ordered-list numbering,
 /// mermaid/math regions, property runs, foldable callouts, and per-line

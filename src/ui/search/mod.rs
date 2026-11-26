@@ -106,33 +106,11 @@ impl SearchTab {
             SearchTab::Locations => L10nKey::SearchPlaceholderLocations,
         })
     }
-
-    /// The neighbouring tab, wrapping at the ends.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) fn step(self, forward: bool) -> SearchTab {
-        let n = Self::ORDER.len();
-        let i = Self::ORDER.iter().position(|t| *t == self).unwrap_or(0);
-        Self::ORDER[if forward {
-            (i + 1) % n
-        } else {
-            (i + n - 1) % n
-        }]
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn tab_steps_wrap_both_ways() {
-        assert_eq!(SearchTab::All.step(true), SearchTab::Terminals);
-        assert_eq!(SearchTab::Hosts.step(true), SearchTab::Actions);
-        assert_eq!(SearchTab::Actions.step(true), SearchTab::All);
-        assert_eq!(SearchTab::All.step(false), SearchTab::Actions);
-        assert_eq!(SearchTab::Terminals.step(false), SearchTab::All);
-        assert_eq!(SearchTab::Terminals.step(true), SearchTab::Sessions);
-    }
 
     #[test]
     fn files_is_reached_by_its_chord_not_by_the_row() {

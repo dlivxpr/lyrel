@@ -14,6 +14,7 @@ use std::ops::Range;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use super::text::TextSnapshot;
+#[cfg(any(test, feature = "test-support"))]
 use gpui_kit::component::Rope;
 use gpui_kit::component::highlighter::LanguageRegistry;
 use gpui_kit::component::input::Position;
@@ -574,9 +575,8 @@ impl OutlineParser {
     }
 }
 
-/// The outline of a text nobody has parsed yet — a buffer that has not been
-/// drawn. Parses it once, here.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Parse a fixture without opening an editor buffer.
+#[cfg(any(test, feature = "test-support"))]
 pub fn outline_of_text(language: &'static str, text: &Rope) -> Outline {
     OutlineParser::new(language)
         .map(|mut parser| parser.parse(&text.clone().into()))

@@ -134,7 +134,7 @@ impl LyrelApp {
         .detach();
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(any(test, feature = "native-markdown-tests"))]
     pub(crate) fn with_session(
         workspace: Option<WorkspaceId>,
         session: Option<Session>,

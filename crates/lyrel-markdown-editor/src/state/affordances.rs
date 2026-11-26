@@ -62,9 +62,6 @@ pub(crate) struct AffordanceState {
     pub(crate) table_thumbs: Vec<TableThumb>,
     /// A live thumb drag: `(header row, grab x, scroll offset at grab)`.
     pub(crate) table_thumb_drag: Option<(usize, Pixels, f32)>,
-    /// Per-logical-line `src` for rows painted as a file chip (from the last
-    /// paint), so a left-click can open it and a right-click can edit it.
-    pub(crate) chip_rows: Vec<Option<(SharedString, bool)>>,
     /// Window-space painted bounds of each inline image, with its logical
     /// line index (from the last paint), so a press near a corner can start a
     /// resize and know which `![](src)` line to rewrite. One entry per
@@ -155,7 +152,6 @@ impl AffordanceState {
             table_scroll_x: HashMap::new(),
             table_thumbs: Vec::new(),
             table_thumb_drag: None,
-            chip_rows: Vec::new(),
             image_rects: Vec::new(),
             image_resize: None,
             checkbox_rects: Vec::new(),

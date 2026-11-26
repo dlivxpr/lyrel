@@ -167,7 +167,6 @@ impl Render for EditorState {
                             .child(EditorElement {
                                 editor: cx.entity(),
                             })
-                            .children(self.embed_overlays(window))
                             .children(self.editing_block_overlay())
                             .children(self.editing_inline_overlay()),
                     )

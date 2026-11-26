@@ -183,20 +183,6 @@ impl HtmlPreviewService {
             server.stop_and_join();
         }
     }
-
-    /// Clears all mounts and stops the listener cleanly.
-    #[allow(dead_code)]
-    pub(crate) fn shutdown(&self) {
-        let stopped = {
-            let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-            inner.in_app.clear();
-            inner.external.clear();
-            inner.server.take()
-        };
-        if let Some(server) = stopped {
-            server.stop_and_join();
-        }
-    }
 }
 
 /// RAII handle for an active in-app HTML preview mount.
@@ -220,14 +206,8 @@ impl HtmlPreviewMount {
         &self.origin
     }
 
-    #[allow(dead_code)]
     pub(crate) fn canonical_file(&self) -> &Path {
         &self.canonical_file
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn canonical_root(&self) -> &Path {
-        &self.canonical_root
     }
 
     pub(crate) fn host_id(&self) -> HostId {
@@ -1243,7 +1223,7 @@ mod tests {
             mount.canonical_file(),
             Path::new("/project/dist/index.html")
         );
-        assert_eq!(mount.canonical_root(), Path::new("/project/dist"));
+        assert_eq!(mount.canonical_root.as_path(), Path::new("/project/dist"));
         assert_eq!(
             mount.display_path_for_url(mount.url()).as_deref(),
             Some("/project/dist/index.html")

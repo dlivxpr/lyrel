@@ -5,7 +5,7 @@
 //! pre-scans (Mermaid, `$$math$$`, property panels, fold regions, hidden
 //! markers), walks the source lines, and delegates each line to its block
 //! family's shaper — prose (hidden markers + inline math/images), tables,
-//! fenced code, block widgets (images/chips/embeds), and gutter decorations
+//! fenced code, block images, and gutter decorations
 //! (blockquotes / callouts / tasks / lists). The quantized viewport-band
 //! windowing (off-screen plain lines keep cached-height placeholders, the
 //! caret's logical line always shapes for real) lives in
@@ -43,8 +43,6 @@ pub(crate) fn shape_document(
     // The caret needs precise geometry even while unfocused or outside the shaping band.
     geometry_row: usize,
     block_image: Option<&BlockImageFn>,
-    block_chip: Option<&BlockChipFn>,
-    embed_view: Option<&EmbedViewFn>,
     block_mermaid: Option<&BlockMermaidFn>,
     block_math: Option<&BlockMathFn>,
     code_highlight: Option<&CodeHighlightFn>,
@@ -253,20 +251,6 @@ pub(crate) fn shape_document(
             continue;
         }
 
-        // A standalone `![[target]]` transclusion the host can render reserves
-        // a gap the height the host asked for — the embed view overlays it
-        // (see `embed_overlays`). Raw on caret; an unresolved target falls
-        // through to the chip below.
-        if md.is_some()
-            && caret_row != Some(idx)
-            && let Some(inner) = zorite_markdown::syntax::embed_line(line)
-            && let Some(h) = embed_view.and_then(|f| f(inner).map(|(_, h)| h))
-        {
-            out.push_placeholder(window, base_font_size, wrap_width, h, None, None, 1);
-            line_start = line_end + 1;
-            continue;
-        }
-
         // A property panel renders on the region's first line; the rest collapse.
         // (Like math, the region is filtered out above when the caret is inside,
         // so the raw `key:: value` lines show for editing.)
@@ -346,9 +330,6 @@ pub(crate) fn shape_document(
             base_font_size * md.map_or(1.0, |_| markdown_syntax::line_scale(line))
         };
 
-        // Block widget (non-code): a standalone `![](src)` line that isn't the
-        // caret's renders as a file chip (if the host classifies `src` as one,
-        // e.g. a PDF) or else its decoded image, fit to width.
         // A renderable image: a standalone `![](src)` line, or the sole body of a
         // list item (`- ![](src)`). For the list case `marker_len` > 0, so the
         // image renders inset past the bullet (still painted by the gutter) and
@@ -363,20 +344,17 @@ pub(crate) fn shape_document(
             }
             _ => px(0.),
         };
-        let widget = block_widget(
-            md,
-            img_row,
-            idx,
-            caret_row,
-            block_chip,
-            block_image,
-            resize,
-            wrap_width,
-            img_inset,
-            scale_factor,
-            fs,
-            window,
-        );
+        let widget = md.and(img_row).and_then(|(src, width, _)| {
+            let img = block_image?(src)?;
+            let width = resize.filter(|r| r.line == idx).map(|r| r.width).or(width);
+            block_img(
+                img,
+                width,
+                wrap_width.map(|w| (w - img_inset).max(px(1.))),
+                scale_factor,
+            )
+            .map(Block::Image)
+        });
         let table = table_row(
             regions,
             &region_cols,
@@ -398,17 +376,13 @@ pub(crate) fn shape_document(
         let sel_empty = selection.0 == selection.1;
         let caret_col = (sel_empty && selection.0 >= line_start && selection.0 <= line_end)
             .then(|| selection.0 - line_start);
-        // An `![](src)` chip line shows full raw source while the caret is on it,
-        // so editing reveals the whole `![](src)` rather than the per-construct
-        // view. Image rows are exempt — they keep rendering the picture with the
-        // caret parked beside it (Word-style; see the widget gate above).
-        let chip_line =
-            md.is_some() && img_row.is_some() && !matches!(widget, Some(Block::Image(_)));
+        // Reveal the full source of an unresolved image on the caret's row.
+        let unresolved_image = md.is_some() && img_row.is_some() && widget.is_none();
         let sel_touches = !sel_empty && selection.0 <= line_end && selection.1 >= line_start;
         // A selection no longer reveals raw source (Cditor-style: formatting
         // markers are hidden everywhere) — selected lines keep the hidden view;
         // structural markers still come back via `reveal_inline`.
-        let full_source = caret_col.is_some() && chip_line;
+        let full_source = caret_col.is_some() && unresolved_image;
         // This line's diagnostics, clipped + shifted to line-local byte offsets —
         // used as spell-check squiggles whether the line shows source or hides its
         // markers.
@@ -581,7 +555,7 @@ pub(crate) fn shape_document(
         };
         // Code lines are inset by CODE_INSET on each side; a gutter mark insets the
         // left only. Either wraps at a correspondingly narrower width. A table
-        // row or widget line (image, chip) never wraps its raw source — a
+        // row or widget line never wraps its raw source — a
         // grid row / the widget renders instead, and a wrapped hidden source
         // would multiply the row's advance by its wrap count. (Revealed-on-
         // caret lines have `table`/`widget` = None here and wrap normally.)
@@ -1055,69 +1029,6 @@ fn block_img(
         resizable: true,
         align: MathAlign::Left, // images stay left; math overrides with its marker
     })
-}
-
-// ===== Block widgets: a standalone `![](src)` line renders as a file chip (if
-// the host classifies `src` as one, e.g. a PDF) or else its decoded image,
-// fit to width. A renderable image: a standalone `![](src)` line, or the sole
-// body of a list item (`- ![](src)`) — `marker_len` > 0 insets past the bullet =====
-#[allow(clippy::too_many_arguments)]
-fn block_widget(
-    md: Option<&SyntaxStyle>,
-    img_row: Option<(&str, Option<f32>, usize)>,
-    idx: usize,
-    caret_row: Option<usize>,
-    block_chip: Option<&BlockChipFn>,
-    block_image: Option<&BlockImageFn>,
-    resize: Option<ImageResize>,
-    wrap_width: Option<Pixels>,
-    img_inset: Pixels,
-    scale_factor: f32,
-    fs: Pixels,
-    _window: &mut Window,
-) -> Option<Block> {
-    if let Some(st) = md
-        && let Some((src, w_attr, _)) = img_row
-    {
-        if let Some(label) = block_chip.and_then(|f| f(src)) {
-            // A chip's line still edits as text: the caret's own row reveals
-            // raw source instead of the chip.
-            (Some(idx) != caret_row).then(|| Block::Chip {
-                src: src.into(),
-                label,
-                link: st.link,
-                bg: st.code_bg,
-                border: st.marker,
-                height: fs * LINE_HEIGHT_RATIO + px(CHIP_PAD * 2.),
-                wiki: false,
-            })
-        } else {
-            // An image renders even on the caret's own row — a Word-style
-            // atomic object: the caret parks beside the picture (painted at
-            // its edge) instead of revealing the markdown. Delete it via
-            // Backspace/Delete or the right-click menu; WYSIWYG-off still
-            // shows the raw source for hand-editing.
-            block_image
-                .and_then(|f| f(src))
-                .and_then(|img| {
-                    // A live grip resize sizes the image to the drag width, so
-                    // its row height tracks the drag and the layout reflows.
-                    let width_attr = match resize {
-                        Some(r) if r.line == idx => Some(r.width),
-                        _ => w_attr,
-                    };
-                    block_img(
-                        img,
-                        width_attr,
-                        wrap_width.map(|w| (w - img_inset).max(px(1.))),
-                        scale_factor,
-                    )
-                })
-                .map(Block::Image)
-        }
-    } else {
-        None
-    }
 }
 
 // ===== Table rows (W4c + cell editing): render as a grid row; the caret on a

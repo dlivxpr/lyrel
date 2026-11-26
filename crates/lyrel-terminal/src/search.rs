@@ -1144,8 +1144,8 @@ pub struct LinkRoots {
 impl LinkRoots {
     /// Roots on the machine lyrel is running on, where `$HOME` means what it
     /// says and paths are spelled this OS's way.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn local(dirs: Vec<PathBuf>) -> Self {
+    #[cfg(test)]
+    pub(crate) fn local(dirs: Vec<PathBuf>) -> Self {
         Self {
             dirs,
             local_home: true,

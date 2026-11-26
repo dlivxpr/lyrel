@@ -2,14 +2,14 @@
 //! map. Split from the former `element.rs` monolith by Markdown construct
 //! family: line backgrounds (code cards, quote bars, rules), gutter
 //! decorations (nesting guides, list bullets, task checkboxes, alert markers,
-//! heading/callout fold chevrons), the widget dispatch (tables, images, file
-//! chips, Mermaid status, property panels), text + inline `$…$` formulas,
+//! heading/callout fold chevrons), the widget dispatch (tables, images,
+//! Mermaid status, property panels), text + inline `$…$` formulas,
 //! then the table affordance chrome, the gutter drag grip, the window-level
 //! drag listeners, the code-card chips, and finally the per-frame commit
 //! (the fresh geometry moves into `EditorState` by take, never by per-frame
 //! clone of the layout vectors).
 
-use super::props::{paint_chip, paint_prop_panel};
+use super::props::paint_prop_panel;
 use super::*;
 
 pub(crate) fn paint_editor(
@@ -212,25 +212,6 @@ pub(crate) fn paint_editor(
                 window,
                 &mut image_rects,
             );
-        } else if let Some(Block::Chip {
-            label,
-            link,
-            bg,
-            border,
-            ..
-        }) = prepaint.widgets.get(i).and_then(Option::as_ref)
-        {
-            // File chip (e.g. a PDF embed): a rounded button with the label.
-            paint_chip(
-                label, *link, *bg, *border, origin, *lh, &font, font_size, window, cx,
-            );
-            if let Some(hb) = prepaint
-                .chip_grips
-                .iter()
-                .find_map(|(l, hb)| (*l == i).then_some(hb))
-            {
-                window.set_cursor_style(CursorStyle::PointingHand, hb);
-            }
         } else if let Some(Block::MermaidStatus {
             text, line_height, ..
         }) = prepaint.widgets.get(i).and_then(Option::as_ref)
@@ -992,7 +973,7 @@ fn paint_table_chrome(
     )
 }
 
-// ===== Block widgets: inline image, file chip, Mermaid status, property panel =====
+// ===== Block widgets: inline image, Mermaid status, property panel =====
 /// Inline image (W4a): paint the decoded image instead of source, inset to
 /// the row's gutter so a list-item image sits past its bullet (painted above,
 /// like any list row). While its grip is being dragged, preview the live
@@ -1486,14 +1467,6 @@ fn commit_frame(
         .zip(prepaint.marks.iter())
         .map(|(bg, mark)| row_inset(*bg, *mark))
         .collect();
-    let chip_rows: Vec<Option<(SharedString, bool)>> = prepaint
-        .widgets
-        .iter()
-        .map(|w| match w {
-            Some(Block::Chip { src, wiki, .. }) => Some((src.clone(), *wiki)),
-            _ => None,
-        })
-        .collect();
     entity.update(cx, |editor, _| {
         editor.frame.wrapped = wrapped;
         editor.frame.line_tops = line_tops;
@@ -1501,7 +1474,6 @@ fn commit_frame(
         editor.frame.wrap_rows = std::mem::take(&mut prepaint.wrap_rows);
         editor.frame.widget_rows = widget_rows;
         editor.frame.offset_maps = offset_maps;
-        editor.affordances.chip_rows = chip_rows;
         editor.frame.line_insets = line_insets;
         editor.frame.rtl_rows = std::mem::take(&mut prepaint.rtl);
         editor.frame.table_rows = table_rows;

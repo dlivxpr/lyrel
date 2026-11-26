@@ -110,8 +110,6 @@ pub(crate) fn prepaint_editor(
             caret_row,
             geometry_row,
             editor.block_image.as_ref(),
-            editor.block_chip.as_ref(),
-            editor.embed_view.as_ref(),
             editor.block_mermaid.as_ref(),
             editor.block_math.as_ref(),
             editor.code_highlight.as_ref(),
@@ -163,8 +161,7 @@ pub(crate) fn prepaint_editor(
         &line_tops,
         window,
     );
-    let (checkbox_grips, chip_grips, alert_fold_grips) =
-        gutter_pointer_hitboxes(&painter, &widgets, window);
+    let (checkbox_grips, alert_fold_grips) = gutter_pointer_hitboxes(&painter, window);
     let (code_chips, code_card_rects) = code_card_chips(&painter, &wrap_rows, window);
     let (heading_chevrons, heading_fold_grips, heading_row_rects) =
         heading_fold_marks(&painter, window);
@@ -262,7 +259,6 @@ pub(crate) fn prepaint_editor(
         checkbox_grips,
         code_chips,
         code_card_rects,
-        chip_grips,
         alert_fold_grips,
         heading_chevrons,
         heading_fold_grips,
@@ -706,19 +702,11 @@ fn image_grip_hitboxes(
     image_grips
 }
 
-// ===== Gutter pointer hitboxes: task checkboxes, file chips, fold chevrons =====
-/// Pointer-cursor hitboxes for clickable gutter checkboxes + file chips, so
-/// the cursor flips to a hand over them. Bounds mirror the paint math; keyed
-/// by line so paint sets the cursor on each (see `set_cursor_style`).
+/// Pointer-cursor hitboxes for task checkboxes and callout fold chevrons, keyed by line.
 fn gutter_pointer_hitboxes(
     frame: &RangePainter<'_>,
-    widgets: &[Option<Block>],
     window: &mut Window,
-) -> (
-    Vec<(usize, Hitbox)>,
-    Vec<(usize, Hitbox)>,
-    Vec<(usize, Hitbox)>,
-) {
+) -> (Vec<(usize, Hitbox)>, Vec<(usize, Hitbox)>) {
     let RangePainter {
         marks,
         line_heights,
@@ -728,11 +716,7 @@ fn gutter_pointer_hitboxes(
         font_size,
         ..
     } = *frame;
-    // Pointer-cursor hitboxes for clickable gutter checkboxes + file chips, so
-    // the cursor flips to a hand over them. Bounds mirror the paint math; keyed
-    // by line so paint sets the cursor on each (see `set_cursor_style`).
     let mut checkbox_grips = Vec::new();
-    let mut chip_grips = Vec::new();
     let mut alert_fold_grips = Vec::new();
     for (i, lh) in line_heights.iter().enumerate() {
         if let Some(LineMark::Check { bullet_x, .. }) = marks.get(i).copied().flatten() {
@@ -767,18 +751,8 @@ fn gutter_pointer_hitboxes(
             );
             alert_fold_grips.push((i, window.insert_hitbox(hit, HitboxBehavior::Normal)));
         }
-        if matches!(
-            widgets.get(i).and_then(Option::as_ref),
-            Some(Block::Chip { .. })
-        ) {
-            let hit = Bounds::new(
-                point(bounds.origin.x, bounds.origin.y + line_tops[i]),
-                size(bounds.size.width, *lh),
-            );
-            chip_grips.push((i, window.insert_hitbox(hit, HitboxBehavior::Normal)));
-        }
     }
-    (checkbox_grips, chip_grips, alert_fold_grips)
+    (checkbox_grips, alert_fold_grips)
 }
 
 // ===== Code-card chrome: language tag + Copy button =====

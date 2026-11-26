@@ -1,7 +1,6 @@
 //! Property-panel widgets: building the two-column `key:: value` panel
 //! ([`PropPanel`]), measuring its clickable pills for prepaint hitboxes, and
-//! painting the panel + the file-chip block widget. The property construct
-//! family, extracted from the former `element.rs` monolith.
+//! painting the panel.
 
 use super::*;
 
@@ -285,66 +284,4 @@ pub(super) fn paint_prop_panel(
             }
         }
     }
-}
-
-/// Paint a file chip — a rounded, bordered button with a flat document icon +
-/// `label` — filling the row (sized in `shape_document` to include vertical
-/// padding), its width fit to the label. Left-click opens it, right-click edits
-/// (handled by the mouse handlers via `chip_rows`).
-#[allow(clippy::too_many_arguments)]
-pub(super) fn paint_chip(
-    label: &str,
-    link: Hsla,
-    bg: Hsla,
-    border: Hsla,
-    origin: Point<Pixels>,
-    row_h: Pixels,
-    font: &Font,
-    font_size: Pixels,
-    window: &mut Window,
-    cx: &mut App,
-) {
-    let text = SharedString::from(label.to_string());
-    let run = TextRun {
-        len: text.len(),
-        font: font.clone(),
-        color: link,
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    let shaped = window
-        .text_system()
-        .shape_line(text, font_size, &[run], None);
-    let pad_x = px(10.);
-    let icon_h = font_size * 0.92;
-    let icon_w = icon_h * 0.74;
-    let gap = px(7.); // between the icon and the label
-    let box_w = pad_x * 2. + icon_w + gap + shaped.width();
-    window.paint_quad(PaintQuad {
-        bounds: Bounds::new(origin, size(box_w, row_h)),
-        corner_radii: Corners::all(px(6.)),
-        background: bg.into(),
-        border_widths: Edges::all(px(1.)),
-        border_color: border,
-        border_style: BorderStyle::Solid,
-    });
-    let ix = origin.x + pad_x;
-    paint_doc_icon(
-        ix,
-        origin.y + (row_h - icon_h) / 2.,
-        icon_w,
-        icon_h,
-        link,
-        window,
-    );
-    let line_h = font_size * LINE_HEIGHT_RATIO;
-    let _ = shaped.paint(
-        point(ix + icon_w + gap, origin.y + (row_h - line_h) / 2.),
-        line_h,
-        gpui_kit::TextAlign::Left,
-        None,
-        window,
-        cx,
-    );
 }
