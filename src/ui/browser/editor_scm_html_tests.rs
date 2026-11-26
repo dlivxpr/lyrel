@@ -232,11 +232,18 @@ fn wait_for_commands(
     commands
 }
 
-fn wait_for_opened_url(cx: &mut TestAppContext, vcx: &mut VisualTestContext) -> String {
+fn wait_for_opened_url(
+    cx: &mut TestAppContext,
+    vcx: &mut VisualTestContext,
+    previous_url: Option<&str>,
+) -> String {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         settle(vcx);
-        if let Some(url) = cx.opened_url() {
+        // GPUI retains the last URL while the next Host mount runs.
+        if let Some(url) = cx.opened_url()
+            && Some(url.as_str()) != previous_url
+        {
             return url;
         }
         assert!(
@@ -421,7 +428,7 @@ fn editor_tab_context_menu_offers_dual_html_browser_actions_for_local_and_remote
         window.pointer_down(pos, MouseButton::Left, cx);
         window.pointer_up(pos, MouseButton::Left, cx);
     });
-    let local_external = wait_for_opened_url(cx, &mut vcx);
+    let local_external = wait_for_opened_url(cx, &mut vcx, None);
     assert!(local_external.starts_with("http://127.0.0.1:"));
     assert!(local_external.ends_with("/index.html"));
     assert_eq!(
@@ -521,7 +528,7 @@ fn editor_tab_context_menu_offers_dual_html_browser_actions_for_local_and_remote
         window.pointer_down(pos, MouseButton::Left, cx);
         window.pointer_up(pos, MouseButton::Left, cx);
     });
-    let remote_external = wait_for_opened_url(cx, &mut remote_vcx);
+    let remote_external = wait_for_opened_url(cx, &mut remote_vcx, Some(&local_external));
     assert!(remote_external.starts_with("http://127.0.0.1:"));
     assert!(remote_external.ends_with("/remote.xhtml"));
     assert_eq!(
@@ -791,7 +798,7 @@ fn scm_changes_context_menu_offers_open_and_dual_html_browser_actions_for_local_
         window.pointer_down(pos, MouseButton::Left, cx);
         window.pointer_up(pos, MouseButton::Left, cx);
     });
-    let local_external = wait_for_opened_url(cx, &mut vcx);
+    let local_external = wait_for_opened_url(cx, &mut vcx, None);
     assert!(local_external.starts_with("http://127.0.0.1:"));
     assert!(local_external.ends_with("/index.html"));
     assert_eq!(
@@ -945,7 +952,7 @@ fn scm_changes_context_menu_offers_open_and_dual_html_browser_actions_for_local_
         window.pointer_down(pos, MouseButton::Left, cx);
         window.pointer_up(pos, MouseButton::Left, cx);
     });
-    let remote_external = wait_for_opened_url(cx, &mut remote_vcx);
+    let remote_external = wait_for_opened_url(cx, &mut remote_vcx, Some(&local_external));
     assert!(remote_external.starts_with("http://127.0.0.1:"));
     assert!(remote_external.ends_with("/remote.xhtml"));
     assert_eq!(
