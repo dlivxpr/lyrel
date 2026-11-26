@@ -172,6 +172,8 @@ Windows PowerShell 每条命令写成一行，不复制 Bash 的续行符。单�
 将 Tokio paused clock 与 Host 契约测试留在测试图中，不进入默认产品。GUI-free 单包测试
 仍可独立运行，不为追求相同指纹而编译整套 GUI；生产与测试、不同包选择仍可能产生合法重编。
 开发 profile 使用 `codegen-units = 256`，Release 的 thin LTO／单 CGU 不变。
+Windows Cargo wrapper 对 `test` profile 中的根包 `lyrel` 使用 `opt-level=0`，覆盖普通、原生测试
+和 nextest 的编译入口。macOS 的同项实验触发 `__eh_frame` 链接警告，保留默认优化级别（#415）。
 
 Windows wrapper 实时显示 Cargo 的诊断与非 JSON 输出。普通 `test` 仅调用一次 Cargo，
 由官方 target runner 在每个测试二进制启动前校验并暂存固定 ConPTY；不凭大小或时间戳

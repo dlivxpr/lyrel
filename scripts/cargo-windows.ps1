@@ -10,6 +10,9 @@ if ($Command -notin ($TestCommands + @('build', 't-check', 'nextest'))) {
     throw 'expected build, test, a standard t-* alias, or nextest run'
 }
 $CargoArgs = @($args | Select-Object -Skip 1)
+# Lower codegen cost for the root test package. The macOS linker warns on its
+# unoptimized unwind records, so keep this override in the Windows wrapper.
+$TestProfileArgs = @('--config', 'profile.test.package.lyrel.opt-level=0')
 $Files = @(Get-PinnedConptyFiles)
 $Directories = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
 
@@ -21,7 +24,7 @@ if ($Command -eq 'nextest') {
     # placing a PowerShell runner on every individual nextest test process.
     $ValueOptions = @('-p', '--package', '--exclude', '--test', '--bin', '--example', '--bench', '--features', '-F', '--target', '--target-dir', '--manifest-path', '--config', '-j', '--jobs', '--build-jobs', '--cargo-profile')
     $FlagOptions = @('--workspace', '--all', '--lib', '--bins', '--tests', '--examples', '--benches', '--all-targets', '--all-features', '--no-default-features', '--release', '--locked', '--frozen', '--offline', '--ignore-rust-version', '--future-incompat-report')
-    $BuildArgs = @()
+    $BuildArgs = $TestProfileArgs
     $RunArgs = @()
     for ($Index = 0; $Index -lt $NextestArgs.Count; $Index++) {
         $Argument = $NextestArgs[$Index]
@@ -73,6 +76,9 @@ $Separator = [Array]::IndexOf($CargoArgs, '--')
 $TestArgs = if ($Separator -ge 0) { @($CargoArgs | Select-Object -Skip ($Separator + 1)) } else { @() }
 if ($CompileArgs | Where-Object { $_ -match '^--message-format($|=)' }) {
     throw 'the Windows wrapper owns --message-format for executable discovery'
+}
+if ($Command -in $TestCommands) {
+    $CompileArgs = $TestProfileArgs + $CompileArgs
 }
 if ($Command -in $TestCommands -and $CompileArgs -notcontains '--no-run') {
     # Cargo retains its own cwd, filtering, doctest and failure semantics. An

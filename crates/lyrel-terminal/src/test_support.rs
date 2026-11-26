@@ -87,7 +87,9 @@ pub fn graphics_wait_fixture(
                 .rev()
                 .collect::<String>())
         );
-        graphics_consumer_progress(cx);
+        // The PTY acknowledgement is reader state. Production notifications
+        // drive redraws, and paint assertions request frames separately.
+        pump_graphics_consumer(cx);
     }
 }
 
@@ -195,6 +197,10 @@ pub fn graphics_window_geometry(
 
 pub fn graphics_consumer_progress(cx: &mut TestAppContext) {
     cx.update(|cx| cx.refresh_windows());
+    pump_graphics_consumer(cx);
+}
+
+fn pump_graphics_consumer(cx: &mut TestAppContext) {
     cx.executor()
         .advance_clock(std::time::Duration::from_millis(5));
     cx.run_until_parked();
