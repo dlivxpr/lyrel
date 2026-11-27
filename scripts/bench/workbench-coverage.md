@@ -131,7 +131,9 @@ Windows 候选 Release 使用同一测量机与 GUI 文件摘要，固定 `Q27G4
 
 六轮离线复核中，377 个未匹配样本里有 310 个仅有一个候选呈现，但其时间戳超出半个刷新周期的容差。各轮此类样本的 WGC 时间戳比候选呈现晚约 8.30–8.31 ms（各轮中位数）。其余 67 个样本有多个候选。已匹配样本的时间戳差值中位数为 −0.03 至 −0.02 ms。WGC 帧接收时间也可早于 `SystemRelativeTime`。后续采样需要能把正确内容与实际呈现关联的独立证据。复核记录见 `windows-430/paired-displays-xlF1QO/timing-audit.json`。
 
-另用 DXGI Desktop Duplication 读取隔离前台窗格的字形区域，将标记与同一帧的 [`LastPresentTime`](https://learn.microsoft.com/windows/win32/api/dxgi1_2/ns-dxgi1_2-dxgi_outdupl_frame_info) 记录在一起。基线 `cb897016` 和候选 `0daaff48` 各运行一轮空闲和可见输出。每轮从隔离 CLI 注入 12 个单字符，48 个标记均在 DXGI 帧和 PTY 回放中各出现一次。所有标记帧的 `AccumulatedFrames` 均为 1。两轮可见输出均通过 `plaintext-check`，各保留 600 批、9,600 行。首轮 `SendInput` 对照发送 12 个虚拟键，PTY 回显为零。新夹具的键盘布局读取为 `0804`，英语直输对照未运行。本组证据覆盖桌面更新时刻及画面识别，前台按键到该画面的时延仍待采集。探针、帧时间戳和回执摘要见 `windows-430-dxgi-phQIJG/manifest.json`。
+另用 DXGI Desktop Duplication 读取隔离前台窗格的字形区域，将标记和同一帧的 `LastPresentTime` 记录在一起。基线 `cb897016` 和候选 `0daaff48` 各运行一轮空闲、可见输出和隐藏输出。每轮从隔离 CLI 注入 12 个单字符，72 个标记均在 DXGI 帧和 PTY 回放中各出现一次。所有标记帧的 `AccumulatedFrames` 均为 1。四轮负载均通过 `plaintext-check`，各保留 600 批、9,600 行。两轮隐藏输出结束后切回，截图均显示 `PLAIN 9600` 和 `PLAIN_DONE`。探针、帧时间戳和回执摘要见 `windows-430-dxgi-phQIJG/manifest.json` 和 `hidden-manifest.json`。[DXGI 帧时间戳文档](https://learn.microsoft.com/windows/win32/api/dxgi1_2/ns-dxgi1_2-dxgi_outdupl_frame_info)
+
+首轮 `SendInput` 发送 12 个虚拟键，PTY 回显为零。新夹具的键盘布局为 `0804`，英语直输对照尚无结果。DXGI 样本记录了 CLI 注入标记对应的桌面更新时间。前台按键时延和对应的显示事件仍待采集。
 
 Windows 候选版 #431 的单轮正确性回放以每秒 400 行运行同一夹具。滚轮上移后可见 `PLAIN 0253` 等历史行。搜索 `PLAIN 0200` 时显示 `1/1`，该行编号被高亮。改为 `LYREL431_NO_MATCH` 时显示 `0/0`。搜索在日志第 58 批时已完成，最终 CLI 回放通过全部 9,600 行顺序及内容校验。输出结束后用三击选中 `PLAIN 0200`，经 `Ctrl+Shift+C` 复制的内容为该行 82 字节正文加一个 LF，共 83 字节。
 
@@ -460,6 +462,8 @@ Windows 候选版 #444 从文件树打开四象限 PNG，界面显示其尺寸 1
 
 固定版 ConPTY 加载后，向子进程写入 `ecd`。原生 `ReadConsoleInputW` 在四次改尺寸样本中均收到 `WINDOW_BUFFER_SIZE_EVENT(128, 38)` 和全部键记录。Git for Windows 2.56.1 的 `od -An -tx1 -N2` 在 raw 和 canonical 模式下各通过四次改尺寸及四次无改尺寸对照，均读出 `65 63`。同一套 Bash 的 `read -r -N 2` 在改尺寸后四次返回 `cd`，无改尺寸时四次返回 `ec`。显式忽略 `SIGWINCH` 后仍有三次返回 `cd`。另三次实际执行了 `SIGWINCH` trap，也均返回 `cd`。相关源码、MSYS 运行库版本和 37 个原始回执见同目录的 `input-boundary-manifest.json`。独立回放已将可重放的缺失定位到 Bash 读取路径，具体丢字的调用尚未确认。
 
+同一 MSYS 运行库的 `dd bs=1 count=2` 在 raw 模式下逐字节读取。改尺寸和不改尺寸各四次均返回 `65 63`。逐字节读取本身未触发缺失。源码与回执见 `windows-pty-first-byte-EaRKbC/single-byte-read-manifest.json`。
+
 #445 在 Docker Linux Release 上运行 `cli_e2e agents_report_continuous_state_age -- --exact`，通过真实 PTY 上的请求、状态年龄和轮次身份断言。在 Windows 候选版中，从窗格 2 写入固定 OSC 777 消息，核对应用内收件箱正文与目标。点击来源按钮后，下一条命令仅在窗格 2 回显。系统通知中心激活、会话发现全路径及状态到显示和回跳到输入延迟仍待测。
 
 #446 的 Docker Linux Release `insights_conformance` 通过 8 项测试，覆盖本机及真实 stdio Host 的 skills、omp／Kimi 用量统计和 GitHub remote 识别。Windows 候选版的技能页列出本机用户共享及所选工作区项目共享的两个同名安装，打开项目来源时显示预期正文。两份 `SKILL.md` 的字节在浏览前后相同。隔离的统计页从一份合成 omp 会话读取已知用量 10,000 Token、会话数 1。在源文件追加一条 2,000 Token 的用量事件并按「刷新历史」后，显示 12,000 Token、会话数 1，读取前后源文件字节一致。全部来源视图显示数据不完整。主机指标、GitHub 界面及刷新时延和资源归因仍待测。
@@ -476,7 +480,7 @@ Windows 候选版 #444 从文件树打开四象限 PNG，界面显示其尺寸 1
 
 | 尚缺前提 | 待完成的运行 |
 |---|---|
-| Windows 显示事件覆盖率与重复采样。 | #430 的 PresentMon 对照唯一匹配 103／480 个按键。DXGI 对照已逐个关联 48 个 CLI 注入标记与桌面更新。待在英语直输下采集输入时间，同跑显示事件并重复各场景，另采集 [#431](https://github.com/dlivxpr/lyrel/issues/431) 滚动、搜索和 [#432](https://github.com/dlivxpr/lyrel/issues/432) 切换至目标画面的显示时延。 |
+| Windows 显示事件覆盖率与重复采样。 | #430 的 PresentMon 对照唯一匹配 103／480 个按键。DXGI 对照已逐个关联 72 个 CLI 注入标记与桌面更新。待在英语直输下采集输入时间，同跑显示事件并重复各场景，另采集 [#431](https://github.com/dlivxpr/lyrel/issues/431) 滚动、搜索和 [#432](https://github.com/dlivxpr/lyrel/issues/432) 切换至目标画面的显示时延。 |
 | 预留的原生 macOS 桌面和可关联到输入的显示采集。 | 按独立的 [macOS 验收工单 #451](https://github.com/dlivxpr/lyrel/issues/451) 运行各条适用路径，并把证据链接回 #449。 |
 | 关联原生桌面呈现与跨物理主机采样。 | #433 已完成回环协议层交替采样、三对进程资源采样和候选双路由实窗验证。#437 已有 Linux 容器和 Windows 客户端的回环对照。两项仍缺原生显示时延及独立端点的对照。 |
 
