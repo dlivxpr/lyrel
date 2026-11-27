@@ -566,7 +566,9 @@ Windows 基线 `cb897016` 和候选 `0daaff48` 各在一个隔离 GUI 进程中�
 
 #446 的 Docker Linux Release `insights_conformance` 通过 8 项测试，覆盖本机及真实 stdio Host 的 skills、omp／Kimi 用量统计和 GitHub remote 识别。Windows 候选版的技能页列出本机用户共享及所选工作区项目共享的两个同名安装，打开项目来源时显示预期正文。两份 `SKILL.md` 的字节在浏览前后相同。隔离的统计页从一份合成 omp 会话读取已知用量 10,000 Token、会话数 1。在源文件追加一条 2,000 Token 的用量事件并按「刷新历史」后，显示 12,000 Token、会话数 1，读取前后源文件字节一致。全部来源视图显示数据不完整。主机指标、GitHub 界面及刷新时延和资源归因仍待测。
 
-#447 的 Windows 候选版在隔离设置中把主题从 Dark 切换为 Dracula。`config.json` 的 `theme_preset` 持久化为 `dracula`，原工作区下一条命令仍仅在窗格 2 回显。字体、快捷键、粘贴、系统托盘等入口的成对性能验收仍待测。
+#447 的 Windows 候选版在隔离设置中把主题从 Dark 切换为 Dracula。`config.json` 的 `theme_preset` 持久化为 `dracula`，原工作区下一条命令仍仅在窗格 2 回显。
+
+随后在 `cb897016` 和 `0daaff48` 的隔离窗口中分别执行 Dark → Dracula → Dark → Dracula。三次切换在各自同一设置窗口完成。点击主题至 AX 确认当前主题的耗时为基线 131.18–139.60 ms、候选 133.16–134.48 ms。点击至读到配置写入的耗时为基线 131.87–140.12 ms、候选 133.66–135.05 ms，包含前一项 AX 检查。两版关闭设置并重新聚焦原终端后，各按一次 `a`。PTY 均核对到一次回显。六次设置回执及两份终端回放见 `windows-447-paired-ZgQfPK/manifest.json`。首帧、切换期间的原生按键时延、稳定资源和其他系统集成入口仍待测。
 
 #448 的 Windows 便携包预检使用已发布的 `v0.5.0`（`ee9a10c5`）和 `v0.5.1`（`e03f1fa4`）。两个 ZIP 的 SHA-256 分别为 `4919445f94f180fb38b3c24d64f98db4c50c33dfafa6d59b06e51619e50624bc` 和 `af51c02b51813d76845b7fd942fa44b76ddcdf51f7d868bdc4bbc0b9dcf6691a`，均与各自的 `checksums.txt` 及 GitHub 资产摘要一致。按[便携更新步骤](../../docs/reference/updates.mdx#用本地资产复测安装更新和恢复)运行旧包的 `verify-portable`，一次成功预检用时 581 ms 并写出 `portable-payload`。旧包与暂存包的 CLI 分别报告 `0.5.0` 和 `0.5.1`。仅将校验文件中新包的摘要改为 64 个零后，预检退出码为 1，另行创建的暂存目录为空。安装替换、重开后会话和 shell 输入另行验收。
 
