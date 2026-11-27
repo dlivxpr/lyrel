@@ -217,6 +217,8 @@ Windows x64 的 [#434 恢复回放](desktop-restore-434.md) 使用三个 Git Bas
 
 同一候选版另跑五轮 `--input-check wake`。每次按 F8 后，备用窗格都收到完整的 `b434 holdN`。每次按 Alt+1 唤醒后，恢复布局中的左窗格都收到完整的 `b434 wakeN`。从驱动启动唤醒计时至读到 shell 回执为 743.75–777.78 ms，包含窗口检查和键入耗时。十条命令的焦点快照与回执均已保存。
 
+随后在 `d76e5eac` 的隔离 Release 探针上，用同一暖启动驱动将夹具命令名改为 `e434`，以复用首字 `e` 的探针。六轮均通过恢复后的 pane、目录、布局和 shell 身份断言，左窗格每轮恰好返回一次 `R434:warmN:left`。六轮 daemon 首字写入均为 `bytes=[101] write=Ok(()) flush=Ok(())`，驱动退出码为 0。同步回执见 `windows-pty-first-byte-EaRKbC/warm-restore-first-key.json`。历史首字缺失在这六轮中未出现。
+
 Windows x64 的 #435 在本机隔离 Release 窗口运行 [`scripts/kitty-playback.mjs`](../kitty-playback.mjs)。夹具上传三张 96 × 64 RGBA 帧，每帧间隔 500 ms，同一图像占两个 18 × 6 单元格的位置。候选 GUI 使用上文 #430 的同一文件摘要，基线 GUI SHA-256 为 `10bb25de67ade7a0d8499a2d6b9d7e407b7025b289e3885b4364e570219909a0`。
 
 候选完成三次关闭，基线完成一次。隐藏图形标签时，另一窗格收到预期命令。重新打开图形标签后抽查两幅蓝帧的内部、白边和间隙像素。基线一轮、候选两轮的五个采样点完全一致。候选第一轮在生产者退出后仍观察到两幅图。候选第三轮曾丢失 Bash 启动命令的第一个引号，取消续行后重发，保留此次失败。
@@ -410,6 +412,8 @@ Windows 候选版 #444 从文件树打开四象限 PNG，界面显示其尺寸 1
 另在 Release 探针向窗口逐键发送，等待提示符后延迟约 500 ms 仍失败 1／4，稳态 `plaintext` 夹具完整回显 4／4。原始对照和文件摘要见 `windows-pty-first-byte-EaRKbC/manifest.json`。这些诊断样本确认原基线已受影响，故障精确位置仍待区分终端附着后的 ConPTY 路径与 Git Bash 行编辑。`--noediting` 只用于对照。各版本样本量和运行顺序不足以判断故障率变化。
 
 在另一组 CLI 注入对照中，测试 `INPUTRC` 配置括号粘贴开启时失败 5／16，关闭时失败 9／16。另有两种 `strace.exe` 尝试。以 `strace.exe` 启动的 Bash 在提示符前退出。附加到已启动的 Bash 时复现 2／6，但跟踪结果未记录 stdin 字节。两次尝试仍留下 Bash 实际读取边界待验证。
+
+无 GUI 的 Bash 对照在 `ec` 前注入设备属性应答或光标位置应答，分别读到 `4;6cecho` 或 `Recho`，各出现三次。两种应答和焦点应答连发后三次均出现残留字符。单发焦点应答或省略应答时各通过三次。这些输入未复现只缺 `e` 的现象。另在十二个实窗 Bash 窗格各执行三条命令，36 条都通过。回执见 `headless-reply-control.json`、`first-and-next.json`。
 
 #445 在 Docker Linux Release 上运行 `cli_e2e agents_report_continuous_state_age -- --exact`，通过真实 PTY 上的请求、状态年龄和轮次身份断言。在 Windows 候选版中，从窗格 2 写入固定 OSC 777 消息，核对应用内收件箱正文与目标。点击来源按钮后，下一条命令仅在窗格 2 回显。系统通知中心激活、会话发现全路径及状态到显示和回跳到输入延迟仍待测。
 
