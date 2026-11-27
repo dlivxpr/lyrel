@@ -194,11 +194,23 @@ Windows 候选版 #432 的空闲标签切换回放在两个已完成输出的窗
 | server 工作区基线 | 1.73–2.83 | 6.08–7.25 | 843.98–1586.53 |
 | server 工作区候选 | 1.73–1.95 | 6.36–6.93 | 1059.47–1089.68 |
 
-两条路由的中断与恢复耗时范围均有重叠。远端任务 CPU 在基线样本中为 68.06–84.23 ms，候选为 68.27–85.93 ms。峰值 RSS 分别为 58.90–60.07 MiB 和 58.90–60.03 MiB。本机 server 的 SHA-256 与下文 #436 中的两个 Windows server 一致。远端基线 server 的 SHA-256 为 `d28cc2776dbc4d9de8b19166d737f253c6908d93971e0ab89d2137b9dc20c674`，候选为 `85f8fa7c75a788a9aed9009879f27008ca8b6a4ad665aa1b64ac8a1b6716e435`。本机 router、远端 daemon 与 sshd 的资源对照仍待采样。
+两条路由的中断与恢复耗时范围均有重叠。远端任务 CPU 在基线样本中为 68.06–84.23 ms，候选为 68.27–85.93 ms。峰值 RSS 分别为 58.90–60.07 MiB 和 58.90–60.03 MiB。本机 server 的 SHA-256 与下文 #436 中的两个 Windows server 一致。远端基线 server 的 SHA-256 为 `d28cc2776dbc4d9de8b19166d737f253c6908d93971e0ab89d2137b9dc20c674`，候选为 `85f8fa7c75a788a9aed9009879f27008ca8b6a4ad665aa1b64ac8a1b6716e435`。
 
 从归档的第 2、3 对采样提取 `input_to_exit_status_ms`，按每轮每路由 25 个样本计算 p95。原生 SSH 基线为 4.88–5.85 ms，候选为 5.15–5.32 ms。server 工作区基线为 5.41–5.61 ms，候选为 5.54–5.66 ms。此计数从本机发送 Ctrl-C 起算，终点为客户端读到远端 Bash 报告的退出状态 130。未取得第一对同口径的独立归档记录。
 
 Windows 候选 GUI 在固定主机密钥的同一 Docker Linux 端点各运行一次原生 SSH 标签和 server 工作区中断。两条路由均从窗口发送 `Ctrl+C` 并显示 `ACK`，远端文件分别确认收到 `SIGINT` 前的 384 和 1,536 行完整、有序。随后两处 Bash 均显示新命令读取的状态 130。重开同一隔离配置的窗口后，server 工作区保留原窗格、Bash PID 和中断回放，并显示新命令的输出。切回原生 SSH 标签后，同一窗格保留原回放，也接收并显示了新命令。实窗试验未关联呈现时间戳。
+
+同机用下文 #437 归档的 Windows Release 驱动和本机 server，再交替采集三对 #433 进程资源。远端仍使用上文两份 Linux server。每轮两条路由各预热一次、采集 25 次中断并执行一次恢复。六轮退出码均为 0，300 个中断与 12 次恢复通过输出、信号和会话校验。
+
+| 进程 | 基线累计 CPU 增量（ms） | 候选累计 CPU 增量（ms） | 基线采样峰值 RSS（MiB） | 候选采样峰值 RSS（MiB） |
+|---|---:|---:|---:|---:|
+| Windows 初始 router | 281.25–640.63 | 281.25–546.88 | 28.32–28.53 | 28.14–28.30 |
+| Linux daemon | 120–160 | 120–130 | 26.02–32.52 | 27.80–28.21 |
+| Linux 原生 SSH shell 的 `sshd-session` 父进程 | 160–180 | 160–170 | 6.09–6.36 | 6.36–6.37 |
+
+Windows 使用 `Get-Process`，目标采样间隔 250 ms，每轮取得 89–90 个样本。初始 router 在恢复前退出，重连阶段的新 router 未计入这组 CPU 和内存范围。Linux 每轮轮询 `/proc`，间隔为 500 ms 加读取开销，CPU 时钟为 100 tick/s。通过 PID 与启动时间固定进程身份，通过 Bash 的父 PID 确认 `sshd-session`。第一轮基线复用了始终运行的 fixture daemon，后续各轮重新启动。Headless 进程的 GPU 指标不适用。
+
+这三对中，原生 SSH 的输入至 ACK p95 为基线 1.68–2.03 ms、候选 1.43–2.72 ms。server 工作区分别为 1.75–2.13 和 1.96–2.51 ms。server 工作区重连分别为 867.58–930.76 和 1,082.81–1,176.81 ms。该组本机候选 server 摘要与首组三对不同，保留为单独的回环对照。驱动、进程计数和二进制摘要见 `windows-433-processes-eksmgg/manifest.json`。
 
 Windows x64 的 [#434 恢复回放](desktop-restore-434.md) 使用三个 Git Bash 窗格。暖启动保留了三个 shell PID 和原有标记。冷启动恢复工作区、两个标签、分屏比例和历史，重建三个 shell。两次恢复后的第一条命令均由左窗格接收。独立的托盘重附着试验中，工作区先解除附着，再由原 GUI 接受重开请求，daemon 和三个 shell 的 PID 均一致，左窗格显示 `R434:trayround1:left`。
 
@@ -409,11 +421,26 @@ Windows 候选版 #444 从文件树打开四象限 PNG，界面显示其尺寸 1
 | Release 探针，选中标签并用 `--noediting` | 0／12 |
 | Release 探针，无 GUI，默认行编辑／`--noediting` | 0／12、0／12 |
 
-另在 Release 探针向窗口逐键发送，等待提示符后延迟约 500 ms 仍失败 1／4，稳态 `plaintext` 夹具完整回显 4／4。原始对照和文件摘要见 `windows-pty-first-byte-EaRKbC/manifest.json`。这些诊断样本确认原基线已受影响，故障精确位置仍待区分终端附着后的 ConPTY 路径与 Git Bash 行编辑。`--noediting` 只用于对照。各版本样本量和运行顺序不足以判断故障率变化。
+另在 Release 探针向窗口逐键发送，等待提示符后延迟约 500 ms 仍失败 1／4，稳态 `plaintext` 夹具完整回显 4／4。原始对照和文件摘要见 `windows-pty-first-byte-EaRKbC/manifest.json`。这些诊断样本确认原基线已受影响。各版本样本量和运行顺序不足以判断故障率变化。
 
 在另一组 CLI 注入对照中，测试 `INPUTRC` 配置括号粘贴开启时失败 5／16，关闭时失败 9／16。另有两种 `strace.exe` 尝试。以 `strace.exe` 启动的 Bash 在提示符前退出。附加到已启动的 Bash 时复现 2／6，但跟踪结果未记录 stdin 字节。两次尝试仍留下 Bash 实际读取边界待验证。
 
 无 GUI 的 Bash 对照在 `ec` 前注入设备属性应答或光标位置应答，分别读到 `4;6cecho` 或 `Recho`，各出现三次。两种应答和焦点应答连发后三次均出现残留字符。单发焦点应答或省略应答时各通过三次。这些输入未复现只缺 `e` 的现象。另在十二个实窗 Bash 窗格各执行三条命令，36 条都通过。回执见 `headless-reply-control.json`、`first-and-next.json`。
+
+随后在同一隔离 Release daemon 上，通过窗格协议连接把新 Git Bash 窗格从 120×30 改为 128×38。无 GUI 时，实际改尺寸后 8／8 把 `echo` 执行为 `cho`。仅 attach 和未 attach 的对照各为 0／8。另一轮中，同尺寸请求为 0／6，改变尺寸后立即输入为 5／6，延迟 500 ms 和关闭 Bash 行编辑后各为 6／6。同一 daemon 的原生 `plaintext` 子进程完整回显 `bc`，实际改尺寸和仅 attach 各通过 6／6。
+
+独立 C++ 程序通过 `CreatePseudoConsole`、`ResizePseudoConsole` 和 `WriteFile` 重放同一尺寸与分段输入。用 MSVC `cl /std:c++20 /EHsc /O2 /W4` 构建，显式加载仓库固定的 ConPTY `1.25.260930003`，逐次检查 `WriteFile` 写入完整长度。Git for Windows 2.56.1 的 Bash 在尺寸改变后执行 `cho`。对照如下。
+
+| 独立程序对照 | 首字缺失／样本 |
+|---|---:|
+| Bash，实际改尺寸，Lyrel 所用创建标志 `7` | 6／6 |
+| Bash，实际改尺寸，创建标志分别为 `0`、`3`、`5`、`6` | 4／4、4／4、5／5、5／5 |
+| Bash `--noediting`，实际改尺寸，标志 `7` | 5／5 |
+| Bash，同尺寸请求／无请求，标志 `7` | 0／5、0／6 |
+| 原生 `ReadConsoleW` 子进程，实际改尺寸，标志 `7` | 0／6 |
+| Bash，Windows 系统 ConPTY，实际改尺寸／无请求，标志 `7` | 1／3、0／3 |
+
+独立程序确认 Git Bash 在两种 ConPTY 实现上都可能于改尺寸后丢首字。具体丢失输入记录的位置仍待跟踪。诊断源码、原始 VT 输出和摘要见 `windows-pty-first-byte-EaRKbC/resize-manifest.json`。
 
 #445 在 Docker Linux Release 上运行 `cli_e2e agents_report_continuous_state_age -- --exact`，通过真实 PTY 上的请求、状态年龄和轮次身份断言。在 Windows 候选版中，从窗格 2 写入固定 OSC 777 消息，核对应用内收件箱正文与目标。点击来源按钮后，下一条命令仅在窗格 2 回显。系统通知中心激活、会话发现全路径及状态到显示和回跳到输入延迟仍待测。
 
@@ -433,6 +460,6 @@ Windows 候选版 #444 从文件树打开四象限 PNG，界面显示其尺寸 1
 |---|---|
 | Windows 显示事件覆盖率与重复采样。 | #430 已在空闲、可见和隐藏输出各取得一对基线／候选，合计唯一匹配 103／480。待提高匹配覆盖率并重复各场景，另采集 [#431](https://github.com/dlivxpr/lyrel/issues/431) 滚动、搜索和 [#432](https://github.com/dlivxpr/lyrel/issues/432) 切换至目标画面的显示时延。 |
 | 预留的原生 macOS 桌面和可关联到输入的显示采集。 | 按独立的 [macOS 验收工单 #451](https://github.com/dlivxpr/lyrel/issues/451) 运行各条适用路径，并把证据链接回 #449。 |
-| Windows 到 Docker Linux 的固定指纹 SSH 环境及真实桌面。 | #433 已完成协议层交替采样，并补验候选版双路由的实窗中断和重开。还需记录本机 router、远端 daemon、sshd 的成对资源与显示时延。#437 已有 Linux 容器和 Windows 客户端的回环对照，仍需桌面显示和复核负载间的差异。跨物理主机结果需要独立端点。 |
+| 关联原生桌面呈现与跨物理主机采样。 | #433 已完成回环协议层交替采样、三对进程资源采样和候选双路由实窗验证。#437 已有 Linux 容器和 Windows 客户端的回环对照。两项仍缺原生显示时延及独立端点的对照。 |
 
-#434 的两次恢复与 #444 的 HTML 并行试验观察到首字缺失。新 Bash 窗格的对照已在原基线复现，并将故障边界缩到 daemon 的 PTY 写入成功之后。历史恢复和 HTML 样本尚待在同一路径上同步复测。#449 的集成验收须等待各行完成测量和处置。
+#434 的两次恢复与 #444 的 HTML 并行试验观察到首字缺失。新 Git Bash 窗格的对照已在原基线复现，独立 ConPTY 程序也复现了实际改尺寸后的首字缺失。旧的恢复和 HTML 失败样本仍缺同步的 resize 与 shell 读取记录。#449 的集成验收须等待各行完成测量和处置。
