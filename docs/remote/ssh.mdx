@@ -212,7 +212,7 @@ cargo test --locked -p lyrel --lib native_ssh_host_menu_disconnect_preserves_oth
 
 复用上文的 `LYREL_TEST_SSH_*` 固定 pin、隔离 HOME 和 Node 环境。远端还需提供 Linux `/proc`、`/bin/bash`、`/usr/bin/env` 与 `stty`。由端点维护者预先提供与待测提交匹配的 Release server 和专用 daemon。仅在已授权的专用端点上运行，保持现有 OpenSSH、主机密钥与账号配置。缺少配置时显式失败。
 
-先在采样窗口之外完成下列同参数构建和测试编译。使用基线和候选各自的工作树与匹配的远端 Release server。在保留相同夹具的前提下，于同一对预留机器上交替运行，暂停其他构建、测试和 GPU 工作负载。
+先在采样窗口之外完成下列构建和测试编译。保留一份 Release 测试驱动。按每轮版本选择匹配的远端 Release server，并将 `LYREL_TEST_SSH_INTERRUPT_LOCAL_SERVER` 设为该版本本机 Release `lyrel-server` 的绝对路径。未设置时使用随驱动构建的本机 server。记录两端二进制的 SHA-256。在同一对预留机器上交替运行，暂停其他构建、测试和 GPU 工作负载。
 
 ```bash
 cargo test --release --locked -p lyrel-server --features native-ssh-tests --test remote_interrupt --no-run

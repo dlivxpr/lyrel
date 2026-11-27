@@ -559,7 +559,11 @@ fn ssh_interrupt_and_workspace_reconnect() {
             assert!(rtt.is_finite() && rtt >= 0.0);
             rtt
         });
-    let mut fixture = NativeSshFixture::start(Path::new(env!("CARGO_BIN_EXE_lyrel-server")));
+    let local_binary = std::env::var_os("LYREL_TEST_SSH_INTERRUPT_LOCAL_SERVER");
+    let local_binary = local_binary
+        .as_deref()
+        .map_or_else(|| Path::new(env!("CARGO_BIN_EXE_lyrel-server")), Path::new);
+    let mut fixture = NativeSshFixture::start(local_binary);
     let host = control(&fixture);
     let remote_status = status(&host);
     let remote_instance = host.peer().instance.clone();
@@ -582,7 +586,7 @@ fn ssh_interrupt_and_workspace_reconnect() {
         json!({
             "event": "run", "local_router_pid": local_pid, "remote_daemon_pid": remote_status.pid,
             "remote_instance": remote_instance, "remote_build": host.peer().build,
-            "local_build": env!("CARGO_PKG_VERSION"), "debug_assertions": cfg!(debug_assertions),
+            "local_server": local_binary, "debug_assertions": cfg!(debug_assertions),
             "control_version": remote_status.control_version, "pane_version": remote_status.protocol_version,
             "grid": [win_size().cols, win_size().rows], "samples_per_route": samples,
             "warmups_per_route": 1, "interrupt_at_row": INTERRUPT_AFTER,
