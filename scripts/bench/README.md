@@ -120,3 +120,5 @@ cargo test --locked --release -p lyrel-cli --test cli_e2e --no-run
 `$workload_exe` 取 `cargo test --no-run` 报出的 `cli_e2e` 路径。其余路径分别指向待测 CLI、server 和 Bash。Linux 用上述 headless 入口。在 Windows 或 macOS 的专用桌面会话中，另用相同版本的 `lyrel-app`，在命令末尾加 `--gui "$app"`。测量时保持目标窗格可见、窗口大小固定且没有其他输入。可另跑一轮 `--gui "$app" --inspect`，在计时结束后观察 `verified.last_display_line` 指定的最后一行。
 
 每次命令启动独立 daemon 和窗格并输出一轮 JSONL。`workload` 提供版本、进程 ID、终端几何和负载大小。`sample` 按操作记录 CLI 启动到输出及退出的耗时，成功的 `exec` 还记录到 PTY 命令进程开始的耗时。`verified` 必须出现，表示编号字节序列、完整命令输出、退出状态和同一窗格可继续执行命令均通过。比较时保留原始记录、固定预热次数并报告各操作的样本量、中位数、p95 和波动。资源数据按 daemon、CLI、GUI 和生产进程分别归属。
+
+准备空闲样本时，驱动等到种子命令结束且 Bash 输出下一个完整提示符，再退订准备阶段的观察连接。`seed_prompt.observed_end_to_prompt_ns` 记录观察端收到命令结束到收到提示符末尾的时间，`observed_prompt_wait_after_cli_ns` 记录种子 CLI 返回后余下的等待。二者包括 PTY 和 daemon 的交付时间。`exec_idle` 单独从受测 CLI 进程启动计时。

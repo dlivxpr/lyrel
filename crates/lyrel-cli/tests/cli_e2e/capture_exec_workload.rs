@@ -7,6 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use lyrel_protocol::client::{ControlClient, PaneClient, PaneSession};
+use lyrel_protocol::core::osc::OscTokenizer;
 use lyrel_protocol::daemon::control::{ControlHello, ControlRequest, ReplyOk};
 use lyrel_protocol::daemon::protocol::{DaemonMsg, WinSize};
 use serde_json::{Value, json};
@@ -113,19 +114,31 @@ pub(super) fn run(args: impl Iterator<Item = OsString>) {
     }));
 
     workload.await_free();
-    workload.checked(&[
-        "exec",
-        &workload.address,
-        "--json",
-        "--timeout",
-        "8",
-        "--",
-        &producer_line("S"),
-    ]);
-    // Let Bash finish redrawing the prompt after its command-end report.
-    thread::sleep(Duration::from_millis(100));
+    let seed_line = producer_line("S");
+    let observer = workload.observe(pane);
+    let (seed_returned, (seed_ended, prompt_ready)) = thread::scope(|scope| {
+        let prompt = scope.spawn(|| observe_seed_prompt(observer, &seed_line));
+        workload.checked(&[
+            "exec",
+            &workload.address,
+            "--json",
+            "--timeout",
+            "8",
+            "--",
+            &seed_line,
+        ]);
+        let seed_returned = Instant::now();
+        let prompt = prompt.join().expect("observe the seed prompt");
+        (seed_returned, prompt)
+    });
     workload.capture("capture_idle", false);
     workload.exec("exec_idle", "E", 7);
+    let cli_wait = prompt_ready.saturating_duration_since(seed_returned);
+    emit(json!({
+        "kind": "seed_prompt", "pane": pane,
+        "observed_end_to_prompt_ns": prompt_ready.duration_since(seed_ended).as_nanos(),
+        "observed_prompt_wait_after_cli_ns": cli_wait.as_nanos(),
+    }));
     thread::sleep(Duration::from_millis(100));
 
     workload.send("B");
@@ -568,6 +581,41 @@ fn recv(session: &mut PaneSession, deadline: Instant) -> DaemonMsg {
         DaemonMsg::Error(message) => panic!("pane stream error: {message}"),
         DaemonMsg::Exited { code } => panic!("owned pane exited: {code:?}"),
         msg => msg,
+    }
+}
+
+// `D` completes exec before prompt hooks and PS1 expansion. Read the fresh
+// seed command's own prompt cycle and retire the probe before either sample.
+// The timestamps are observer receipt times, including PTY and daemon delivery.
+fn observe_seed_prompt(mut observer: PaneSession, seed_line: &str) -> (Instant, Instant) {
+    let deadline = Instant::now() + LIMIT;
+    let start_mark = format!("133;C;{seed_line};aid=lyrel");
+    let mut osc = OscTokenizer::new(&[b"133"]);
+    let mut seed_started = false;
+    let mut seed_ended = None;
+    let mut prompt_started = false;
+    loop {
+        let DaemonMsg::Output(bytes) = recv(&mut observer, deadline) else {
+            continue;
+        };
+        let mut prompt_ready = None;
+        osc.feed(&bytes, |mark| match mark {
+            m if m == start_mark.as_bytes() => seed_started = true,
+            b"133;D;0;aid=lyrel" if seed_started => {
+                seed_ended.get_or_insert_with(Instant::now);
+            }
+            b"133;A" if seed_ended.is_some() => prompt_started = true,
+            b"133;B" if prompt_started => {
+                prompt_ready.get_or_insert_with(Instant::now);
+            }
+            _ => {}
+        });
+        if let Some(ready) = prompt_ready {
+            observer
+                .detach()
+                .expect("retire the seed prompt probe before sampling");
+            return (seed_ended.expect("seed completion before its prompt"), ready);
+        }
     }
 }
 
