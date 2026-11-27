@@ -1,7 +1,7 @@
 //! #433: the same foreground task through a native SSH shell channel and a
 //! daemon-owned remote workspace. The observation boundary is the pane wire.
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -15,6 +15,9 @@ use lyrel_core::host::{Host, remote::RemoteHost};
 use lyrel_test_support::native_ssh::{NativeSshFixture, status, win_size};
 use serde::Deserialize;
 use serde_json::json;
+
+#[path = "remote_interrupt/traffic.rs"]
+mod traffic;
 
 const TASK: &[u8] = include_bytes!("fixtures/remote_interrupt.mjs");
 const WITHIN: Duration = Duration::from_secs(15);
@@ -268,6 +271,25 @@ struct OwnedWorkspace {
 }
 
 impl OwnedWorkspace {
+    fn create(host: Arc<RemoteHost>, name: &str) -> Self {
+        let workspace = Self {
+            host,
+            id: WorkspaceId::new(),
+            tab: TabId::new(),
+        };
+        let reply = workspace
+            .host
+            .client()
+            .call(ControlRequest::WorkspaceCreate {
+                name: Some(name.into()),
+                workspace: Some(workspace.id),
+            })
+            .unwrap();
+        assert!(matches!(reply, ReplyOk::WorkspaceTree(_)));
+        workspace.claim();
+        workspace
+    }
+
     fn claim(&self) {
         let reply = self
             .host
@@ -546,6 +568,13 @@ fn control(fixture: &NativeSshFixture) -> Arc<RemoteHost> {
     fixture.connect_control_as("fixture:ssh433", TOKEN, HOSTNAME)
 }
 
+fn local_binary() -> PathBuf {
+    std::env::var_os("LYREL_TEST_SSH_INTERRUPT_LOCAL_SERVER").map_or_else(
+        || PathBuf::from(env!("CARGO_BIN_EXE_lyrel-server")),
+        PathBuf::from,
+    )
+}
+
 #[test]
 #[ignore = "requires an explicitly authorized dedicated SSH endpoint and preconfigured pinned fixture"]
 fn ssh_interrupt_and_workspace_reconnect() {
@@ -559,11 +588,8 @@ fn ssh_interrupt_and_workspace_reconnect() {
             assert!(rtt.is_finite() && rtt >= 0.0);
             rtt
         });
-    let local_binary = std::env::var_os("LYREL_TEST_SSH_INTERRUPT_LOCAL_SERVER");
-    let local_binary = local_binary
-        .as_deref()
-        .map_or_else(|| Path::new(env!("CARGO_BIN_EXE_lyrel-server")), Path::new);
-    let mut fixture = NativeSshFixture::start(local_binary);
+    let local_binary = local_binary();
+    let mut fixture = NativeSshFixture::start(&local_binary);
     let host = control(&fixture);
     let remote_status = status(&host);
     let remote_instance = host.peer().instance.clone();
@@ -630,21 +656,7 @@ fn ssh_interrupt_and_workspace_reconnect() {
         .unwrap();
     drop(fresh_native);
 
-    let mut workspace = OwnedWorkspace {
-        host,
-        id: WorkspaceId::new(),
-        tab: TabId::new(),
-    };
-    let reply = workspace
-        .host
-        .client()
-        .call(ControlRequest::WorkspaceCreate {
-            name: Some("Dedicated SSH interrupt workload".into()),
-            workspace: Some(workspace.id),
-        })
-        .unwrap();
-    assert!(matches!(reply, ReplyOk::WorkspaceTree(_)));
-    workspace.claim();
+    let mut workspace = OwnedWorkspace::create(host, "Dedicated SSH interrupt workload");
     let (mut remote, pane_instance) = workspace_pane(&fixture, &workspace);
     let shell = remote.setup(fixture.remote_home());
     let last = observe_tasks(

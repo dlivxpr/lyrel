@@ -238,6 +238,21 @@ pwsh scripts/cargo-windows.ps1 test --release --locked -p lyrel-server --feature
 
 当前条目提供运行方法。真实两端的网络、CPU／内存、原生窗口和基线／候选比较仍待在已授权的预留环境中采样。
 
+<a id="docker-ssh-traffic-437"></a>
+### Docker 中的远程文件与转发负载（#437）
+
+复用 #433 的 `LYREL_TEST_SSH_*` 环境变量、固定主机密钥和 Release server。使用专用 Linux OpenSSH 容器，SSH 服务只暴露在回环地址。Windows 客户端使用映射到 `127.0.0.1` 的端口。若客户端也运行于 Docker，令客户端容器共享测试端点容器的网络命名空间，并按其中的 SSH 监听端口配置同一公钥的 `known_hosts` 条目。Linux 端需有 Node、Bash、`stty`、`getconf` 和 `/proc`，测试账号需可写专用 HOME。
+
+```bash
+cargo test --release --locked -p lyrel-server --features native-ssh-tests \
+  --test remote_interrupt traffic::ssh_workspace_traffic_during_pty_input \
+  -- --ignored --exact --nocapture --test-threads=1 > "$LYREL_SSH437_LOG" 2>&1
+```
+
+Windows 用 `pwsh scripts/cargo-windows.ps1 test` 替代 `cargo test`，其余参数一致。驱动对原生 SSH 窗格和远端工作区窗格各预热一次，默认各取一个样本。用 `LYREL_TEST_SSH_TRAFFIC_SAMPLES` 指定每条路由的正式样本量（1–25），用 `LYREL_TEST_SSH_TRAFFIC_REVISION` 记录待测两端。对照同机交替运行，分别核验两端的 server 文件摘要。
+
+每轮经过生产 `RemoteHost` 列目录和监视，校验命名变更通知及文件字节。两条生产 SFTP 路由分别校验 32 MiB 上传和下载。托管回环转发逐块核对回送的 1 MiB 数据。后台负载运行时，经真实 pane 协议发送命令并校验唯一回显。JSONL 记录负载重叠、吞吐量、SSH control 往返及本机 router、远端 daemon、SSH shell 父进程和远端 echo 进程的资源快照。CPU 和内存计量范围覆盖整轮，包括校验阶段。单样本仅供正确性及耗时量级参考。桌面显示、GUI 资源和适用的 WSL 路径另行采样。
+
 ### 标准原生桌面与双 pane 全尺寸入口
 
 `native_ssh_surface` 是 opt-in 测试执行器，不增加 shipping feature、GUI 参数、测试 renderer 或假协议。它通过真实远端 control 请求创建唯一 workspace、tab 与两 pane 的 split tree，写入本次临时配置下标准 `servers.json`／`views.json`，然后启动普通 `lyrel-app --config-dir ...`。实际窗口走标准 machine／workspace／RootApp／TerminalView 路径。
