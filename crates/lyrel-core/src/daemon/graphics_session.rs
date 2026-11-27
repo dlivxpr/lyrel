@@ -22,7 +22,6 @@ pub(super) struct SessionParams {
     pub glyph_state: bool,
     pub glyph_render: bool,
     pub program_status: bool,
-    pub replay_end: bool,
 }
 
 struct Session {
@@ -147,7 +146,7 @@ pub(super) fn run(
                             pane_colors: params.pane_colors,
                             glyph_state: params.glyph_state,
                             program_status: params.program_status,
-                            replay_end: params.replay_end,
+                            ..Default::default()
                         },
                     )?
                     .map(Attached::Observer)

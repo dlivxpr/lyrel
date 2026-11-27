@@ -255,8 +255,8 @@ pub const FEATURE_PROGRAM_STATUS: &str = "program-status";
 /// using the session while telling the user that endpoint needs updating.
 pub const FEATURE_VALIDATED_TITLES: &str = "validated-titles";
 
-/// A client may request an observer with an explicit initial replay boundary.
-/// Older clients keep using `Observe`, which never receives `ReplayEnd`.
+/// A client may request text observation with an explicit initial replay boundary.
+/// Older clients keep using `Observe`, which retains image delivery and has no boundary.
 pub const FEATURE_OBSERVER_REPLAY_END: &str = "observer-replay-end";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1379,8 +1379,8 @@ pub enum ClientMsg {
         pane_id: u64,
         size: WinSize,
     },
-    /// An `Observe` whose replay ends with `DaemonMsg::ReplayEnd`. Send only
-    /// after the peer advertises `FEATURE_OBSERVER_REPLAY_END`.
+    /// A text observer that receives no image frames and whose initial replay ends
+    /// with `DaemonMsg::ReplayEnd`. Requires `FEATURE_OBSERVER_REPLAY_END`.
     ObserveWithReplayEnd {
         pane_id: u64,
     },
@@ -1524,7 +1524,7 @@ pub enum DaemonMsg {
     },
     Size(WinSize),
     Snapshot(Vec<u8>),
-    /// Queued after all initial replay, including initial prompt or exit state,
+    /// Queued after initial text and session state, including prompt or exit state,
     /// before any live messages. Only sent to `ObserveWithReplayEnd` clients.
     ReplayEnd,
     Output(Vec<u8>),

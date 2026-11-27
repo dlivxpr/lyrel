@@ -164,10 +164,9 @@ impl Backend for RealBackend {
             .with_context(|| format!("observing pane %{pane}"))?;
         let has_replay_end = session.has_replay_end();
         let until = Instant::now() + REPLAY_MAX;
-        // Best effort throughout: once the pane is gone the daemon closes the
-        // connection, and setsockopt on a peerless socket fails (EINVAL on
-        // macOS). That must not turn a completed capture into an error — the
-        // replay we already collected is the answer.
+        // Reading reports the peer's actual failure even if setting the timeout
+        // raced with socket shutdown. A negotiated replay must finish at its
+        // boundary or a known exit before its text can be returned as complete.
         let _ = session.set_recv_timeout(Some(REPLAY_FIRST_WAIT));
         // The daemon replays each ring segment as `Size` then `Snapshot`, so the
         // last size seen is the one the next snapshot was recorded at. Observing

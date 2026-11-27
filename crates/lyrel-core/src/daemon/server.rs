@@ -948,7 +948,6 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             | ClientMsg::SpawnNativeSsh { .. }
             | ClientMsg::Attach { .. }
             | ClientMsg::Observe { .. }
-            | ClientMsg::ObserveWithReplayEnd { .. }
     ) && negotiated
         && graphics_capacity.is_none()
     {
@@ -1159,13 +1158,19 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
         request @ (ClientMsg::Observe { pane_id, size: _ }
         | ClientMsg::ObserveWithReplayEnd { pane_id }) => match registry.get(pane_id) {
             Some(pane) => {
-                let Some(_graphics_lease) = GraphicsCapacityLease::reserve(
-                    &pane,
-                    graphics_capacity.unwrap(),
-                    &write_stream,
-                )?
-                else {
-                    return Ok(());
+                let replay_end = matches!(request, ClientMsg::ObserveWithReplayEnd { .. });
+                let graphics_lease = if replay_end {
+                    None
+                } else {
+                    let Some(lease) = GraphicsCapacityLease::reserve(
+                        &pane,
+                        graphics_capacity.unwrap(),
+                        &write_stream,
+                    )?
+                    else {
+                        return Ok(());
+                    };
+                    Some(lease)
                 };
                 stream_observer(
                     pane,
@@ -1174,13 +1179,16 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                     registry,
                     PublishOptions {
                         allow_remote_clipboard_write: false,
-                        graphics_endpoint: graphics_offers.then_some(_graphics_lease.endpoint()),
+                        graphics_endpoint: graphics_lease
+                            .as_ref()
+                            .filter(|_| graphics_offers)
+                            .map(GraphicsCapacityLease::endpoint),
                         pane_colors,
                         glyph_state,
                         glyph_render: false,
                         program_status,
                     },
-                    matches!(request, ClientMsg::ObserveWithReplayEnd { .. }),
+                    replay_end,
                 )
             }
             None => {
@@ -1546,7 +1554,6 @@ fn publish_spawn_with_glyphs(
                 glyph_state,
                 glyph_render,
                 program_status,
-                replay_end: false,
             },
         );
     }
@@ -1607,7 +1614,6 @@ fn stream_pane_with_attach(
                 glyph_state,
                 glyph_render,
                 program_status,
-                replay_end: false,
             },
         );
     }
@@ -1655,7 +1661,6 @@ fn stream_pane(
                 glyph_state,
                 glyph_render,
                 program_status,
-                replay_end: false,
             },
         );
     }
@@ -1739,7 +1744,6 @@ fn stream_observer(
                 // answers `s`; it keeps no render credential at all.
                 glyph_render: false,
                 program_status,
-                replay_end,
             },
         );
     }

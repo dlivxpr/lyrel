@@ -183,6 +183,8 @@ struct Observer {
     colors: bool,
     /// This consumer opted in to the daemon-owned program-status projection.
     program: bool,
+    /// Whether this observer receives retained and live image frames.
+    graphics: bool,
 }
 
 pub(super) struct Subscriptions {
@@ -234,7 +236,7 @@ pub(super) struct SubscriberCaps {
     pub glyph_render: bool,
     /// The consumer takes the program-status projection.
     pub program: bool,
-    /// This observer explicitly requested `ReplayEnd`.
+    /// This text observer explicitly requested `ReplayEnd` without image frames.
     pub replay_end: bool,
 }
 
@@ -444,19 +446,25 @@ impl Subscriptions {
     }
 
     fn transport_failed(&mut self, graphics: &mut Option<GraphicsState>) {
-        self.notify(
-            DaemonMsg::Error(
-                "Graphics transport budget exhausted; reconnect to recover retained content".into(),
-            ),
-            graphics,
+        let error = DaemonMsg::Error(
+            "Graphics transport budget exhausted; reconnect to recover retained content".into(),
         );
+        if let Some(subscriber) = &self.subscriber {
+            let _ = subscriber.send(error.clone());
+        }
+        self.observers.retain(|observer| {
+            if observer.graphics {
+                let _ = send_to_observer(observer, &error, 0);
+            }
+            !observer.graphics
+        });
         self.subscriber = None;
         self.subscriber_colors = false;
         self.subscriber_glyphs = false;
         self.subscriber_glyph_render = false;
         self.subscriber_program = false;
         self.subscriber_epoch += 1;
-        self.observers.clear();
+        self.prune_viewports(graphics);
     }
 
     pub(super) fn broadcast(
@@ -471,8 +479,10 @@ impl Subscriptions {
         {
             gate.add(len);
         }
-        self.observers
-            .retain(|observer| send_to_observer(observer, &msg, len));
+        let graphics_frame = matches!(msg, DaemonMsg::Graphics(_));
+        self.observers.retain(|observer| {
+            (graphics_frame && !observer.graphics) || send_to_observer(observer, &msg, len)
+        });
         self.prune_viewports(graphics);
     }
 
@@ -529,7 +539,6 @@ impl Subscriptions {
                 }
                 GraphicsFrame::TransportFull => {
                     self.transport_failed(graphics);
-                    return;
                 }
                 GraphicsFrame::ClipboardWrite(frame) => {
                     let len = frame.len();
@@ -595,6 +604,7 @@ impl Subscriptions {
                 gate,
                 colors: caps.colors,
                 program: caps.program,
+                graphics: !caps.replay_end,
             });
         }
         self.observer_seq
@@ -721,7 +731,9 @@ fn replay_state(
         send(DaemonMsg::Snapshot(modes));
     }
     st.ring.replay(&mut send);
-    if let Some(graphics) = graphics {
+    if !caps.replay_end
+        && let Some(graphics) = graphics
+    {
         let Some((effects, _snapshot_work)) = graphics.replay() else {
             send(DaemonMsg::Error(
                 "Graphics replay metadata work budget exhausted".into(),

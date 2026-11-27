@@ -190,8 +190,8 @@ impl PaneClient {
         PaneSession::observe_over(self.open()?, pane_id, size, false, OPEN_REPLY_WAIT)
     }
 
-    /// Prefer an explicit replay boundary, falling back to the old observer
-    /// on an endpoint that does not advertise it. Check `has_replay_end()`.
+    /// Prefer an image-free observation stream with an explicit replay boundary.
+    /// Falls back to `Observe` if the peer does not advertise the new mode.
     pub fn observe_with_replay_end(&self, pane_id: u64, size: WinSize) -> io::Result<PaneSession> {
         PaneSession::observe_over(self.open()?, pane_id, size, true, OPEN_REPLY_WAIT)
     }
