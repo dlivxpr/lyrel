@@ -133,3 +133,7 @@ Windows 候选 Release 实窗完成一轮 [#443 结构文档回放](structured-d
 CSV 表格显示 50,005 条记录，选中 `R2 C3` 按 Enter 后，源码选区为 `CELL-1111`。用 F2 修改后撤销、重做，再从源码将末位改为 `9`，返回表格显示 `CELL-2229`。两个格式在保存前均通过 `verify original`。分别保存、关闭、从文件树重开后，JSONC 仍显示两个预期属性，CSV 仍显示探针值、含逗号字段及多行字段。`verify edited all` 逐字节核对了 JSONC 的 822,725 字节及 CSV 的 3,375,102 字节。本轮记录正确性。首次可用投影延迟、旧修订是否曾短暂显示、两版进程资源和轮间波动仍待采样。
 
 #448 的 Windows 便携包预检使用已发布的 `v0.5.0`（`ee9a10c5`）和 `v0.5.1`（`e03f1fa4`）。两个 ZIP 的 SHA-256 分别为 `4919445f94f180fb38b3c24d64f98db4c50c33dfafa6d59b06e51619e50624bc` 和 `af51c02b51813d76845b7fd942fa44b76ddcdf51f7d868bdc4bbc0b9dcf6691a`，均与各自的 `checksums.txt` 及 GitHub 资产摘要一致。按[便携更新步骤](../../docs/reference/updates.mdx#用本地资产复测安装更新和恢复)运行旧包的 `verify-portable`，一次成功预检用时 581 ms 并写出 `portable-payload`。旧包与暂存包的 CLI 分别报告 `0.5.0` 和 `0.5.1`。仅将校验文件中新包的摘要改为 64 个零后，预检退出码为 1，另行创建的暂存目录为空。安装替换、重开后会话和 shell 输入另行验收。
+
+随后分别从两份全新的 `0.5.0` 便携安装运行 `install-portable`，每份使用独立配置、daemon 和 `cmd.exe` 工作区。两份旧版窗格均先执行命令输出独立的一行 `LYREL448_PREOK`。成功样本解包旧版用时 776 ms，新包预检用时 557 ms。从启动安装 helper 到其退出为 2,321 ms，退出码为 0，outcome 为 `ok: true`。自动重开的 `0.5.1` 恢复了同一工作区、标签、目录和历史，重建了 daemon 和 shell。原生窗口输入命令后显示 `LYREL448_NEWOK`，CLI 回放同时含有新旧结果行。
+
+另一份安装通过相同预检后，仅将安装阶段使用的预期摘要改为 64 个零。helper 在 1,506 ms 后以退出码 1 结束，outcome 为 `ok: false`，并列出了预期与实际 SHA-256。自动重开的 `0.5.0` 保留原 daemon、shell、窗格、标签、工作区及目录，输入命令后显示 `LYREL448_RECOVEROK`。两个样本各运行一次，helper 用时包含等待旧窗口退出；到首条新命令可见的延迟和进程资源仍待采样。
