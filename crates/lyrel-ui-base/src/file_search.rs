@@ -8,10 +8,12 @@
 //! state. The tab-specific row building and the app's quick-open orchestration
 //! stay in `crate::ui::search::files`.
 
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::fuzzy::fuzzy_score;
+use crate::fuzzy::{fold_query, score_folded};
 use crate::host_ops::Host;
 
 /// How many entries one walk may return, directories included. A project
@@ -41,7 +43,7 @@ pub struct IndexedFile {
     pub rel: String,
     /// Where the file's own name starts in `rel`.
     pub name_at: usize,
-    /// `rel` lowercased once, for the prefilter that runs on every keystroke.
+    /// `rel` lowercased once, for the prefilter and ASCII scoring.
     lower: String,
 }
 
@@ -165,53 +167,78 @@ pub fn build_index(roots: &[PathBuf], files: Vec<PathBuf>, capped: bool) -> File
 }
 
 /// Whether every character of `needle` (already lowercase, no whitespace)
-/// appears in `hay` in order. Cheap enough to run over the whole index on
-/// every keystroke, and it throws out nearly everything before the real
-/// scorer, which allocates, sees it.
+/// appears in `hay` in order. Reject misses before scoring either substring.
 fn is_subsequence(needle: &[char], hay: &str) -> bool {
-    let mut want = needle.iter().peekable();
-    for c in hay.chars() {
-        match want.peek() {
-            Some(w) if **w == c => {
-                want.next();
-            }
-            Some(_) => {}
-            None => break,
-        }
-    }
-    want.peek().is_none()
+    let mut hay = hay.chars();
+    needle.iter().all(|&want| hay.any(|c| c == want))
 }
 
 /// How well `file` answers `needle`, on the one scale every tab shares — so
 /// the All tab can put a file beside an action and have the order mean
 /// something. A hit on the file's own name wins over the same hit spread
 /// across its directories.
-pub fn file_score(needle: &str, file: &IndexedFile) -> Option<i32> {
-    let on_name = fuzzy_score(needle, file.name());
-    let on_path = fuzzy_score(needle, &file.rel).map(|s| s - PATH_ONLY_PENALTY);
-    on_name.into_iter().chain(on_path).max()
+fn file_score(needle: &[char], file: &IndexedFile, scratch: &mut Vec<char>) -> Option<i32> {
+    fn score(needle: &[char], hay: &[impl Copy + Into<char>], name_at: usize) -> Option<i32> {
+        let on_name = score_folded(needle, &hay[name_at..]);
+        if name_at == 0 {
+            return on_name;
+        }
+        let on_path = score_folded(needle, hay).map(|s| s - PATH_ONLY_PENALTY);
+        on_name.max(on_path)
+    }
+
+    if file.rel.is_ascii() {
+        return score(needle, file.lower.as_bytes(), file.name_at);
+    }
+
+    // The scorer folds each scalar independently, unlike the prefilter's
+    // str::to_lowercase (which handles final sigma contextually). Capture
+    // the basename offset in folded scalars, since lowercase can expand.
+    scratch.clear();
+    scratch.extend(
+        file.rel[..file.name_at]
+            .chars()
+            .flat_map(char::to_lowercase),
+    );
+    let name_at = scratch.len();
+    scratch.extend(file.name().chars().flat_map(char::to_lowercase));
+    score(needle, scratch, name_at)
 }
 
 /// The files that match `needle`, best first, at most `limit` of them. Ties
-/// go to the shorter path — the shallower file is the likelier one.
+/// go to the shorter path, then keep the index's order.
 pub fn rank<'a>(index: &'a FileIndex, needle: &str, limit: usize) -> Vec<(i32, &'a IndexedFile)> {
-    let chars: Vec<char> = needle
-        .chars()
-        .flat_map(char::to_lowercase)
-        .filter(|c| !c.is_whitespace())
-        .collect();
-    if chars.is_empty() {
+    if limit == 0 {
         return Vec::new();
     }
-    let mut hits: Vec<(i32, &IndexedFile)> = index
-        .files
-        .iter()
-        .filter(|f| is_subsequence(&chars, &f.lower))
-        .filter_map(|f| Some((file_score(needle, f)?, f)))
-        .collect();
-    hits.sort_by(|(a, fa), (b, fb)| b.cmp(a).then_with(|| fa.rel.len().cmp(&fb.rel.len())));
-    hits.truncate(limit);
-    hits
+    let needle = fold_query(needle);
+    if needle.is_empty() {
+        return Vec::new();
+    }
+
+    let mut scratch = Vec::new();
+    // The worst retained match sorts last and sits at the top of the heap.
+    let mut hits = BinaryHeap::new();
+    for (order, file) in index.files.iter().enumerate() {
+        if !is_subsequence(&needle, &file.lower) {
+            continue;
+        }
+        let Some(score) = file_score(&needle, file, &mut scratch) else {
+            continue;
+        };
+        let hit = (Reverse(score), file.rel.len(), order);
+        if hits.len() < limit {
+            hits.push(hit);
+        } else if let Some(mut worst) = hits.peek_mut()
+            && hit < *worst
+        {
+            *worst = hit;
+        }
+    }
+    hits.into_sorted_vec()
+        .into_iter()
+        .map(|(Reverse(score), _, order)| (score, &index.files[order]))
+        .collect()
 }
 
 /// Walks the project the panes in `cwds` are in, on the host that has it.
@@ -287,4 +314,72 @@ pub fn searchable_roots(resolved: Vec<PathBuf>, home: Option<&Path>) -> Vec<Path
             .any(|other| other != root && root.starts_with(other))
     });
     roots
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn index<'a>(names: impl IntoIterator<Item = &'a str>) -> FileIndex {
+        let root = Path::new("/repo");
+        build_index(
+            &[root.to_path_buf()],
+            names.into_iter().map(|n| root.join(n)).collect(),
+            false,
+        )
+    }
+
+    #[test]
+    fn broad_file_queries_keep_ties_in_index_order_at_both_result_limits() {
+        let numbered: Vec<_> = (0..240).rev().map(|i| format!("file_{i:05}.txt")).collect();
+        let index = index(numbered.iter().map(String::as_str).chain([
+            "frost-b.txt",
+            "f文-b.txt",
+            "flare-b.txt",
+            "fritz.txt",
+            "fable.txt",
+            "f文-a.txt",
+            "flare-a.txt",
+            "frost-a.txt",
+        ]));
+        let expected: Vec<_> = [
+            "fritz.txt",
+            "fable.txt",
+            "f文-b.txt",
+            "f文-a.txt",
+            "frost-b.txt",
+            "flare-b.txt",
+            "flare-a.txt",
+            "frost-a.txt",
+        ]
+        .into_iter()
+        .chain(numbered.iter().map(String::as_str))
+        .collect();
+        for limit in [0, 8, 200, 300] {
+            let paths: Vec<_> = rank(&index, "f", limit)
+                .into_iter()
+                .map(|(_, file)| file.rel.as_str())
+                .collect();
+            assert_eq!(paths, expected[..limit.min(expected.len())]);
+        }
+    }
+
+    #[test]
+    fn file_queries_keep_unicode_lowercase_expansion_and_sigma_matching() {
+        let index = index(["İ/İ.rs", "İ/src/Note.rs", "ΟΣ", "οσ"]);
+        let ranked = |query| {
+            rank(&index, query, 8)
+                .into_iter()
+                .map(|(score, file)| (score, file.rel.as_str()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ranked(" \u{2003}İ . R S\t"),
+            [(205, "İ/İ.rs"), (44, "İ/src/Note.rs")]
+        );
+        // The contextual prefilter admits the final form in uppercase ΟΣ,
+        // but the scorer does not fold an uppercase scalar to final sigma.
+        assert_eq!(ranked("ΟΣ"), [(151, "οσ")]);
+        assert!(ranked("ος").is_empty());
+    }
 }
