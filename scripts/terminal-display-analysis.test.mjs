@@ -59,3 +59,19 @@ test('does not infer the first correct display when capture might have skipped i
     presentMon('42,A,1000,10,20', '42,A,1012,18,10'), options);
   assert.equal(result.unmatched[0].reason, 'ambiguous_present');
 });
+
+test('rejects a present claimed by different captured frames', () => {
+  const result = analyzeDisplay(evidence('one,1000', 'two,1004'),
+    evidence(',1000', 'one,1009', 'two,1012'), presentMon('42,A,1000,10,10'), options);
+  assert.equal(result.windowCaptureLatencyMs.samples, 2);
+  assert.equal(result.displayLatencyMs.samples, 0);
+  assert.deepEqual(result.unmatched.map(({ id, reason }) => [id, reason]), [
+    ['one', 'shared_present'], ['two', 'shared_present'],
+  ]);
+});
+
+test('matches distinct input markers first seen in the same captured frame', () => {
+  const result = analyzeDisplay(evidence('one,1000', 'two,1004'),
+    evidence(',1000', 'one,1012', 'two,1012'), presentMon('42,A,1000,10,10'), options);
+  assert.deepEqual(result.matched.map(({ id, latencyMs }) => [id, latencyMs]), [['one', 10], ['two', 6]]);
+});

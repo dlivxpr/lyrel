@@ -80,10 +80,9 @@ export function analyzeDisplay(inputText, captureText, presentText, { pid, refre
   const matchingRadiusMs = refreshMs / 2;
   const observedDisplayTimes = displayTimes.filter((time) => time >= frameTimes[0] && time <= frameTimes.at(-1));
   const intervals = observedDisplayTimes.slice(1).map((time, i) => time - observedDisplayTimes[i]);
-  const matched = [];
-  const unmatched = [];
+  const captureByPresent = new Map();
   const captured = [];
-  for (const { id, time: inputQpcMs } of inputs) {
+  const results = inputs.map(({ id, time: inputQpcMs }) => {
     const copies = captures.get(id) ?? [];
     const captureQpcMs = copies[0] ?? null;
     let reason;
@@ -101,11 +100,25 @@ export function analyzeDisplay(inputText, captureText, presentText, { pid, refre
       else if (potential.length !== 1) reason = 'ambiguous_present';
       else if (Math.abs(potential[0] - captureQpcMs) > matchingRadiusMs) reason = 'present_outside_tolerance';
       else {
-        matched.push({ id, inputQpcMs, captureQpcMs, displayQpcMs: potential[0], latencyMs: potential[0] - inputQpcMs });
-        continue;
+        const displayQpcMs = potential[0];
+        const previous = captureByPresent.get(displayQpcMs);
+        captureByPresent.set(displayQpcMs,
+          previous === undefined || previous === captureQpcMs ? captureQpcMs : null);
+        return { id, inputQpcMs, captureQpcMs, displayQpcMs, latencyMs: displayQpcMs - inputQpcMs };
       }
     }
-    unmatched.push({ id, inputQpcMs, captureQpcMs, reason });
+    return { id, inputQpcMs, captureQpcMs, reason };
+  });
+  const matched = [];
+  const unmatched = [];
+  for (const result of results) {
+    if ('reason' in result) unmatched.push(result);
+    else if (captureByPresent.get(result.displayQpcMs) === null) {
+      // One display event can corroborate several markers in the same
+      // captured frame, but it cannot identify two distinct captured frames.
+      const { id, inputQpcMs, captureQpcMs } = result;
+      unmatched.push({ id, inputQpcMs, captureQpcMs, reason: 'shared_present' });
+    } else matched.push(result);
   }
   return {
     pid, refreshHz, matchingRadiusMs, swapchain: selected,
