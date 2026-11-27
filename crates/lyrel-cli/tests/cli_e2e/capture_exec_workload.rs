@@ -614,7 +614,10 @@ fn observe_seed_prompt(mut observer: PaneSession, seed_line: &str) -> (Instant, 
             observer
                 .detach()
                 .expect("retire the seed prompt probe before sampling");
-            return (seed_ended.expect("seed completion before its prompt"), ready);
+            return (
+                seed_ended.expect("seed completion before its prompt"),
+                ready,
+            );
         }
     }
 }
