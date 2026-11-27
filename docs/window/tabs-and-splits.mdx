@@ -74,8 +74,7 @@ daemon 权威保存；`Tab` 保留同步后的呈现与客户端本地组合布�
 重新挂载同一 pane 仍能恢复当前状态；支持的 Unix 同会话 handoff 也保留它。daemon 死亡后的新 Shell
 不会从旧屏幕文字恢复进度。恢复状态本身不重放通知、剪贴板或响铃副作用。
 
-此能力要求实际 pane endpoint 使用协议 v18；control 仍为 v16。本地和 routed 后端均先握手，
-不兼容时提示更新 lyrel／lyrel-server，不以旧版仅保留文字的语义假装支持，也不自动停止 daemon 或用户 Shell。
+进度快照从 pane v18 开始提供。实际端点仍需协商当前的 [IPC 版本](/reference/architecture#ipc)。版本不兼容时 Lyrel 会提示更新，已有 daemon 或 Shell 继续运行。
 重复的相同进度不会反复通知标签所有者，隐藏终端仍解析输出而不按输出速率请求全窗重绘。
 
 原生检查入口为 `node scripts/terminal-progress.mjs`，仅在隔离配置和自有 pane 中运行。

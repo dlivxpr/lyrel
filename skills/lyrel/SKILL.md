@@ -7,7 +7,7 @@ description: >-
 <a id="driving-lyrel-from-the-command-line"></a>
 # 从命令行操控 lyrel
 
-`lyrel` 是 lyrel 服务器的轻量级非交互式客户端。每个操作都会返回并退出；`--json` 让输出变为机器可读格式。GUI 完全不必运行——窗格由服务器持有。
+`lyrel` 是 lyrel 服务器的轻量级非交互式客户端。使用 `--json` 获取机器可读结果。窗格由服务器持有，可在 GUI 退出后继续访问。`preview` 需要窗口消费请求。
 
 <a id="first-where-are-you"></a>
 ## 首先：你在哪里？
@@ -114,11 +114,12 @@ read -r WS PANE < <(lyrel new --json /path/to/repo \
 
 ```bash
 lyrel preview http://localhost:5173
+lyrel preview ./dist/index.html
 ```
 
-只接受绝对的 `http`／`https` 地址；`--pane` 省略时使用 `$LYREL_PANE`。预览会选中侧面板页签，但不会抢走用户的终端键盘焦点，也不会激活其他窗口；同一窗格只保留一个预览页签，再次请求会把它移到新地址。本地与远端工作区都沿用该窗口已核验的 Host 路由，远端回环地址会先经 Host 转发。
+传入绝对 `http`／`https` 地址或 `.html`、`.htm`、`.xhtml` 文件路径。相对路径以窗格工作目录为准。省略 `--pane` 时使用 `$LYREL_PANE`。同一窗格复用一个预览页签，终端保留键盘焦点。远端回环 URL 由所属 Host 转发。
 
-如果窗口消费了这个请求，命令成功；没有 GUI 附着时它失败并说明原因。之后用户可以点击预览页上的「分享」，把截图和反馈发送到你的窗格；它不会自动截图，也不需要你轮询。反馈到达时会像普通输入一样出现在窗格里。
+成功表示请求已投递给对应工作区的窗口。截图与反馈由用户从「分享」入口明确发送。输入格式、GUI 要求及 JSON 字段见[预览参考](https://github.com/dlivxpr/lyrel/blob/main/docs/cli/reference.mdx#lyrel-preview-url---pane-pane)。
 
 **全新的窗格可能吞掉 Enter。** 如果 shell 仍在处理启动文件——提示符框架、`fastfetch` 或任何登录时绘制界面的程序——它可能接收你发送的文本，却丢掉随后到达的回车，使得命令只停留在提示符行上而未执行。不会有任何报告提示此事：`send` 成功了，而窗格看起来只是一个尚未开始工作的工作智能体。因此，在向刚创建的窗格发送第一条命令后，应读取屏幕，检查命令是否确实已离开提示符开始执行：
 
@@ -165,7 +166,7 @@ cat /tmp/t.rc /tmp/t.log
 lyrel wait "$PANE" --until free --changed --timeout 900
 ```
 
-`free` 表示前台命令已经退出，窗格回到了只有 shell 的状态。`--changed` 额外要求“在我观察期间确实运行过某个程序”，这正是紧接在 `send` 后面时需要的条件：没有它，尚未启动的命令会使窗格看起来已经完成。
+`free` 表示现有证据表明窗格处于空闲 Shell。`--changed` 额外要求在这次等待中先观察到忙碌。
 
 从头到尾的完整流程：
 
@@ -176,9 +177,9 @@ cat /tmp/t.rc /tmp/t.log
 lyrel pane close "$PANE"
 ```
 
-退出码就是为此设计的：`0` 表示已达到你要求的某个状态，`124` 表示等待超时（遵循 `timeout(1)` 约定，因此可以区分“尚未完成”和“发生故障”），`1` 表示窗格先终止了。
+退出码 `0` 表示已达到请求的状态，`124` 表示超时。退出码 `1` 时读取 JSON 的 `status`。`exit` 表示窗格先退出，`unknown` 表示无法判断空闲，原因见 `free_unknown`。
 
-`--changed` 有一个陷阱：如果命令在一次轮询间隔（默认 500ms）内就完成，就永远不会被*观察到*处于运行状态，因此会一直等待到超时。对于这么快的命令，可以使用 `--interval 100`，或者去掉 `--changed` 并读取 `.rc` 文件。发生这种情况时，超时消息会作出说明。
+等待 `free` 时，`--changed` 要求先观察到忙碌。短命令可能在首次采样前或两次采样之间完成。需要关联某次命令的实际结果时，优先用 `lyrel exec`、`lyrel run`，或等待本次命令独有的结果文件。
 
 如果你想查看进程树本身——“里面正在运行什么”、“这个窗格正在通过哪个端口提供服务”——应使用 `lyrel procs %83`：按深度缩进，用 `*` 标记前台进程，然后列出这些进程正在监听的端口。不过，这不是检查编程智能体的方法：即使窗格中有忙碌的智能体，`procs` 也会报告 `nothing running in this pane`，因此将其理解为“工作智能体已终止”是错误的。应使用 `lyrel agents` 查询它们。
 
@@ -191,7 +192,7 @@ lyrel pane close "$PANE"
 
 即使你不读其他内容，也必须遵守其中四条规则：
 
-- **使用已确认的原生交互入口。** 内置产品只有 omp、Kimi Code、pi、OpenCode 2.x、Hermes。任务投递按各产品正式接口执行；print／管道模式不是 TUI，无法支持用户持续观察和追问。缺少交互投递能力时保留错误与任务，不静默丢任务、盲目键入或用一次性输出冒充。
+- **使用已确认的原生交互入口。** 内置产品包括 omp、Kimi Code、pi、OpenCode 2.x、Hermes 和 Antigravity CLI（`agy`）。按各产品的正式接口及已确认能力投递任务。遇到无法交互投递的产品，保留错误和任务。各项能力及验收条件见[智能体概览](https://github.com/dlivxpr/lyrel/blob/main/docs/agents/overview.mdx#which-agents)。
 - **写入文件的工作智能体必须有自己的 git worktree。** 两个智能体共用一个检出目录，会互相覆盖，并破坏用户的工作树。
 - **从 git 收集结果，而不是从屏幕收集。** 告诉工作智能体提交更改，然后读取 diff。屏幕只是一个矩形，顶部内容已经滚走。
 - **向新窗格首次发送内容后，确认命令已离开提示符开始执行**——即执行上文所述的 Enter 被吞检查。

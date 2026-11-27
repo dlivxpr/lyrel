@@ -24,8 +24,8 @@
 
 Shell 和窗格由后台服务器管理，而不是窗口。以下所有特性都建立在这一点之上。
 
-- **持久会话** — 退出应用后，Shell 继续运行；重启后，布局、屏幕内容和受支持的智能体对话都能恢复。无需 tmux
-- **智能体感知** — 内置身份仅保留 omp、Kimi Code、pi、OpenCode 2.x、Hermes；其他程序仍可在普通 shell 中运行
+- **持久会话**：退出应用后，后台服务器继续运行 Shell。机器重启后，Lyrel 恢复已保存的布局，在其中启动新 Shell。文字历史与智能体会话的恢复条件见[核心概念](docs/getting-started/concepts.mdx#what-survives-what)。
+- **智能体感知**：识别 omp、Kimi Code、pi、OpenCode 2.x、Hermes 和 Antigravity CLI。其他程序仍可在普通 Shell 中运行。
 - **可由智能体编排** — 一个智能体可以为另一个智能体打开窗格、交接任务、等待并读取结果，无论 GUI 是否运行
 - **编辑器级输入** — 建议、补全、高亮、历史搜索，无需安装插件
 - **远程开发** — 通过原生 SSH 协议栈工作，文件、仓库、窗格和 git 数据均保留在远程机器上
@@ -46,7 +46,7 @@ lyrel 的独立初版版本为 **0.1.0**。从 [**Releases**](https://github.com
 
 | | |
 |---|---|
-| **智能体感知** | 按窗格识别五种内置产品 · 状态圆点 · 通知 · 分支与差异 · 需要输入时显示托盘图标 · 重启后恢复 · 从全局搜索重新打开历史会话 · 一键启动 · 标签页侧边栏按仓库分组，支持固定分组；各能力的正式运行验收分别记录 |
+| **智能体感知** | 按窗格识别六种内置产品 · 状态圆点 · 通知 · 分支与差异 · 需要输入时显示托盘图标 · 恢复受支持的会话 · 从随处搜索重新打开历史会话 · 一键启动 · 标签页侧边栏按仓库分组，支持固定分组；各能力的正式运行验收分别记录 |
 | **CLI + 技能** | 随附 `lyrel` CLI · [智能体技能](skills/lyrel/SKILL.md) · `run` 流式输出命令结果并以该命令的退出码退出 · `split` · `send` · `wait --until free` · `capture` |
 | **编辑器级输入** | 根据历史记录显示幽灵建议 · 带说明的 Tab 补全 · 语法高亮 · 多行编辑 · 点击定位光标 · <kbd>⌃ R</kbd> 模糊搜索历史 |
 | **窗口** | 标签页与分屏 · <kbd>⌘ P</kbd> 全局搜索 · <kbd>⌘ F</kbd> 回滚内容搜索 · 休眠标签页以释放内存 · 输入法支持 |
@@ -67,9 +67,10 @@ lyrel 的独立初版版本为 **0.1.0**。从 [**Releases**](https://github.com
 | pi | `pi` | 1.3.0 |
 | OpenCode 2.x | `opencode`、`opencode2` | 2.0.32 |
 | Hermes | `hermes` | 0.22.2 |
+| Antigravity CLI | `agy` | 1.5.15 |
 
 omp 与 pi 是独立产品。Kimi Code 不接管归档产品数据；OpenCode 只维护 2.x 接口，不新增每次启动前的强制版本拦截。
-集成能力与验收边界见[智能体概览](docs/agents/overview.mdx)及[会话操作](docs/agents/sessions.mdx)。表格不是五种正式版本已经完成所有 GUI／daemon／PTY 验收的声明。
+各项能力、限制和实际运行证据以[智能体概览](docs/agents/overview.mdx)及[会话操作](docs/agents/sessions.mdx)为准。
 
 退役项的旧设置和快捷键不再生效，不映射为其他智能体；已有进程只失去专属身份，不因名单缩减而被终止。lyrel 不自动扫描或清理用户目录中的旧 hooks，不升级全局智能体、不删除账号或历史。[人工清理与升级边界](docs/agents/overview.mdx#retired-hooks)说明如何逐项核对 lyrel 归属。
 
@@ -107,7 +108,7 @@ npx skills update lyrel         # 后续更新
 <div align="center">
 <sub>
 
-基于 [GPUI Kit](https://gpui-kit.com/) 和 [`rio-vt`](https://crates.io/crates/rio-vt/0.5.30) 构建 · [Apache-2.0](LICENSE) · [问题反馈](https://github.com/dlivxpr/lyrel/issues) · [更新日志](CHANGELOG.md)
+基于 [GPUI Kit](https://gpui-kit.com/) 和 [`rio-vt`](https://crates.io/crates/rio-vt) 构建 · [Apache-2.0](LICENSE) · [问题反馈](https://github.com/dlivxpr/lyrel/issues) · [更新日志](CHANGELOG.md)
 
 来源致谢：本项目衍生自 l0ng-ai 的开源工作，保留 Copyright 2026 l0ng-ai 及 Apache-2.0 许可证声明；身份迁移不变更或移除上游及第三方的版权与许可。
 

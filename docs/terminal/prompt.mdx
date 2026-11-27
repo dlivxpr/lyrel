@@ -172,10 +172,7 @@ fish 的 `prompt_pwd`，或 starship 的 `truncation_length`。
 <a id="which-shells"></a>
 ## 支持哪些 shell
 
-提示符功能由 lyrel 的 shell 集成提供。对于 **zsh**、**bash**、
-**fish**、**PowerShell** 和 **WSL**，集成会自动注入，无需向 rc 文件添加任何内容。
-其他 shell（nushell、elvish、xonsh 等）也能在窗格中正常运行，
-只是没有这一提示符层。
+Lyrel 在符合注入条件的 zsh、Bash、fish、PowerShell 和 WSL Shell 中启用提示符集成，也支持本地 Nushell。远端 Nushell、elvish 和 xonsh 可以在窗格中运行，Lyrel 不为这些环境自动注入提示符集成。自行配置 Shell 启动参数时也会跳过自动注入。
 
 集成还会报告工作目录、每条命令的退出码，以及提示符的起始位置——
 侧边栏的分支信息、“命令已完成”通知和 `lyrel procs` 都建立在这些信息之上。

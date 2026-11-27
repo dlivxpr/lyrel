@@ -433,7 +433,7 @@ export const FEATURES = [
     p: "根据历史记录显示灰字建议、解释每个选项的 Tab 补全、语法高亮、点击定位光标，以及真正的多行编辑。" },
   { t: "感知智能体", href: "/agents/overview",
     d: "M8 8h8a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3H8a3 3 0 0 1-3-3v-5a3 3 0 0 1 3-3zM12 4v4M9.5 13h.01M14.5 13h.01",
-    p: "识别 omp、Kimi Code、pi、OpenCode 2.x、Hermes 五种内置产品。状态、通知与恢复取决于正式版本、集成授权和各项运行验收，不由名称识别推定。" },
+    p: "识别 omp、Kimi Code、pi、OpenCode 2.x、Hermes 和 Antigravity CLI。状态、通知与恢复的支持范围因智能体而异。" },
   { t: "如同本地般的远程工作", href: "/remote/workspaces",
     d: "M5 4h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2zM5 13h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2zM7 7.5h.01M7 16.5h.01",
     p: "原生 Rust SSH 协议栈，支持连接配置、SFTP 和端口转发；远程工作区则让文件、仓库和窗格都留在远程机器上。" },
@@ -485,7 +485,7 @@ export const Home = () => (
       <div className="lyrel-home-wrap">
         <span className="lyrel-home-eyebrow"><i />开源 · 使用 Rust 编写</span>
         <h1>让终端持续运行，放心离开。</h1>
-        <p className="lyrel-home-lede">关闭窗口、重启电脑、换一台笔记本——你启动的 shell 会话依然可用，留在其中工作的编程智能体也能恢复。</p>
+        <p className="lyrel-home-lede">关闭窗口后，后台服务器继续运行 Shell。重新打开 Lyrel 可连接仍在运行的会话。机器重启后，Lyrel 恢复已保存的布局，在其中启动新的 Shell。</p>
         <div className="lyrel-home-ctas">
           <a className="lyrel-home-btn lyrel-home-btn-primary" href="https://github.com/dlivxpr/lyrel/releases">查看 lyrel 发布状态</a>
           <a className="lyrel-home-btn lyrel-home-btn-ghost" href="/introduction">阅读文档 →</a>
@@ -508,18 +508,19 @@ export const Home = () => (
       <div className="lyrel-home-wrap lyrel-home-split">
         <div>
           <div className="lyrel-home-kicker">编程智能体</div>
-          <h2 className="lyrel-home-h2">同时运行五个智能体，无需逐个盯守。</h2>
+          <h2 className="lyrel-home-h2">在同一个工作台跟进多个智能体。</h2>
           <p className="lyrel-home-sub">lyrel 从不包装你的智能体，而是根据窗格中的命令识别它们，并从外部跟踪状态。</p>
           <ul className="lyrel-home-list">
             <li><Tick /><span><b>每个标签页都有状态。</b>工作中、等待中、已完成——每个窗格一个指示点，按仓库分组。</span></li>
             <li><Tick /><span><b>需要你时及时通知。</b>智能体等待你介入时立即通知，一轮任务结束时也会通知。</span></li>
-            <li><Tick /><span><b>重启后恢复。</b>智能体会话会在原来的窗格中从之前的位置继续。</span></li>
+            <li><Tick /><span><b>恢复智能体会话。</b>支持恢复的智能体可在重新启动后打开已保存的对话。</span></li>
           </ul>
           <div className="lyrel-home-chips">
             {["omp", "pi", "kimi", "opencode", "hermes"].map((a) => (
               <span className="lyrel-home-chip" key={a}><Glyph a={a} />{AGENTS[a].name}</span>
             ))}
-            <a className="lyrel-home-chip is-more" href="/agents/overview">查看五种智能体的支持范围</a>
+            <span className="lyrel-home-chip">Antigravity CLI</span>
+            <a className="lyrel-home-chip is-more" href="/agents/overview">查看各智能体的支持范围</a>
           </div>
         </div>
         <AgentPanel />

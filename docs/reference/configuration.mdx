@@ -10,7 +10,7 @@ description: "lyrel 读取的每个配置键、类型及默认值。"
 | Windows 便携模式 | `<lyrel-app.exe 所在文件夹>\data\config.json` |
 | 覆盖整个目录 | `LYREL_CONFIG_DIR` 或 `--config-dir` |
 
-所有配置键都是可选的——缺少某个键时会使用其默认值，因此只需填写要修改的配置。超出范围的数字会被限制在有效范围内，而不是被拒绝；无法识别的枚举值会回退到默认值并记录一条日志，不会导致整个文件加载失败。
+缺少的键使用默认值。对可解析的数字，范围修正按字段处理。例如 `font_size`、`line_height` 和 `ui_font_size` 的非正值会恢复默认值，其余合法数字按允许范围限制。字段类型错误也会导致配置解析失败，例如向无符号的 `scrollback_limit` 写入负数。解析失败时使用默认配置，并尝试保存原文件副本。
 
 ```json
 {
@@ -73,8 +73,7 @@ description: "lyrel 读取的每个配置键、类型及默认值。"
 | `restore_session` | bool | `true` | 恢复上次窗口的标签页、分屏和目录。 |
 | `gui_language` | enum | `"system"` | 选择模式：`system`、`en`、`zh-CN`。`system` 读取操作系统最高优先界面语言，明确简体中文时使用 `zh-CN`，其他情况使用 `en`；显式脚本优先于地区。旧日语、俄语及无效值回退 `en`，仅加载不重写文件。[规则详情 →](/customization/settings#language) |
 
-内置主题 ID：`light`、`one_light`、`catppuccin_latte`、`rose_pine_dawn`、
-`dark`、`dracula`、`harbor`、`one_dark_pro`、`rose_pine`。自定义主题的 ID 来自其文件名。[更多主题说明 →](/customization/themes)
+内置主题 ID 为 `light`、`one_light`、`catppuccin_latte`、`rose_pine_dawn`、`dark`、`dracula`、`harbor`、`one_dark_pro`、`rose_pine`、`catppuccin_mocha`、`gruvbox_dark`、`nord`、`tokyo_night`。自定义主题 ID 来自文件名。[更多主题说明 →](/customization/themes)
 
 <a id="tabs-sidebar-panels"></a>
 ## 标签页、侧边栏与面板
@@ -89,7 +88,7 @@ description: "lyrel 读取的每个配置键、类型及默认值。"
 | `right_panel_visible` | bool | `false` | |
 | `right_panel_width` | number | `260` | 像素（100–2000）。 |
 | `right_panel_tab` | enum | `"info"` | `info`、`changes`、`files`。 |
-| `diff_view` | enum | `"split"` | 也可设为 `unified`。全局生效，而非按文件设置。 |
+| `diff_view` | enum | `"split"` | 可选 `split`（并排）、`unified`（统一）和 `content`（内容感知）。全局生效。[差异视图](/git/diffs#side-by-side-or-unified) |
 | `document_layout` | enum | `"dock"` | 打开的文件或差异视图的显示位置：`dock` 停靠在终端旁，`fill` 覆盖工作区。此项决定新标签页的初始布局，之后各标签页分别保留自己的布局。 |
 | `document_ratio` | number | `0.5` | 停靠列相对于终端列的宽度比例（0.2–0.8）。预设宽度值为 `0.333`、`0.5`、`0.667`。 |
 | `scm_graph_expanded` | bool | `false` | 历史记录区域是否默认展开。 |

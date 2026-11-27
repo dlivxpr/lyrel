@@ -36,7 +36,7 @@ lyrel 是面向桌面本地开发与桌面远程开发的 Rust 原生终端工�
 
 `Host` 共用契约测试仅在 `lyrel-core` 自身测试或启用 `test-support` 时编译。`lyrel-server` 的 `insights_conformance` 通过 `lyrel-insights` 的公开接口验证 skills 与统计：所有平台运行本地适配器，Unix 另运行真实 `lyrel-server --stdio`。这个测试依赖不进入 server 的生产依赖图。
 
-不带引擎的 `LocalHost` 保留文件、Git 与 agent 操作，SQLite 查询返回 `Unsupported`。桌面和 server 使用 core 组合的完整本机 Host；远端经同一 `Host` 契约与 `sqlite-browse-v1` 传输。拆分不改变 control v18 或 pane v19。
+不带引擎的 `LocalHost` 保留文件、Git 与 agent 操作，SQLite 查询返回 `Unsupported`。桌面和 server 使用 core 组合的完整本机 Host，远端通过同一 `Host` 契约与 `sqlite-browse-v1` 传输。当前 IPC 版本见[两套 IPC 协议](#ipc)。
 
 JSON／JSONC／JSONL、TOML、YAML、XML 的保真投影和局部修改仍分别归 `lyrel-document`，不共享 AST。`lyrel-workbench-editor` 的 `structured_document` 负责订阅 `Document`、防抖单飞解析和 revision 校验；`structured_view` 负责模式切换、树展开与导航、滚动、源码定位和编辑面板会话。各 `*_document.rs` 适配器提供格式专属的解析、行呈现和编辑规则；整窗集成测试仍留在根包。
 
@@ -118,7 +118,7 @@ CLI 的 `-m` 复用本地 daemon 已连接的机器路由，不自行建立新�
 | 终端设置的滚动倍率 `STEP: 0.25 → 0.5`（`pages.rs` → `sections/terminal.rs`） | 64 s | 41.04 s |
 | 窗口 `app.rs` 的 `SIDE_PANEL_MAX_RATIO: 0.5 → 0.55` | 37.27 s | 30.87 s |
 
-四次样本均只重新编译根 `lyrel`。样本说明现有失效范围，不能证明分包收益或把耗时差归因于解耦。现有 `SettingsWindow` GPUI 测试无需创建 `LyrelApp`，即可验证快捷键事件、主题预览／取消／确认及内存凭据往返。独立编译仍需迁移或注入窗口 chrome、主题与快捷键目录等依赖；目前没有实测收益证明值得新增第 14 个包，因此设置留在根包，不改变 CI 选包和发行边界。
+四次样本均只重新编译根 `lyrel`。样本说明现有失效范围，无法单独证明分包收益或把耗时差归因于解耦。`SettingsWindow` GPUI 测试可独立验证快捷键事件、主题预览与凭据往返。设置保留在根包，其窗口、主题和快捷键装配继续使用现行编译与发布边界。
 
 根 `LICENSE` 中的 Zorite／Glim MIT 和第三方通知未改动。Windows x64 的 0.3.5 本地打包验收比对了 ZIP 解包内容和 Inno 暂存载荷，两个 `LICENSE.txt` 均与根 `LICENSE` 字节一致。macOS app 与 ZIP 使用相同的根许可证，实际 macOS 包未验收。
 
@@ -140,8 +140,8 @@ control 与 pane 分别协商协议；应用版本、control 版本和 pane 版�
 
 | 协议 | 源码常量 | 当前版本 | 承载内容 |
 | --- | --- | ---: | --- |
-| control | `daemon/control.rs` 的 `CONTROL_VERSION` | 24 | Host 操作、机器树、工作区附着、事件、文件／Git 流、主机指标、版本化分段读取、只读 SQLite 浏览、按目录查询会话、批量会话操作、进程终止、目录用量和有界的 Git 版本读取 |
-| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 20 | 创建／附着／观察、输入输出、尺寸、终端模式、agent 状态、显式 OSC 通知、图形回放、当前进度、pane 颜色、XTGETTCAP、Glyph 注册／查询／保留投影与 iTerm2 精确显示像素 |
+| control | `daemon/control.rs` 的 `CONTROL_VERSION` | 24 | Host 操作、机器树、工作区附着、文件／Git 流、主机指标、SQLite、会话操作、进程终止、目录用量、有界 Git 版本读取，以及 `PreviewOpen` 预览请求与事件 |
+| pane | `daemon/protocol.rs` 的 `PROTOCOL_VERSION` | 20 | 创建／附着／观察、终端输入输出及模式、智能体状态、带发生 ID 的 OSC 通知、图形回放、程序进度、pane 颜色、XTGETTCAP 和 Glyph 状态 |
 
 本地 Unix 使用私有 Unix socket，Windows 使用经认证的 loopback TCP；远端通过 SSH／stdio 桥接这些流。远端 server 文件名包含两套版本，当前为 `lyrel-server-c24p20`，Windows 加 `.exe`。
 
@@ -168,9 +168,7 @@ control 的 HELLO 在请求循环前核对版本与 features。增删 wire 消�
 隐藏 pane 继续消费输出、更新必要状态并释放退休图片资源，但普通输出不触发整窗重绘。daemon 持有图片权威，桌面只保留受预算约束的解码／绘制缓存；图片回收与连接退休不能通过隐藏副本绕过资源上限。
 
 单窗格进度由 `PaneFacts` 保存一个可选 `PaneProgress`，复用 `output_marks` 与原有 `OscTokenizer`
-按顺序折叠 `OSC 9;4` 和命令边界，不另建 VT parser 或历史事件队列。`DaemonMsg::Progress` 在实际
-v18 pane 流中发布有意义的变化，并在 attach 基线中始终发送当前状态（包括清空）；桌面不从回放文字
-重建权威进度。支持的同进程 handoff 携带状态，磁盘 scrollback、机器树和新 Shell 不携带它。
+按顺序折叠 `OSC 9;4` 和命令边界。pane v18 引入 `DaemonMsg::Progress`，它在 attach 基线发送当前状态（包括清空）。桌面使用该状态，支持的同进程 handoff 可携带它。磁盘 scrollback、机器树和新 Shell 均不携带该状态。
 `ProgressChanged` 只通知 tab owner 更新语义状态，不调用 agent lifecycle 或绕过隐藏 pane 的输出绘制门控。
 标签页汇总直接从所属全部终端叶子的当前状态派生，包括未聚焦、隐藏和停放的叶子；它不写入机器树或
 会话布局，也不经 agent payload 传递。成员变化、重连与重建后由新叶子及其 daemon 基线自然更新汇总；
@@ -224,7 +222,7 @@ Unix 的 daemon handoff 是独立的升级路径：通过 exec 继承本地 PTY 
 
 ## 编辑器与 agent 的边界
 
-当前的文档编辑与终端输入是不同能力，两者均未引入 WebView 或代理第三方应用界面。draw.io 本机引擎的局部例外已由 #297／#298 实现为固定的离线 viewer／editor，不改变普通文本、Markdown 或终端行为，也不授权它们执行任意网页脚本。
+普通文本、Markdown 与终端使用原生视图。draw.io 文档使用固定的离线 WebView 引擎。另有独立的侧面板「浏览器」工具，使用 Windows WebView2 或 macOS WKWebView 加载网页，工作区 HTML 文件经所属 Host 的只读回环服务提供。[浏览器使用说明](/window/side-panel#browser)
 
 文件缓冲区按 Host 与文档身份加载、监视和保存。编辑器用工作区、`HostId`、目标文档／分组与请求序号核对结果，恢复另有 `context_epoch`；这与文件树按 Host adapter 实例隔离不是同一机制。
 
@@ -252,8 +250,8 @@ coding agent 在真实 PTY 中运行自己的原生 TUI。命令识别、状态 
 文件打开入口需要按格式选择文本编辑、只读阅读或格式编辑，不再要求所有文件先成为文本 buffer。#280 已按这条规则拆开共同文档生命周期与内容种类：
 
 - 工作台继续拥有文档身份、所属 Host/path、打开请求、dirty、保存／另存为／冲突／关闭、tabs/groups 和焦点交接。格式实现不直接操作文件树或绕过所属 Host 写盘。
-- `lyrel-workbench-editor` 的 `EditorBuffers` 把读取结果分为 `Loaded::Text`、`Loaded::Image` 与 `Loaded::Sqlite`；图片携带解码结果或一句可见的失败说明，数据库携带所属 Host 已打开的只读读取视图及其失败说明。它们都不是文本 buffer，也没有伪装成 `EditorState`。
-- 文本侧把“是不是可编辑文本”收敛为 `EditorInput::is_text()`：保存、dirty 计算、gutter、LSP、查找、行号与符号跳转都据此让行，图片与数据库文档不会因为这些命令写盘或弹出永远落不到位置的行号框。
+- `EditorBuffers` 将读取结果分为 `Loaded::Text`、`Image`、`Drawio`、`Sqlite`、`Book`（EPUB）和 `Pdf`。格式加载结果可携带可见错误，例如坏图、受保护的文档或无法打开的数据库读取视图。
+- `EditorInput::is_text()` 区分文本输入与专用格式文档。保存、dirty、gutter、LSP、查找和跳转各按对应输入类型分派。
 - 源码可编辑格式保留一份权威原文。表格和结构树只提交针对当前 revision 的局部编辑，源码视图与格式视图共享撤销历史；光标、选择、滚动和布局仍归各 presentation。
 - 格式识别结合文件名与内容探针，格式错误必须可见。已识别容器先于通用 ZIP 处理，不把 EPUB 误当压缩包，也不因识别失败而执行系统关联程序。#280 的探针只认 PNG／JPEG／WebP／ICO 的魔数；BMP 只按扩展名进入，避免把以 `BM` 开头的文本从编辑器手里抢走。
 - 加载、解析、解码与渲染在后台完成，结果核对文档、所属 Host、连接代次和 revision。关闭或替换目标后，迟到结果不得安装资源、写盘或夺取焦点。#280 的图片读取沿用同一 pending／foreground 代次核对，标签页关闭后迟到的解码结果不会安装文档。
@@ -314,7 +312,7 @@ SQLite 在所属 Host 执行受限只读查询，按分页传回 schema 与必�
 | #289–#291，JSON 系列 | [Glim `glim-services/src/json.rs`](https://github.com/glimapp/glim/blob/fc2183f2c5f27ddfcdc4badbab6d83d50616831b/crates/glim-services/src/json.rs) 的 JSONC 词法处理、`glim-core/src/structured.rs`、`glim-app/src/views/reader/json.rs` 与 `json/view.rs` 的适用树交互 | #289 已实现：保留展开、导航与完整值交互，扩充 occurrence／source range，用 registry `jsonc-parser` 替换 Value 模型；#290 已实现：在共享 `structure_view` 与源码范围上补最小 mutation 层与共享 `structure_edit` 面板，改值／改名／增删成员经同一 `Document::replace_ranges` 成为一条 history，写入前按 revision 与整篇解析复核；树焦点下的撤销／重做经同一 `EditorState::undo_document`／`redo_document`，不另建 history 或隐式切换源码模式；#291 已实现：JSONL／NDJSON 逐行记录身份、记录内值／键／数组编辑、整行改值、插入与删除记录，只解析目标记录并在写入前复核该行，未触及行与无效邻居保留原字节，命令同样经共享 history／保存生命周期 | 上游 `serde_json::Value` 树会丢重复键／原拼写，NDJSON 转数组，均不能作为生产权威模型；不移植整篇格式化来冒充局部编辑，不采用 CST 整篇 `to_string()` 写回，也不扩大到 JSON5 |
 | #292–#294，YAML／TOML／XML | 复用 #289 移植的树交互与 Lyrel history；Glim `glim-services/src/graph.rs` 的 YAML／XML 分支仅作输入／展示差异参考 | #292 已实现：registry `yaml-edit =0.3.6`（`default-features=false`）在后台提供无损 CST，投影多文档／锚点／别名／tag／标量原拼写与 byte range；mutation 用同一 parser 校验片段（含共享面板多行 block scalar 与 flow 复杂键）并规划最小 splice，写入前复核整篇与 revision；`yaml_document/UPSTREAM.toml` 记录被拒绝的 Glim YAML→JSON 投影与依赖来源。#293 已实现：registry `toml_edit 0.25.19` 只读 `Document::parse` 原区间、局部 splice、交错表／AoT 保留，不使用 `DocumentMut` 整篇回写。两者共用 `structure_rows`／`StructureEditPanel`／Document history（含树焦点 undo_document／redo_document）、保存与冲突所有者。#294 已实现：registry `xmlparser =0.13.6` 保留元素／属性／文本／CDATA／注释／PI／声明 byte range，`roxmltree 0.21.2` 以 `allow_dtd:false`、`entity_resolver: None` 做良构与命名空间解析；`xml_document/projection.rs` 按源码顺序建树，`mutation.rs` 用 `(path, kind, range, key_range, value_range)` 重解析目标并只规划局部 splice，写入前复核整篇良构性、命名空间与预算，经共享 `Document::replace_ranges` 成为一条 history，树焦点撤销／重做共用同一 history。DTD／外部实体不解析、不访问文件或网络 | Glim YAML／XML 是有损只读投影；不移植 YAML→JSON 或扁平 XML 数据模型。不移植 YAML→JSON 或扁平 XML 数据模型，也不声称现有代码已支持 XML CDATA 等保真要求 |
 | #295–#296，SQLite | [Glim `glim-services/src/sqlite/browser.rs`](https://github.com/glimapp/glim/blob/fc2183f2c5f27ddfcdc4badbab6d83d50616831b/crates/glim-services/src/sqlite/browser.rs)、`glim-core/src/table.rs`、`glim-app/src/views/reader/sqlite.rs` 与 `sqlite/view.rs` | 移植受限 SQL 构造、列／分页／筛选／排序／完整值读取及交互；连接与查询移到 owning Host，保留值类型，补 read-view 生命周期 | 明确排除 `sqlite.rs::Snapshot` 的 main／WAL／journal 文件复制；不沿用每次查询独立连接而未声明的跨页语义或把显示文本当无损值 |
-| #297–#298，draw.io | 固定版本官方离线引擎；Glim `glim-services/src/drawio.rs::decode_page` 仅在需要时作为压缩格式辅助代码／夹具来源 | #297 落地只读预览；#298 在其上接真实编辑：引擎 commit 经会话内 `POST .../commit|sync/<seq>` 回到 owning 文档，工作台 undo/redo 是文档共享历史而非引擎本地栈，保存先经 sync flush 确认最新提交再走同一 Host 写路径；dirty、外部冲突与未保存关闭复用既有 buffer 生命周期。原始摘要与逐项 notice 见 `assets/drawio/{UPSTREAM.toml,PROVENANCE.json,THIRD-PARTY-NOTICES.md}` | `extensions.min.js`（LGPL libavoid、EPL ELK）因固定发行无公开对应源码而不分发，MathJax、模板、字体、PlantUML 同样排除；macOS 宿主已按同一 bridge 接入 wry 的真实 WKWebView（`lyrel://app` 自定义 scheme、CSP、navigation/new-window/download/permission/drag 拒绝），但未在本机或 CI macOS 运行；原生实窗／IME／双平台仍不得写成通过。Glim 基本形状 renderer 与 Zorite 白板仍不是替代品 |
+| #297–#298，draw.io | 固定版本官方离线引擎。Glim `glim-services/src/drawio.rs::decode_page` 仅作压缩格式辅助代码／夹具来源 | #297 接入只读预览，#298 接入编辑。引擎通过会话内的 `POST .../commit/<seq>` 或 `POST .../sync/<seq>` 将修改送回所属文档。工作台使用文档共享历史执行撤销和重做。保存先等待 sync 确认，再通过同一 Host 写入。未保存状态、外部冲突和关闭提示沿用既有生命周期。来源与许可见 `assets/drawio/` 下的 `UPSTREAM.toml`、`PROVENANCE.json` 和 `THIRD-PARTY-NOTICES.md` | 固定发行的 `extensions.min.js`（LGPL libavoid、EPL ELK）没有公开对应源码，分发包也排除了 MathJax、模板、字体和 PlantUML。该切片接入了 wry 的 WKWebView 宿主与同一桥接协议，包含 `lyrel://app` 自定义 scheme、CSP 以及对导航、弹窗、下载、权限和拖放的限制。该切片的 macOS 原生窗口、输入法和跨平台验收尚未完成 |
 | #299，集成接受 | 各模块实际 `UPSTREAM.toml`、根 `LICENSE` notices、`assets/drawio` 来源／分发闭包与 Lyrel 原生产消费者 | 已核对 13 份来源记录（#280–#298 的 12 个新模块记录及既有 `lyrel-markdown-editor`）：59 条 source 记录（51 imported、5 adapted、3 evaluated／rejected）、5 条 dependency、5 条 extension；缓存中的原始上游字节与记录的 SHA-256 逐项一致，本地目标路径均存在，拒绝项带具体理由。根 `LICENSE` 按 `Cargo.lock` 修正了过期的 roxmltree 0.21.1 项；Glim／Zorite／draw.io notices 与导入夹具按现有清单进入分发。新增生产工作台混合格式与同名双 Host 消费者，真实 SSH 混合读／编辑／保存／独立重开作为显式 `--ignored` 用例 | 不把静态来源核对当运行验收。Windows／macOS 实窗、系统 IME、整包安装／更新、最终平台 CI 与隔离性能仍是独立边界；`ignored` 的真实 SSH 用例需显式 fixture，未运行时保持未验证 |
 
 Glim 的测试代码可从上述模块内联测试与 `glim-services/tests/reader_boundaries.rs`、`reader_session_regressions.rs` 提取适用场景；`assets/reader-contracts/table.csv`、`table.json`、`sqlite.sql`、`book.epub.json` 仅在逐项核对来源许可后使用。Zorite PDF 的合成测试位于四个 `src/*.rs` 内，不能据此宣称存在完整实文档夹具。保留场景而替换 `/usr/bin/sqlite3`、`/usr/bin/zip` 等平台生成方式；不导入无关格式测试或第三方整包资产。
@@ -323,7 +321,7 @@ PDF 文本定位的 UTF-8 字节推进、裁剪／命名目标与表单 appearan
 
 ### draw.io 的局部引擎例外
 
-draw.io 是本轮唯一计划引入 WebView／本机图形引擎的格式。例外仅覆盖固定引擎及经过核对的资源，不扩展到任意 HTML 文件、Notebook 输出、项目插件或终端。
+draw.io 的文档引擎只加载固定引擎和核验过的资源。工作区 HTML 预览走独立的侧面板「浏览器」及 Host 路由。
 
 工作台向引擎提供当前文档内容；引擎返回编辑结果和状态，不直接选择本机／远端路径或写入原件。桥接校验消息来源、文档身份、请求与版本，拒绝旧文档回调。格式内部 Undo／Redo、dirty、保存、外部冲突、焦点与关闭要经过同一生产流程验证，不能仅用“导出 XML 成功”替代。
 
@@ -338,6 +336,8 @@ draw.io 引擎、图形库、模板、字体和其他资源分别核对版本、
 macOS 自定义协议回调需要 `Send + Sync`，因此仅纯 Rust 会话／序号／关闭状态与事件发送端放在 `Arc<parking_lot::Mutex<_>>` 中串行访问；原生 `WKWebView` 仍保留在主线程的 `Rc<RefCell<_>>` 内。协议响应、IPC、命令和关闭使用同一会话，释放锁后才执行原生脚本或销毁视图，不通过不安全的线程标记跨线程操作 WebView，也不放宽 origin／token／资源清单校验。
 
 #297 的边界是：Windows 直接 WebView2 宿主（`webview2-com 0.39.1`；`assets/windows/webview2/WebView2Loader.dll` 按 Microsoft WebView2 SDK 条款随构建 staged）已在隔离的普通产品窗口验收：固定引擎实际渲染多页 flow、AWS stencils、压缩 XML 和内嵌 `data:image/svg+xml`，页与缩放控件驱动真实页面；controller 使用 host-local bounds，截图不使用临时 Win32 reposition。内嵌 SVG 使用 draw.io 自身的 marker-less base64 约定（`data:image/svg+xml,<base64>`，引擎再规范化为 `;base64`）；带字面 `;base64` 的 style 会被 draw.io style parser 在分号处截断，属于非 draw.io 保存格式，不作为支持缺口。macOS 已有基于 wry `=0.57.2` 的真实 WKWebView 宿主源码（自定义 `lyrel` scheme、non-persistent store、CSP response headers、navigation/new-window/download/permission/drag 拒绝、IPC token 校验），但本机没有 macOS，实际运行／CI 证据尚未取得；真实远端、中文 IME、焦点、DPI、双平台与性能均未验收。headless 测试只证明资源哈希、请求策略、bridge 状态机与生产工作台文档语义，不能替代这些原生证据。
+
+以上为 #297 的历史引入与验收。当前 Windows MSVC 构建通过 `WebView2LoaderStatic.lib` 静态链接 SDK loader，并继续使用已安装的系统 WebView2 Runtime。[Windows SDK 许可与加载说明](https://github.com/dlivxpr/lyrel/blob/main/assets/windows/webview2/README.md)
 
 ### 实现前提与验收证据
 

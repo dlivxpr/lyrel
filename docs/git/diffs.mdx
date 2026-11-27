@@ -1,6 +1,6 @@
 ---
 title: "差异"
-description: "差异浮层：并排或统一视图，可从侧边栏或面板打开。"
+description: "从侧边栏或面板打开差异，选择并排、统一或内容感知视图。"
 ---
 
 <a id="opening-one"></a>
@@ -16,9 +16,11 @@ description: "差异浮层：并排或统一视图，可从侧边栏或面板打
 [了解更多关于该栏位的信息 →](/window/side-panel#where-it-opens)
 
 <a id="side-by-side-or-unified"></a>
-## 并排或统一视图
+## 选择差异视图
 
-“停靠 / 填满”切换按钮旁边的两个按钮用于选择差异的显示方式：两个窗格左右排列表示并排视图，上下堆叠表示统一视图。将鼠标悬停在按钮上即可看到其名称，也可以在全局搜索中使用**切换统一 / 并排差异视图**，通过键盘完成相同操作。此选择全局生效——所有差异共用一个设置，与 VS Code 的 `diffEditor.renderSideBySide` 设置作用相同——并以 `diff_view` 保存在 `config.json` 中。
+在「停靠／铺满」按钮旁选择「并排」「统一」或「内容感知」。选择保存在 `config.json` 的 `diff_view` 中，适用于所有差异。前两种视图按行展示变更，内容感知则按语法结构区分移动、修改、新增和删除。
+
+内容感知支持 Rust、JavaScript、TypeScript／TSX、Python、Go、JSON、TOML 和 YAML。只有补丁、文件格式不支持、读取或解析失败、超出预算时，界面会说明原因并暂用行视图。你的视图偏好仍然保留。
 
 <a id="what-it-shows"></a>
 ## 显示内容

@@ -205,15 +205,13 @@ JSON：`{"pane","text","bytes"}`。`text` 是打印的内容，已应用 `--tail
 因此即使脚本从不读取 JSON，也能看到提示。
 
 <a id="lyrel-preview-url---pane-pane"></a>
-### `lyrel preview URL [--pane %PANE]`
+### `lyrel preview URL_OR_PATH [--pane %PANE]`
 
-请显示此窗格所在工作区的 GUI，在侧面板中打开一个预览地址，并把该地址声明为
-此智能体窗格的预览来源。`URL` 必须是绝对的 `http`／`https` 地址；
-`about:blank`、`file:`、`data:`、自定义协议和没有 scheme 的字符串都会被拒绝。
-`--pane` 省略时使用 `$LYREL_PANE`。
+在此窗格所在工作区的「浏览器」中请求预览。目标可以是绝对 `http`／`https` URL、`.html`／`.htm`／`.xhtml` 文件路径，或主机部分为空或为 `localhost` 的此类 `file://` URI。相对路径由属主 daemon 按窗格的工作目录解析。HTML 文件预览要求服务端和接收窗口支持 `preview-html-v1`。`about:blank`、非 HTML 文件、远端 `file://` 主机和其他协议会被拒绝。省略 `--pane` 时使用 `$LYREL_PANE`。
 
 ```bash
 lyrel preview http://localhost:5173
+lyrel preview ./dist/index.html
 ```
 
 预览页会在目标工作区的窗口里被选中，但**不会**移动终端的键盘焦点，也不会激活
@@ -221,7 +219,7 @@ lyrel preview http://localhost:5173
 本地和远端工作区都沿用该窗口已经核验的 Host 路由；远端回环地址先经 Host 转发，
 不会把本机同名端口当成远端服务。
 
-请求本身只打开页面，不会截图。用户在侧面板的预览页上点击「分享」，填写反馈后
+命令成功表示请求已投递给窗口。用户在侧面板的预览页上点击「分享」，填写反馈后
 点击「发送到 %窗格」，工作台才截取当前页面、把 PNG 写入该窗格所属 Host 的
 截图目录，并把截图绝对路径与反馈作为一条提示发送到原智能体窗格。发送前会核验
 窗格仍属于该工作区与 Host、连接仍在、且没有其他客户端接管；窗格已关闭或身份
@@ -229,7 +227,7 @@ lyrel preview http://localhost:5173
 握手中声明消费预览的窗口链路；没有这样的 GUI 消费这个请求时，命令以非零退出码
 失败并说明原因。
 
-JSON：`{"pane","workspace","url","delivered"}`。
+成功的 JSON 响应包含 `pane`、`workspace`、`delivered`。URL 目标返回 `url`，HTML 文件目标返回 `file`。
 
 <a id="lyrel-procs-pane"></a>
 ### `lyrel procs [%PANE]`
@@ -271,7 +269,7 @@ JSON：`{"agents":[...]}`，每项的 `state.since_ms` 为进入状态时 daemon
 | 标志 | 默认值 | |
 |---|---|---|
 | `--until` | `waiting,done,exit` | 参见下方状态表 |
-| `--changed` | 关闭 | 仅在窗格于等待开始*之后*进入某个状态时唤醒 |
+| `--changed` | 关闭 | 仅接收相对首次轮询已变化的报告。`free` 另要求观察到忙碌，`exit` 始终结束等待 |
 | `--timeout` | 无 | N 秒后放弃，以 `124` 退出 |
 | `--interval` | `500` | 轮询间隔，单位为毫秒（50–3,600,000） |
 
@@ -288,20 +286,9 @@ JSON：`{"agents":[...]}`，每项的 `state.since_ms` 为进入状态时 daemon
 
 `free` 用于等待**命令**而不是代理，也是唯一会让每次轮询多发一个请求的状态，
 因此只有显式指定它，且请求的代理状态都尚未匹配时，才会检查它。
-与 `--changed` 一起使用时，它表示“某个程序运行后结束”，
-这正是在 `send` 之后通常需要等待的情况；
-如果命令快到在一个 `--interval` 内就完成，就不会被观察到正在运行，
-超时信息会说明这一点。
+等待 `free` 时，`--changed` 要求先观察到忙碌，再观察到空闲。命令若在首次采样前或两次采样之间开始并结束，等待可能超时。需要可靠关联一次命令的结果时，使用 `lyrel exec` 或 `lyrel run` 获取输出与退出码。
 
-判断依据有两种。如果窗格的 shell 在本机，依据就是进程树：
-不存在比 shell 更深的进程就表示空闲。对于**远程或 SSH 窗格**，
-进程树描述的是连接的本地端，即只要保持登录就始终忙碌的 `ssh` 本身，
-或者对于路由到远程守护进程的窗格，本地根本没有进程。
-因此，此时由远端 shell 自身的[提示符标记](/reference/shell-integration)决定。
-此类窗格上的提示符标记只可能来自远端，因为连接占用本地 shell 的 pty 时，
-本地 shell 不可能处于提示符状态。在本地窗格中，标记也优先于更深层的进程，
-所以 `free` 的含义是“可以接受输入”，而不严格等于“回到最外层 shell”：
-停在嵌套 shell 提示符处的窗格也算空闲。
+本机窗格通过进程树和 [Shell 提示符标记](/reference/shell-integration)判断空闲。即使有更深层进程，确认处于提示符也算空闲。SSH 进程树若只描述连接的本地端，远端 Shell 提示符才是判断远端活动的依据。
 
 如果远端主机没有加载 shell 集成，本地就无法区分空闲的远程提示符和
 正在运行的远程命令。`wait` 会明确报告这种情况：
@@ -310,13 +297,9 @@ JSON：`{"agents":[...]}`，每项的 `state.since_ms` 为进入状态时 daemon
 以便尚在进行的握手完成；而且只有在 `free` 成为唯一仍可能给出结果的状态时
 才会放弃：`--until done,free` 会继续等待 `done`。
 
-响应包含代理的消息和原生会话 id。JSON 的 `stale` 标志表示
-该结果是否可能属于上一轮。
+对智能体状态，`--changed` 比较当前的 `(status, activity)` 与首次轮询的值。状态已经在首次采样前变化时，可能错过该状态。同一状态下的活动计数变化也可以满足条件。
 
-JSON：`{"pane","status","matched","stale","activity","message","session_id"}`。
-超时时以 `124` 退出，返回相同对象并附带 `"timed_out": true`；
-此时 `matched` 为 `false`，`stale` 仍表示观察期间窗格是否发生过变化，
-如果请求了 `free` 却始终无法确定，`free_unknown` 会包含原因。
+JSON 返回 `pane`、`status`、`matched`、`stale`、`activity`、`message`、`session_id`。`stale: true` 表示结果相对首次采样没有变化，可能属于上一轮。匹配条件时退出码为 `0`。窗格先退出且未匹配时返回 `1` 和 `status: "exit"`。无法判断空闲时也可能返回 `1`，此时 `status` 为 `unknown`，`free_unknown` 说明原因。超时时以 `124` 退出，返回 `matched: false`、`timed_out: true`，以及适用时的 `free_unknown`。
 [编排 →](/agents/orchestration)
 
 <a id="lyrel-events"></a>
@@ -491,10 +474,12 @@ lyrel worktree new --agent opencode --task "修复不稳定的登录测试"
 | 命令 | 效果 |
 |---|---|
 | `server status` | 与 `lyrel status` 相同 |
-| `server logs` | 持续输出服务器日志的末尾内容并打印日志路径；默认启用 info 级别日志（`LYREL_LOG=off` 可禁用） |
+| `server logs` | 打印日志路径和末尾最多 40 行，然后退出。默认日志级别为 `info`，`LYREL_LOG=off` 可禁用 |
 | `server start` | 在本机启动服务器 |
 | `server stop` | 停止服务器：**本机上的所有窗格都会终止** |
-| `server restart` | 先停止再启动，后果相同 |
+| `server restart [--hard]` | 端点支持 handoff 时默认尝试原位重启，可保留本地 PTY 会话。`--hard` 或端点不支持 handoff 时会停止再启动，结束原会话 |
+
+自动化应检查 JSON 的 `sessions_kept`。原位重启被拒绝时会报告错误。如果 daemon 在 handoff 期间退出，CLI 会尝试启动新的 daemon。
 
 <Warning>
   不要代替他人运行 `start`、`stop` 或 `restart`。

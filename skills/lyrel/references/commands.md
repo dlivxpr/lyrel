@@ -34,7 +34,7 @@
 |---|---|
 | `LYREL_PANE` | 此窗格的 ID，例如 `71` 或 `%71`（两种形式均可接受）。它是 `split`、`send`、`exec`、`capture`、`procs`、`wait`、`pane close` 的默认目标。 |
 | `LYREL_WS` | 此窗格的工作区 ID。它是 `run --keep`、`tab new`、`tab ls`、`ws tree` 的默认值。 |
-| `LYREL_CONFIG_DIR` | 服务器的配置目录。CLI 通过它找到对应服务器的套接字，无需传入套接字路径。配置目录的优先级为 `--config-dir` > `LYREL_CONFIG_DIR` > Windows 便携模式的 `data` 目录 > 平台默认目录；Unix 默认为 `~/.config/lyrel`，Windows 默认为 `%APPDATA%\lyrel`，开发环境使用 `.lyrel-dev`。 |
+| `LYREL_CONFIG_DIR` | 用这个环境变量让 `lyrel` CLI 定位指定实例的服务器套接字。未设置时按便携模式和平台默认目录查找。`--config-dir` 属于 GUI 和 server 入口。开发实例通常使用 `.lyrel-dev`。 |
 
 在 lyrel shell 之外，需要目标地址的子命令会失败并报告：
 `not inside a lyrel shell — pass an explicit %pane/@tab/workspace`。
@@ -185,7 +185,7 @@ JSON：`{"agents":[...]}`；如果某个运行中的智能体缺少状态钩子�
 | 标志 | 默认值 | 作用 |
 |---|---|---|
 | `--until` | `waiting,done,exit` | 以逗号分隔；参见下方状态 |
-| `--changed` | 关闭 | 仅在窗格进入等待开始*之后*才转入的状态时唤醒 |
+| `--changed` | 关闭 | 要求当前状态或活动计数与首次轮询不同。等待 `free` 时须先观察到忙碌 |
 | `--timeout` | 无 | N 秒后放弃等待，以 124 退出 |
 | `--interval` | 500 | 轮询间隔，单位为 ms（50–3,600,000） |
 
@@ -197,16 +197,16 @@ JSON：`{"agents":[...]}`；如果某个运行中的智能体缺少状态钩子�
 | `exit` | 窗格已消失。无论是否指定，都会结束所有等待 |
 
 JSON：`{"pane","status","matched","stale","activity","message","session_id"}`。
-`stale: true` 表示等待开始时窗格就已经处于该状态，因此返回的结果可能属于上一轮——`--changed` 正是用来排除这种情况的。
+`stale: true` 表示结果相对首次采样没有变化，可能属于上一轮。使用 `--changed` 仍可能错过首次采样前就已发生的转换。结合当前输出和本轮产出检查结果。
 
-退出码 0 = 已达到请求的状态；124 = 超时；1 = 窗格未达到请求状态便已退出（仍会输出 JSON，其中 `"matched": false`）。
+退出码 `0` 表示匹配，`124` 表示超时。退出码 `1` 时检查 `status`。`exit` 表示窗格先退出，`unknown` 表示仅等待空闲或退出时无法判断空闲，`free_unknown` 会说明原因。
 
 以下细节决定循环能否正常工作：
 
 - **`idle` 不表示“命令已完成”。** 它是*智能体*对自身状态的描述。运行构建的窗格没有智能体，会报告 `no-agent`。等待命令时请使用 `free`。
 - **检查 `free` 每轮轮询需要额外发起一次请求**，因此只有明确指定时才检查，而且仅在你请求的智能体状态均未先匹配时才检查——组合使用 `waiting,done,free` 不会漏掉 `waiting`。
-- **对于 `free`，`--changed` 的含义不同**：shell 从空闲 → 忙碌 → 空闲，最终回到起始状态，因此没有可用于比较的新状态。此时它表示“在我观察期间有程序运行过”——这正是你在 `send` 之后需要的行为。如果命令快到在一个 `--interval` 内就已完成，就永远观察不到其运行状态，最终会超时；对于这种命令，请使用 `--interval 100`，或去掉 `--changed` 并读取哨兵文件。
-- **`free` 读取的是进程树**，因此如果窗格的根进程就是命令本身（`lyrel run` 创建的窗格），它在运行时也会看起来处于空闲状态；而后台作业则会在前台命令退出后仍让窗格保持忙碌。
+- **等待 `free` 时，`--changed` 要求先观察到忙碌。** 在首次采样前或两次采样间已完成的命令可能触发超时。需要命令退出码时，使用 `lyrel exec` 或 `lyrel run`。
+- **空闲判断依赖进程树和 Shell 提示符标记。** 只能观测到 SSH 连接本地端时，使用远端提示符标记。没有可用证据时，结果可能为 `unknown`。
 
 <a id="lyrel-events"></a>
 ### `lyrel events`
@@ -299,10 +299,10 @@ GROUP 是 GUI 侧边栏用于归类标签页的分组标题，显示其最后一
 | 命令 | 作用 |
 |---|---|
 | `server status` | 等同于 `lyrel status` |
-| `server logs` | 查看服务器日志末尾；打印日志路径，如果从未启用日志，也会明确提示（需在服务器启动前设置 `LYREL_LOG=info`） |
+| `server logs` | 一次输出日志路径和末尾最多 40 行。默认日志级别为 `info`，`LYREL_LOG=off` 可禁用 |
 | `server start` | 在本机启动服务器 |
 | `server stop` | 停止服务器——**机器上的所有窗格都会终止** |
-| `server restart` | 先停止再启动——后果相同 |
+| `server restart [--hard]` | 支持 handoff 时默认尝试原位重启，可保留本地 PTY 会话。`--hard` 或不支持 handoff 时会停止再启动，结束原会话 |
 
 不要擅自运行 `start`、`stop` 或 `restart`。它们会改变或销毁用户 GUI 当前附加的服务器状态。
 

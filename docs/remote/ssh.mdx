@@ -3,8 +3,7 @@ title: "SSH"
 description: "原生 Rust SSH 协议栈：快速连接、已保存的配置、钥匙串凭据和跳板主机。"
 ---
 
-lyrel 通过 [russh](https://github.com/Eugeny/russh) 自行处理 SSH 协议。它从不调用
-`ssh` 二进制程序，也没有会这样做的兼容模式。
+lyrel 通过 [russh](https://github.com/Eugeny/russh) 处理 SSH 协议，连接失败时不会自动回退到系统 `ssh`。配置了 `ProxyCommand` 时，Lyrel 会直接执行其中指定的传输程序。
 
 正因如此，以下功能才得以实现：将凭据存入操作系统钥匙串、在侧面板中使用
 [SFTP](/remote/sftp)、在会话期间添加[端口转发](/remote/port-forwarding)，
@@ -94,7 +93,7 @@ lyrel 通过 [russh](https://github.com/Eugeny/russh) 自行处理 SSH 协议。
 | 分组 | 字段 |
 |---|---|
 | **身份验证** | 身份文件（每行一个路径，支持展开 `%h`/`%r`）、代理转发 |
-| **代理** | ProxyCommand（替换 `%h`/`%p`/`%r`）、SOCKS5 代理、HTTP 代理 |
+| **代理** | ProxyCommand（直接执行程序与参数，替换 `%h`／`%p`／`%r`，不自动解释 Shell 语法）、SOCKS5 代理、HTTP 代理 |
 | **算法** | KEX 算法、加密算法、MAC、主机密钥算法、压缩 |
 | **连接** | 保活间隔和次数、连接超时、X11 转发 |
 | **会话** | Shell 集成、登录脚本、跳过横幅 |
@@ -110,7 +109,7 @@ lyrel 通过 [russh](https://github.com/Eugeny/russh) 自行处理 SSH 协议。
 负责 PTY 的远端 daemon 按自己的能力与路径读取，不在桌面文件系统上查找同名路径。
 这与下方 OSC 5522 **剪贴板**功能不同，也不要求开启远程剪贴板权限。
 
-当前本地与远端共用 pane 协议 `19`，`CONTROL_VERSION` 为 `24`。控制协议 v24 增加智能体页面预览请求与事件。连接前须双向确认匹配方言，旧 daemon／远端 server 需要更新。动画帧、partial edit、composition、单帧删除、父子图与 playback 都由远端同一存活 daemon 持有。桌面视口在 grid 锁竞争时保留一个合并唤醒，取得锁后重新采样最新状态；首次 Screen 与重连后重新报告，发送积压仍按既有连接错误边界处理。桌面压力由资源所属 daemon 核验全部消费者保护后逐请求完成，只向请求 endpoint 返回结果。拒绝后可由后续准入需求重新请求，不依赖另一消费者隐藏／detach 后的新文字，也不新增自动重试定时器。
+本地与远端使用同一套 [IPC 版本与协商规则](/reference/architecture#ipc)。动画帧、局部编辑、合成、单帧删除、父子图与播放由持有该窗格的存活 daemon 管理。桌面在取得 grid 锁后重新采样视口，并在首次收到 Screen 或重连后重新上报。图片资源不足时，所属 daemon 核验各消费者的保护状态，再向请求端返回结果。
 
 远端 daemon 的编码资源、元数据、partial／校验工作，与桌面的 source、派生像素、
 解码工作及 atlas／GPU 分别计账；SSH 重连不豁免任何预算。恢复仅限同一存活 daemon
@@ -399,6 +398,4 @@ cargo test --locked -p lyrel-core --features gssapi \
 
 - 不会回退到系统 `ssh` 二进制程序
 - 不支持 `~/.ssh/config` 中的 `Match` 或 `canonicalize*` 指令
-- 不支持 `~/.ssh/config` 中的 GSSAPI *指令*。Kerberos `gssapi-with-mic` 本身
-  是受支持的——在配置的“身份验证”字段中选择 **GSSAPI** 即可——只是配置文件
-  解析流程不会读取这类设置
+- `~/.ssh/config` 中的 GSSAPI 指令不受支持。启用 `gssapi` feature 的 Unix 构建可在「身份验证」字段选择 **GSSAPI**，使用系统 Kerberos 凭据。

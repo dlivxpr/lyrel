@@ -3,10 +3,9 @@ title: "安装"
 description: "macOS、Windows 桌面构建，以及保留的 Linux server／CLI 和源码构建方法。"
 ---
 
-lyrel 当前源码版本为 `0.3.0`，从独立初版 `0.1.0` 递增。stable 安装包及校验和以
-[**GitHub Releases**](https://github.com/dlivxpr/lyrel/releases) 中对应版本的正式资产为准。macOS 包暂时采用 ad-hoc 签名，未经 Developer ID 签名或 Apple 公证，不因缺少 Apple 凭据阻止发行；升级后仍可能需要重新授予系统权限。Windows 包未签名。身份与更新限制见[更新说明](/reference/updates)；缺少所需安装包时，请从源码构建，不要回退下载上游安装包。
+从 [GitHub Releases](https://github.com/dlivxpr/lyrel/releases) 获取 stable 安装包和校验和。源码工作区版本以 [`Cargo.toml`](https://github.com/dlivxpr/lyrel/blob/main/Cargo.toml) 为准。macOS 正式包采用 ad-hoc 签名，升级后可能需要重新授予系统权限。Windows 包未签名。缺少所需安装包时，可从本项目源码构建。[更新与签名限制](/reference/updates)
 
-桌面端仅支持 macOS、Windows，字体内嵌于二进制文件中。普通终端和文件编辑无需另装浏览器运行时；Windows 的 draw.io 预览另需下文的系统 WebView2 Runtime。
+桌面端支持 macOS、Windows，字体内嵌于二进制文件。Windows 的侧面板「浏览器」和 draw.io 预览需要系统 WebView2 Runtime。
 Linux 不再提供 GUI、AppImage 或桌面 updater；共享核心、server、CLI、SSH 远程开发与 Windows WSL 仍受支持。
 
 lyrel 使用独立桌面身份 `io.github.dlivxpr.lyrel`，Windows 安装器 AppId 为
@@ -46,10 +45,7 @@ lyrel，不接管其他产品的安装，也不自动读取、迁移或清理其
 
     lyrel 不提供原生 ARM64 构建；x86-64 包可经模拟在 ARM64 Windows 上安装运行。
 
-    draw.io 查看与编辑使用系统 WebView2 Runtime；多数 Windows 安装已提供该组件。
-    若 Runtime 缺失，预览会显示可恢复错误，其他文件与终端仍可使用；lyrel 不自动
-    下载或安装 Runtime。MSVC 构建已静态链接 SDK loader，不需要包外的
-    `WebView2Loader.dll`。macOS 使用系统 WKWebView。
+    侧面板「浏览器」及 draw.io 查看与编辑使用系统 WebView2 Runtime。Runtime 缺失时，相关视图会给出错误，终端和普通文件仍可使用。MSVC 构建静态链接 SDK loader，包外无需 `WebView2Loader.dll`。macOS 使用系统 WKWebView。
 
     “同一份安装”仅指当前 lyrel 安装，不包括其他产品或副本。默认安装目录为
     `lyrel`，开始菜单和桌面快捷方式均指向 `lyrel-app.exe`，并使用
@@ -103,8 +99,7 @@ lyrel，不接管其他产品的安装，也不自动读取、迁移或清理其
 <a id="the-lyrel-command"></a>
 ## `lyrel` 命令
 
-每个安装包都会在应用旁附带 `lyrel` CLI，应用会在首次启动时将其加入
-PATH。这样，脚本或在其他终端中运行的编程智能体就能打开窗格并读取其中的内容。
+桌面安装包在应用旁附带 `lyrel` CLI。启用「设置 → 集成 → 将 lyrel 命令安装到 PATH」且能找到随包 CLI 时，应用启动会尝试将其加入 PATH。
 
 - **在 macOS 上**，在可写候选目录中创建符号链接，优先使用 PATH 已涵盖的目录；候选包括
   `/opt/homebrew/bin`、`/usr/local/bin`、`~/.local/bin`、`~/bin` 和 `~/.cargo/bin`。
@@ -113,17 +108,13 @@ PATH。这样，脚本或在其他终端中运行的编程智能体就能打开�
 你自行安装的 `lyrel`（例如通过 `cargo install` 构建的版本或包管理器安装的副本）绝不会被替换。若要完全关闭此功能，请取消勾选**设置 → 集成 → 将 lyrel 命令安装到 PATH**。
 
 <Tip>
-  在 lyrel 窗格内，无论 PATH 如何设置，CLI 都能正常工作，因为窗格会继承应用的环境。
-  Linux 的 CLI 与 server 独立构建和放置；裸 `lyrel`／`lyrel <目录>` 不启动 Linux GUI，使用 `lyrel --help` 查看 headless 子命令。
+  自动安装启用且随包 CLI 可用时，新启动的本机 daemon 会继承 CLI 目录。已有 daemon、禁用该设置或缺包时，请检查实际 PATH。Linux 的 CLI 与 server 独立构建和放置，可通过 `lyrel --help` 查看 headless 子命令。
 </Tip>
 
 <a id="updating"></a>
 ## 更新
 
-lyrel 仅提供 stable 更新。应用启动时及之后每六小时检查一次；也可以在 **Settings →
-About → Check now** 手动检查，然后选择 **Update and relaunch**。发布包在后台下载并
-校验，安装需要用户确认。**Settings → General → Updates** 保留自动检查、后台下载
-和代理设置，不再提供更新渠道切换。
+启用自动检查时，Lyrel 在启动时及之后每六小时查询 stable 更新。手动检查可在「设置 → 关于」点击「立即检查」。下载并校验完成后，选择「更新并重新启动」并确认安装。同页的「更新」分组包含自动检查、后台下载和代理设置。
 
 筛选、校验及各平台安装限制见[更新说明](/reference/updates)。
 
@@ -134,9 +125,9 @@ lyrel 独立初版为 `0.1.0`；缺少匹配包时不会回退下载上游安装
 
 Windows／macOS 使用 stable Rust 工具链与仓库已有锁文件；Windows 使用 `pwsh scripts/cargo-windows.ps1 build --locked`，macOS 使用 `cargo build --locked`。应用二进制为 `lyrel-app`，CLI 为 `lyrel`，headless server 为 `lyrel-server`，桌面更新程序为 `lyrel-updater`。Linux 按下文排除桌面包；GUI-free `lyrel-document` 与 `lyrel-insights` 仍参与 headless 检查。
 
-GUI 统一通过正式 `gpui-kit =0.10.0` 的官方 `gpui-fast` feature 选择 GPUI Fast，锁文件基线为 `0.1.16` 家族；Kit 同步选择 core、native platform、Base、Component 与 assets 的 Fast 类型。应用导入与测试宏仍经 `gpui_kit`，不直接依赖 engine、不增加 crate alias／patch 或双后端产品开关。GUI HTTP 使用 `gpui-pre-reqwest-client =0.3.12`，与 Fast 共用 `gpui-pre-http-client =0.3.12` 类型身份；保留 `tree-sitter-languages` 和测试专用 `test-support`。当前 Rio 组合为 `=0.5.32`；完整 Kit／Fast／Rio 组合的构建、行为与性能须按升级后的候选重新验证，不能沿用 `0.9.0` 的检查点结果。本轮 SDK 问题与实测边界由 [#302](https://github.com/dlivxpr/lyrel/issues/302) 记录，真实 Mac 验收仍由 [#167](https://github.com/dlivxpr/lyrel/issues/167) 跟踪。
+GUI 通过 `gpui-kit =0.11.0` 的 `gpui-fast` feature 使用 Fast `0.1.19` 系列。应用导入、组件和测试宏使用 `gpui_kit` facade。GUI HTTP 使用 `gpui-pre-reqwest-client =0.3.14`，与 Fast 共用 `gpui-pre-http-client 0.3.14`。Rio 锁定为 `0.5.32`。构建和运行证据以实际候选版本为准，macOS 原生验收由 [#167](https://github.com/dlivxpr/lyrel/issues/167) 跟踪。
 
-`Cargo.lock` 会收录可选后端及其他平台的依赖；Kit 的 additive features 也会保留合法的 `gpui-pre` 上游构建链，不能以包名前缀判断当前公开类型。用 `cargo tree --locked -p lyrel --target x86_64-pc-windows-msvc -e features -i gpui-fast@0.1.16` 检查启用层；macOS 对应使用 `--target aarch64-apple-darwin -i gpui-fast-macos@0.1.16`，确认 `font-kit`，并另查 `-i gpui-pre-http-client@0.3.12`。Kit 使用兼容的 `0.1.x` 约束，更新锁文件时须复核 Fast 家族版本，不能意外漂移此基线。
+`Cargo.lock` 会收录可选后端及其他平台依赖。用 `cargo tree --locked -p lyrel --target x86_64-pc-windows-msvc -e features -i gpui-fast@0.1.19` 检查 Windows 依赖。macOS 用 `--target aarch64-apple-darwin -i gpui-fast-macos@0.1.19` 核对 `font-kit`，并用 `-i gpui-pre-http-client@0.3.14` 核对 HTTP 类型。升级依赖时按 `Cargo.lock` 更新查询版本。
 
 自定义 `RenderOnce` 使用 `#[derive(IntoElement)]` 时，显式从 Kit 根导入 `use gpui_kit::IntoElement`（或使用完整 `#[derive(gpui_kit::IntoElement)]` 路径），不要只从 `prelude::*` 取得同名 derive。Kit 根保留了可解析 facade 路径的官方宏；Fast prelude 的同名宏仍生成 `gpui::` 路径，应用无需为它增加 engine 依赖或 alias。普通 trait／builder 仍可继续使用现有 prelude。
 
@@ -221,13 +212,11 @@ Markdown 的生产 primary/secondary 均接入 owning-Host 图片、预览、插
 
 正式 `gpui-base =0.9.1` 已发布 `RenderContext::with_foreground_ranges` 和 `Caret`／`CaretAffinity`、`caret_for_position`／`position_for_caret`，分别提供 keyed leaf 的 render-local 前景色与软换行两侧 caret。应用接入和真实消费者验证仍须单独完成；新 API 的发布不代表完整 bidi／RTL 或超长 nowrap 行的 paint／geometry 已修复。相关原始失败和后续结果保留在 [#235](https://github.com/dlivxpr/lyrel/issues/235) 及[Markdown 核心验收记录](/window/side-panel#204-当前核心证据与明确缺口)，不通过 Git/path/patch、修改下载源码或替换渲染器绕过正式发布边界。
 
-桌面用量的浏览器 LocalStorage 读取使用正式 registry 的 `rusty-leveldb 4.0.2` 与 `rusqlite 0.40.2`（`bundled`）。SQLite 随 crate 构建，无需另装系统 SQLite；仍需下述平台 C/C++ 编译工具链。Snappy、文件锁、SHA-256 与内存擦除也使用锁图中的正式依赖，不引入 Git／补丁包或浏览器注入工具。
+桌面用量的浏览器 LocalStorage 读取使用 `rusty-leveldb 4.0.2` 与 `rusqlite 0.42.0`（`bundled`）。SQLite 随 crate 构建，需要平台 C/C++ 编译工具链。其他依赖见 `Cargo.lock`。
 
 Windows Chromium Cookie 的 AES-GCM 解密使用正式 registry 的 `aes-gcm =0.11.1`，保留 `zeroize` feature。升级精确版本依赖时，须同步 `Cargo.toml` 与 `Cargo.lock`；仅更新锁文件会被 `--locked` 拒绝。
 
-整机 CPU／物理内存采样使用正式 registry 的锁定 `sysinfo =0.40.1`，关闭默认 features、只启用 `system`，
-只刷新 CPU 与 RAM，不枚举进程、磁盘、网络或 GPU。采样位于共享核心，因此 Windows／macOS daemon 与 Linux headless server
-使用相同 Host／control 契约，不要求外部监控程序或新增系统服务。
+共享核心使用 `sysinfo =0.40.1`，关闭默认 features，启用 `system` 和 `network`。CPU／RAM 与非回环接口的网络速率经同一 Host／control 采样契约提供。网络采样不可用时保留空值。桌面呈现见[活动监视器](/window/side-panel#activity-monitor)。
 `System::new()` 与 `System::host_name()` 在该版本返回 `Result`：不支持的平台保留 `Unsupported`，
 其他初始化／主机名错误通过既有 Host 错误路径呈现，不用空主机名或零值冒充成功。
 CPU／RAM 的 refresh 方法仍返回 `()`，没有可传播的刷新错误；采样器校验公开值，无法独立辨别底层失败后仍有效的旧值。
@@ -239,7 +228,7 @@ CPU／RAM 的 refresh 方法仍返回 `()`，没有可传播的刷新错误；�
 
 <Tabs>
   <Tab title="macOS">
-    GPUI Fast `0.1.14` 的 macOS 桌面构建继续要求完整 Xcode 提供 macOS SDK 26+；runner 的 `macos-15` 标签不能证明 SDK 版本。CI 与 Release 桌面构建共用 `.github/scripts/select-macos-sdk.sh`：优先核对显式 `DEVELOPER_DIR`，否则检查当前工具链及 `/Applications/Xcode*.app`，仅选择实际 SDK 版本至少为 26 的工具链。日志输出 Xcode 版本、实际 SDK 版本／路径、clang／metal 路径与 `MACOSX_DEPLOYMENT_TARGET=15.0`；缺少兼容 Xcode／SDK／clang 时直接失败，不下载工具链或修改全局 `xcode-select`。Kit 启用 `runtime_shaders`，因此离线 `metal` 编译器缺失只记录，不作为该配置的构建前提。本地构建前在同一 Bash 中 source 该脚本，或明确提供满足相同要求的 `DEVELOPER_DIR`／`SDKROOT`。根 `build.rs` 的 `lyrel-app` linker 参数与 bundle 的 `LSMinimumSystemVersion` 均为 `15.0`；独立 headless server 不经桌面 SDK 选择脚本、不修改其运行时下限。SDK 日志不是实际 Mac 运行、IME 或签名验收。
+    macOS 桌面构建需要完整 Xcode 和 macOS SDK 26+。CI 与 Release 使用 `.github/scripts/select-macos-sdk.sh`，从显式 `DEVELOPER_DIR` 或已安装的 Xcode 中选择兼容工具链。脚本记录实际 SDK、clang、metal 路径及 `MACOSX_DEPLOYMENT_TARGET=15.0`。当前 `runtime_shaders` 配置允许缺少离线 `metal` 编译器。本地可在同一 Bash 中 source 该脚本，或提供符合要求的 `DEVELOPER_DIR` 和 `SDKROOT`。桌面 app 的运行下限为 macOS 15，独立 headless server 不经该 SDK 选择步骤。
 
     工作区及依赖的 Debug／测试默认使用 `opt-level = 1`，减少未优化代码及展开信息的体积；现有渲染／解析热路径依赖继续使用显式级别 `3`。保留 Apple 默认的 compact unwind／DWARF 选择、panic 展开和回溯，不使用禁用 compact unwind 或屏蔽 linker diagnostics 的参数；Release 配置不变。
 
@@ -403,8 +392,8 @@ Windows 桌面与 server 均只发布 x86-64。
 
 | 平台 | 桌面包 | server 资产 |
 | --- | --- | --- |
-| macOS | `lyrel-0.3.1-macos-arm64.{dmg,zip}` | `lyrel-server-macos-aarch64` |
-| Windows | `lyrel-0.3.1-windows-x86_64.zip`、对应 `-setup.exe` | `lyrel-server-windows-x86_64.zip` |
+| macOS | `lyrel-<version>-macos-arm64.{dmg,zip}` | `lyrel-server-macos-aarch64` |
+| Windows | `lyrel-<version>-windows-x86_64.zip`、`lyrel-<version>-windows-x86_64-setup.exe` | `lyrel-server-windows-x86_64.zip` |
 | Linux | 不提供桌面包 | `lyrel-server-linux-{aarch64,x86_64}-musl` |
 
 server 将同一份项目许可证及第三方声明内嵌到二进制中，可运行
@@ -412,7 +401,7 @@ server 将同一份项目许可证及第三方声明内嵌到二进制中，可�
 Windows server ZIP 另保留随包的 `LICENSE.txt` 与 `LICENSE-ConPTY.txt`。
 
 macOS／Windows server 在对应工具链中使用 `cargo build --release --locked -p lyrel-server --target <target>`；
-Linux musl server 按 release workflow 使用 Zig `0.17.0` 与 cargo-zigbuild，避免 `0.16.0` 内置 libc++ 的 nullability 警告。Actions 在临时 Python venv 中安装官方 PyPI 的 `ziglang==0.17.0`，通过 `CARGO_ZIGBUILD_PYTHON_PATH` 指向该解释器，不依赖旧 Node.js runtime 的 Zig setup action：
+Linux musl server 使用 Zig `0.17.0` 与 cargo-zigbuild。Release 构建在临时 Python venv 中安装 PyPI 包 `ziglang==0.17.0.post0`，通过 `CARGO_ZIGBUILD_PYTHON_PATH` 指向对应解释器。
 
 ```bash
 CXXFLAGS_x86_64_unknown_linux_musl=-DSIMDUTF_IMPLEMENTATION_ICELAKE=0 \
@@ -428,7 +417,7 @@ Rust 与 Zig 的组合仍可能输出 `ignoring deprecated linker optimization s
 Windows 包内 WSL server 固定为 x86_64：构建 `x86_64-unknown-linux-musl` 后，将实际二进制复制并命名为
 `bundled-server/lyrel-server-linux-x86_64-musl`，再打 Windows 包；不能放占位文件，也不能重命名其他架构的产物。
 macOS server 沿用 ad-hoc 签名和 `assert-macho.sh` 检查，Windows server 使用
-`assert-no-vcruntime.ps1` 检查；目标和参数以 `.github/workflows/release.yml` 为准。
+`assert-no-vcruntime.ps1` 检查。目标和参数见 `.github/workflows/release-build.yml`。
 
 Windows server 资产不是裸 exe：先准备 x64 的官方 ConPTY，再把构建的 `lyrel-server.exe`、x64 `conpty.dll`／`OpenConsole.exe`、`LICENSE-ConPTY.txt` 和项目 `LICENSE.txt` 以扁平布局打入上述 ZIP。`server-windows` job 与开发构建共用 `scripts/prepare-conpty.ps1`，打包前重新核对固定 SHA-256；整个 ZIP 纳入同一份 `checksums.txt`。不要仅重命名 exe 为 ZIP，也不要省略配套文件。
 

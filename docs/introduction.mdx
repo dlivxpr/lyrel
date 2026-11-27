@@ -4,9 +4,7 @@ description: "终端工作台：持久会话、远程工作与智能体。"
 mode: "wide"
 ---
 
-lyrel 是一款可以持续运行的终端。关闭窗口、重启机器，
-或换到另一台笔记本电脑——你启动的 shell 依然在那里，
-留在其中工作的编程智能体也一样。
+关闭 Lyrel 后，仍在运行的后台服务器会继续管理 Shell 和工作任务。重新打开 Lyrel 可附着到这些会话。机器重启后，Lyrel 根据已保存的布局启动新的 Shell，支持恢复的智能体可另行打开已保存的会话。
 
 它使用 Rust 编写，通过 [GPUI Kit](https://gpui-kit.com/) 的官方 `gpui-fast` feature 在 GPU 上渲染；
 Kit 统一选择 GPUI Fast 与组件／平台层。GUI 与 CLI 统一使用正式 `rio-vt 0.5.32` 解析 VT，
@@ -25,8 +23,7 @@ daemon、PTY 与终端绘制仍由 lyrel 管理。
     语法高亮、点击定位光标，以及真正的多行编辑。
   </Card>
   <Card title="智能体感知" icon="robot" href="/agents/overview">
-    内置身份仅保留 omp、Kimi Code、pi、OpenCode 2.x、Hermes。状态、通知、历史和恢复是不同能力，
-    支持范围取决于正式版本、集成授权及各项运行验收，不能由命令识别推定全部可用。
+    内置身份包括 omp、Kimi Code、pi、OpenCode 2.x、Hermes 和 Antigravity CLI。各智能体的状态、通知、历史和恢复能力取决于所用版本及已启用的集成。
   </Card>
   <Card title="如同本地的远程工作体验" icon="server" href="/remote/workspaces">
     原生 Rust SSH 协议栈，支持连接配置、SFTP 和端口转发；
