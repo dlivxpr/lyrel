@@ -6,6 +6,8 @@
 的方法。
 仅支持 macOS（驱动脚本使用 `/Applications` 路径、BSD `ps` 和 `pkill`）。
 
+跨平台工作台性能实验的执行路径、逐进程采样和工单索引见[工作台性能覆盖表](workbench-coverage.md)。
+
 <a id="what-it-measures"></a>
 ## 测量内容
 
