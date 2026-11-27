@@ -119,3 +119,79 @@ fn source_representation_is_atomic_for_batch_edits_and_native_undo(cx: &mut Test
     cx.run_until_parked();
     cx.update(|cx| assert_eq!(document.read(cx).encode().unwrap(), expected));
 }
+
+#[gpui_kit::test]
+fn independent_edits_release_historical_text_buffers(cx: &mut TestAppContext) {
+    let (document, view, original, intermediate) = cx.update(|cx| {
+        let document = cx.new(|_| Document::new("alpha\r\nbeta\n".into(), Default::default()));
+        let view = cx.new(|cx| EditorState::for_document(document.clone(), cx));
+        let original = std::sync::Arc::downgrade(&document.read(cx).snapshot().shared_text());
+        view.update(cx, |view, cx| view.replace_range(0..1, "A", cx));
+        let intermediate = std::sync::Arc::downgrade(&document.read(cx).snapshot().shared_text());
+        view.update(cx, |view, cx| view.replace_range(6..7, "B", cx));
+        (document, view, original, intermediate)
+    });
+    cx.run_until_parked();
+    assert!(original.upgrade().is_none());
+    assert!(intermediate.upgrade().is_none());
+    for expected in [b"Alpha\r\nbeta\n", b"alpha\r\nbeta\n"] {
+        cx.update(|cx| {
+            assert!(view.update(cx, |view, cx| view.undo_document(cx)));
+            assert_eq!(document.read(cx).encode().unwrap(), expected);
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn source_history_replays_representation_only_moves_across_format_conversion(
+    cx: &mut TestAppContext,
+) {
+    use lyrel_document::text::{LineEnding, TextFormat};
+
+    let original = "α\r\nα\ntail";
+    let moved = "α\nα\r\ntail";
+    let converted = "\u{feff}α\r\nα\r\ntail";
+    let edited = "\u{feff}β\r\nγ\r\nα\r\n新\r\ntail";
+    let format = TextFormat::default();
+    let new_format = TextFormat {
+        bom: true,
+        line_ending: LineEnding::CrLf,
+        ..format
+    };
+
+    let (document, view) = cx.update(|cx| {
+        let document = cx.new(|_| Document::new(original.into(), format));
+        let view = cx.new(|cx| EditorState::for_document(document.clone(), cx));
+        (document, view)
+    });
+    let moved_snapshot = cx.update(|cx| {
+        view.update(cx, |view, cx| {
+            view.replace_lines(0..6, vec![3..6, 0..3], false, true, cx)
+        });
+        let snapshot = document.read(cx).snapshot();
+        assert_eq!(snapshot.text(), "α\nα\ntail");
+        assert_eq!(snapshot.encode().unwrap(), moved.as_bytes());
+        snapshot
+    });
+    cx.update(|cx| {
+        view.update(cx, |view, cx| view.set_format(new_format, cx));
+        assert_eq!(document.read(cx).encode().unwrap(), converted.as_bytes());
+        view.update(cx, |view, cx| {
+            view.replace_ranges(vec![(6..6, "新\n".into()), (0..3, "β\nγ\n".into())], cx)
+        });
+        assert_eq!(document.read(cx).encode().unwrap(), edited.as_bytes());
+    });
+    for expected in [converted, moved, original] {
+        cx.update(|cx| {
+            assert!(view.update(cx, |view, cx| view.undo_document(cx)));
+            assert_eq!(document.read(cx).encode().unwrap(), expected.as_bytes());
+        });
+    }
+    for expected in [moved, converted, edited] {
+        cx.update(|cx| {
+            assert!(view.update(cx, |view, cx| view.redo_document(cx)));
+            assert_eq!(document.read(cx).encode().unwrap(), expected.as_bytes());
+        });
+    }
+    assert_eq!(moved_snapshot.encode().unwrap(), moved.as_bytes());
+}
