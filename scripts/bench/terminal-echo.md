@@ -136,6 +136,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Hidden pane transcript failed' }
 
 Windows 与 macOS 可用 native consumer 验证同一配方。Windows 用 Cargo wrapper 执行同样参数。真实原生 IME 走上面的操作步骤，macOS 另需只捕获自有窗口且保留共同单调时钟的显示证据。
 
+自动用例核对整份保留缓冲区的输出顺序、回显与 IME 提交次数，另外在可见网格核对首键、负载输出和负载结束后的输入。高速输出期间，回显可能在下一次画面采样前滚出可见网格。物理显示时延仍由前台探针和显示事件共同验证。
+
 ```sh
 cargo test --locked -p lyrel-test-support --lib corpus_and_echo_certificates_reject_loss_reordering_and_duplicates
 cargo test --locked -p lyrel --features native-markdown-tests --test native_terminal -- plaintext_echo

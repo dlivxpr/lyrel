@@ -105,14 +105,14 @@ fn plaintext_echo(cx: &mut TestAppContext, hide: bool) {
         })
         .unwrap();
     VisualTestContext::from_window(window, cx).simulate_keystrokes("b");
-    graphics_recovery_wait(cx, "commit and second key are visible exactly once", |cx| {
-        let rows = reading_painted_rows(&view, cx);
-        ["IME 中", "IME 文", ">aaac>b>"]
-            .iter()
-            .all(|expected| rows.iter().filter(|row| row.as_str() == *expected).count() == 1)
-    });
-
     if hide {
+        graphics_recovery_wait(cx, "commit and second key are visible exactly once", |cx| {
+            let rows = reading_painted_rows(&view, cx);
+            ["IME 中", "IME 文", ">aaac>b>"]
+                .iter()
+                .all(|expected| rows.iter().filter(|row| row.as_str() == *expected).count() == 1)
+        });
+
         // Use the same visibility gate as a workbench tab switch.
         window
             .update(cx, |_, window, cx| {
@@ -151,6 +151,8 @@ fn plaintext_echo(cx: &mut TestAppContext, hide: bool) {
             .iter()
             .any(|row| row.trim() == ">aaad>c>")
     });
+    // In the visible-load case the producer can scroll the commit and echo
+    // out of the viewport between paints. Check the complete retained output.
     let output = view.read_with(cx, |view, _| view.scrollback_text());
     verify_output(&output, true, "abc", "中文").unwrap();
     daemon.panes().kill(pane).unwrap();
