@@ -222,3 +222,13 @@ CSV 表格显示 50,005 条记录，选中 `R2 C3` 按 Enter 后，源码选区�
 随后分别从两份全新的 `0.5.0` 便携安装运行 `install-portable`，每份使用独立配置、daemon 和 `cmd.exe` 工作区。两份旧版窗格均先执行命令输出独立的一行 `LYREL448_PREOK`。成功样本解包旧版用时 776 ms，新包预检用时 557 ms。从启动安装 helper 到其退出为 2,321 ms，退出码为 0，outcome 为 `ok: true`。自动重开的 `0.5.1` 恢复了同一工作区、标签、目录和历史，重建了 daemon 和 shell。原生窗口输入命令后显示 `LYREL448_NEWOK`，CLI 回放同时含有新旧结果行。
 
 另一份安装通过相同预检后，仅将安装阶段使用的预期摘要改为 64 个零。helper 在 1,506 ms 后以退出码 1 结束，outcome 为 `ok: false`，并列出了预期与实际 SHA-256。自动重开的 `0.5.0` 保留原 daemon、shell、窗格、标签、工作区及目录，输入命令后显示 `LYREL448_RECOVEROK`。两个样本各运行一次，helper 用时包含等待旧窗口退出；到首条新命令可见的延迟和进程资源仍待采样。
+
+## 环境前提与未完成验收
+
+| 尚缺前提 | 待完成的运行 |
+|---|---|
+| Windows 测试账户的 ETW 采样权限。现有 PresentMon 会话返回 `access denied`。 | 用 [#430 前台探针](terminal-echo.md) 在空闲、可见输出、隐藏输出下重新配对按键、正确字形和显示事件。取得显示时延及长帧数据后，继续 [#431](https://github.com/dlivxpr/lyrel/issues/431) 的滚动、搜索、复制和 [#432](https://github.com/dlivxpr/lyrel/issues/432) 的切换、resize 与首键归属。 |
+| 预留的原生 macOS 桌面和可关联到输入的显示采集。 | 从 #430 三种输出场景与系统 IME 开始。另需会话冷暖恢复、图形回放、文件搜索、文档编辑、WKWebView，以及由已签名测试包执行的安装、更新和恢复。其余 macOS 路径按上表逐行验收。 |
+| 独立的两台预留 SSH 主机，具备固定主机指纹和对应版本的 Release server。 | 对 [#433](https://github.com/dlivxpr/lyrel/issues/433) 两条路由交替采集两版 RTT、中断、输出、进程资源及重连。另对 [#437](https://github.com/dlivxpr/lyrel/issues/437) 测远程文件服务、传输、转发与并发回显。 |
+
+#434 的两次首键缺失仍缺发送端和收键端的事件记录。#449 的集成验收须等待各行完成测量和处置。
