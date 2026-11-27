@@ -153,6 +153,10 @@ Windows 候选版 #432 的空闲标签切换回放在两个已完成输出的窗
 
 原始证据为 `windows-432/busy-split/workspace-handoff-fixed-*`。Enter 到探针键的驱动调用耗时为空闲 9.18–10.19 ms、忙时 9.40–10.43 ms。另一次切换后紧跟 `abcdabcdabcd`，12 个字符按序且只在目标窗格回显。
 
+复测时分别为 A、B 准备前台 `lyrel-graphics-fixture plaintext <fixture-dir> 400`。从 A 打开工作区切换器，用方向键选择 B，依次发送 Enter 和单个探针键，中间不等待焦点。下一轮反向切换。用 `lyrel capture %PANE --plain --scrollback` 从两个窗格读出 `>序号>键>`，逐次检查累计回显。忙时在 A 的 fixture 目录写入 `start` 文件，完成后用 `plaintext-check` 校验编号行和回显。非默认标签用切换器右栏选择。连续键和 Escape 使用同一切换步骤。
+
+`0daaff48` 的 Windows Release 复测通过 4／4 次空闲即时输入，两个窗格分别收到 `bd`、`ac`。定向 `native_text_keys_do_not_discard_earlier_workspace_typing` 测试验证系统字符输入事件前后的普通键按序抵达窗格传输端。系统字符组合仍由平台文本服务处理。实窗记录为 `windows-432/busy-split/workspace-final-wumdu7/receipt.json`。
+
 同机再交替运行三对空闲样本、三对忙时样本，每轮预热两次，采集 12 次切换。驱动在 Enter 后等 AX 报告目标终端取得焦点，按下 `a`，随后从两路 CLI 回放核对累计回显。144 次计入样本的按键全部恰好送达目标。AX 检查间隔设为 10 ms，实际耗时还包含读取和解析访问性树。PTY 回执耗时还包含启动与等待 CLI 进程、回放和轮询，其中部分失败轮询跨越数秒。下表是每轮分位数在三轮中的范围。
 
 | 轮次 | AX 焦点 p50（ms） | AX 焦点 p95（ms） | CLI 确认 PTY 回执 p95（ms） |
