@@ -184,7 +184,10 @@ impl Backend for RealBackend {
                 Ok(DaemonMsg::Output(_)) => {
                     bail!("live output arrived before the pane replay ended")
                 }
-                Ok(DaemonMsg::Error(message)) => bail!("reading the pane replay: {message}"),
+                // Legacy observers also receive graphics replay errors after the text.
+                Ok(DaemonMsg::Error(message)) if has_replay_end => {
+                    bail!("reading the pane replay: {message}")
+                }
                 Ok(_) => {}
                 Err(e) if !has_replay_end && legacy_replay_end(&e) => break,
                 Err(e) => return Err(anyhow!(e).context("reading the pane replay")),
@@ -326,7 +329,9 @@ impl Backend for RealBackend {
                 Ok(DaemonMsg::Output(_)) => {
                     bail!("live output arrived before the pane replay ended")
                 }
-                Ok(DaemonMsg::Error(message)) => bail!("reading the pane replay: {message}"),
+                Ok(DaemonMsg::Error(message)) if has_replay_end => {
+                    bail!("reading the pane replay: {message}")
+                }
                 Ok(_) => {}
                 Err(e) if !has_replay_end && timed_out(&e) => break,
                 Err(e) if !has_replay_end && e.kind() == std::io::ErrorKind::UnexpectedEof => {
@@ -583,6 +588,82 @@ mod tests {
                 cell_h: 16,
             },
             bytes: bytes.to_vec(),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_graphics_failure_preserves_capture_and_prevents_unobserved_exec() {
+        use std::os::unix::net::UnixListener;
+
+        use lyrel_protocol::daemon::protocol::{ClientMsg, DaemonVersion, FEATURE_XTGETTCAP_OWNER};
+
+        const PANE: u64 = 7;
+        const TEXT: &[u8] = b"existing terminal text\r\n";
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("pane.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let mut backend = RealBackend::new(None);
+        backend.panes = Some(PaneClient::at(socket));
+
+        for capture in [true, false] {
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let ClientMsg::Negotiate { protocol } = ClientMsg::read(&mut stream).unwrap()
+                    else {
+                        panic!("expected pane negotiation");
+                    };
+                    DaemonMsg::Version(DaemonVersion {
+                        protocol,
+                        build: "legacy fixture".into(),
+                        features: vec![FEATURE_XTGETTCAP_OWNER.into()],
+                        instance: "legacy observer".into(),
+                    })
+                    .encode(&mut stream)
+                    .unwrap();
+                    assert!(matches!(
+                        ClientMsg::read(&mut stream).unwrap(),
+                        ClientMsg::GraphicsCapacity { .. }
+                    ));
+                    assert!(matches!(
+                        ClientMsg::read(&mut stream).unwrap(),
+                        ClientMsg::Observe { pane_id: PANE, .. }
+                    ));
+                    for frame in [
+                        DaemonMsg::Size(SESSION_SIZE),
+                        DaemonMsg::Snapshot(TEXT.to_vec()),
+                        DaemonMsg::Error("Graphics replay metadata work budget exhausted".into()),
+                    ] {
+                        frame.encode(&mut stream).unwrap();
+                    }
+                    // Graphics replay stops before the initial prompt state.
+                    stream.shutdown(std::net::Shutdown::Write).unwrap();
+                    assert!(matches!(
+                        ClientMsg::read(&mut stream),
+                        Ok(ClientMsg::Detach)
+                    ));
+                });
+                if capture {
+                    let segments = backend.capture(PANE, true).unwrap();
+                    assert_eq!(
+                        segments,
+                        vec![CaptureSegment {
+                            size: SESSION_SIZE,
+                            bytes: TEXT.to_vec(),
+                        }]
+                    );
+                } else {
+                    let run = backend
+                        .exec(PANE, b"must not run\n".to_vec(), None)
+                        .unwrap();
+                    assert_eq!(run.end, ExecEnd::PaneExited(None));
+                    assert!(run.output.is_empty());
+                }
+            });
         }
     }
 
