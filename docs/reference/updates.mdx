@@ -125,6 +125,55 @@ macOS 更新选择 ZIP，Windows 按安装形态选择 Setup 或便携 ZIP；不
 签名／公证和失败恢复需在授权的隔离环境分别验收。当前没有这些在线发行前提，不能宣称
 Windows、macOS 均已完成安装或更新；Linux 仅保留 server／CLI，不纳入桌面更新验收。
 
+### 用本地资产复测安装、更新和恢复
+
+使用预留的桌面测试登录会话和来自两个已知提交的 Release 分发包，记为 `OLD` 和 `NEW`（`NEW` 的版本更高）。
+保留每个版本生成的 `checksums.txt`，在首次执行包内程序前，按精确资产名独立比对 SHA-256。
+Windows 的离线 ConPTY 准备命令为 `pwsh scripts/prepare-conpty.ps1 -Offline`，其余打包步骤见
+[手动打包与验证](/getting-started/installation#在专用工作树中手动打包)。macOS 使用已经签名、签名要求匹配的本地包。
+
+1. 每个样本创建独立的运行目录，准备 `config/`、`work/`、`tmp/` 和证据目录。GUI、updater 和 CLI
+   共享绝对路径 `LYREL_CONFIG_DIR=<运行目录>/config`，避免连接日常 daemon。先写入 `config.json`，
+   设置 `install_cli_on_path: false`、`check_for_updates: false`、`auto_download_updates: false`、
+   `restore_session: true`、`show_tray_icon: false` 和 `notify_on_command_finish: "never"`。
+   用无真实凭据或智能体配置的测试登录会话。Windows 在运行目录放置 `CACHEDIR.TAG`，触发启动时的开始菜单写入跳过逻辑。
+   测试进程树的 `TEMP`、`TMP` 指向 `tmp/`，隔离旧暂存目录扫描。
+2. 在 Windows 解包 `OLD` 的便携 ZIP 到运行目录下的空子目录。macOS 将 `OLD` 的 DMG 用 `hdiutil attach -readonly -nobrowse`
+   挂载到私有目录，用 `ditto` 复制 `lyrel.app` 后卸载镜像。使用已安装副本的绝对路径启动 GUI。
+   用包内 CLI 的 `lyrel --version` 及 Windows GUI/updater 的 PE `ProductVersion` 或 macOS 的
+   `CFBundleShortVersionString` / `CFBundleVersion` 核对版本。
+3. 用 `lyrel new --open <work> --json` 创建并显示夹具工作区，保存 `lyrel ws tree <id> --json`。
+   保留这个工作区的窗口作为重开目标。在该窗格执行产生短唯一行的 shell 命令并记录目录和 shell PID（支持的 shell）。
+   确认初始标记已显示并被 `lyrel capture %<pane> --plain --scrollback` 读到。
+   恢复样本和更新样本分别从新的 `OLD` 副本及相同夹具内容开始。
+4. 从 `OLD` 副本复制 updater 到私有暂存目录。`stage` 为预先创建的全新目录，macOS 上放在 `lyrel.app` 同卷的同级目录。
+   通过下表的真实 helper 执行 `NEW` 预检，要求退出码为 `0`。`pid` 是夹具 GUI 的 PID。
+   Windows 先启动安装 helper，再正常退出夹具 GUI，由 helper 等待 `pid`。macOS 从外部启动的 helper 不持有 GUI 的父子关系，
+   所以先正常退出夹具 GUI 并确认其已退出，再执行安装命令。由 helper 自行重开窗口。
+   给每阶段设定一致的超时。Windows 用进程句柄等待 GUI subsystem helper 的退出并读取退出码。
+   日志和 outcome 放在 `stage` 外的证据目录，避免 updater 清理时移除。`asset` 为 `zip` 的裸文件名，`version` 为 `NEW` 的版本。
+5. 恢复样本使用相同的成功预检。安装阶段将 `checksums` 替换为一份私有副本，仅把 `NEW` 对应条目的摘要改成错误值。
+   期望 helper 重新校验失败并自行重开 `OLD`，退出码非零，outcome 的 `ok` 为 `false` 且 `detail` 指明摘要不匹配。
+   更新成功样本应得到退出码 `0`、`ok: true` 和 `NEW`。这条恢复场景覆盖替换前拒绝后的重开。
+6. 在自动重开的窗口中比对工作区、窗格布局、目录和此前的标记，再向当前窗格输入另一条命令，等待新的结果行显示。
+   例如，Windows 可将夹具 shell 配置为 `{"program":"cmd.exe","args":["/D"]}`，并输入 `for %I in (OK) do @echo LYREL448_7621%I`。
+   macOS 可输入 `printf '%s%s\n' LYREL448_7621 OK`。两者都核对完整的独立结果行 `LYREL448_7621OK`，排除输入回显。
+   用 `ws tree` 重新解析窗格并留存 capture 作为补充证据。Windows 成功替换会停止 daemon，验收是原布局和历史恢复到一个新 shell。
+   macOS 的兼容更新及替换前失败恢复应保留原有 shell。样本结束后关闭夹具 GUI，以同一配置执行 `lyrel server stop`，
+   保留证据，并清理本次样本创建的目录。
+
+下表参数按位置传递，路径含空格时作为单个参数。替换命令均追加 `--config-dir <config> --result-file <outcome.json>`。
+
+| 平台 | 预检 | 替换 |
+| --- | --- | --- |
+| Windows 便携 | `lyrel-updater.exe verify-portable <zip> <checksums> <asset> <version> <stage>` | `lyrel-updater.exe install-portable <pid> <zip> <checksums> <asset> <install-dir> <version> <log> <stage>` |
+| macOS | `lyrel-updater verify <lyrel.app> <zip> <checksums> <asset> <stage> <version>` | `lyrel-updater install <pid> <lyrel.app> <zip> <checksums> <asset> <stage> <version> <log>` |
+
+计时点分别为开始验证／安装包、首次显示可用 shell、开始预检、启动替换 helper、helper 退出、重开窗口显示新命令的结果。
+在同一预留硬件上交替运行基线和候选，记录各阶段时长、样本数、运行间波动，以及 GUI、daemon、updater 和相关子进程的 CPU 时间和内存峰值。
+按需记录 GUI GPU 指标。保留两个版本的提交、资产摘要、实际命令、系统与硬件、安装版本、outcome 及窗口证据，分开记录构建和打包耗时。
+该流程覆盖离线的便携安装和应用包复制。Inno 注册、权限提示、线上发布发现和替换后的回滚需另有对应场景和证据。
+
 <a id="the-background-server-is-still-running-build"></a>
 ## 后台 server 仍在运行旧版本
 
