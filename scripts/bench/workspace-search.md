@@ -28,7 +28,7 @@ node scripts/bench/workspace-search.mjs prepare "$search_root" 5000 && \
     --config-dir "$search_root/config" --open-path "$search_root/project"
 ```
 
-只留一个本地终端窗格，确认 shell 的当前目录就是 `project`。在窗格中执行 `node "<仓库绝对路径>/scripts/bench/workspace-search.mjs" hold`。终端应显示 `LYREL_SEARCH_READY` 及项目绝对路径。独立配置用公开的 `agent_commands` 将该脚本识别为 `pi`，以启用生产消息输入框。该前台进程只等待终端输入。Windows 用已启用 Lyrel shell integration 和 PSReadLine 的 PowerShell，macOS 用 zsh 或 Bash。所有操作结束后将焦点还给终端网格，结束前台命令，关闭自有窗口，再用本轮的二进制执行 `--config-dir <本轮配置目录> --stop-daemon`。
+只留一个本地终端窗格，确认 shell 的当前目录就是 `project`。在窗格中执行 `node "<仓库绝对路径>/scripts/bench/workspace-search.mjs" hold`。终端应显示 `LYREL_SEARCH_READY` 及项目绝对路径。独立配置用 `agent_commands` 将该脚本识别为 `hermes`，使用停靠在窗格底部的消息输入框。该前台进程只等待终端输入。Windows 用已启用 Lyrel shell integration 和 PSReadLine 的 PowerShell，保留默认启动参数。macOS 用 zsh 或 Bash。所有操作结束后将焦点还给终端网格，结束前台命令，关闭自有窗口，再用本轮的二进制执行 `--config-dir <本轮配置目录> --stop-daemon`。
 
 ## 两个入口的可见断言
 

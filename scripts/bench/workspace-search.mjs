@@ -37,7 +37,7 @@ if (command === 'hold' && directory === undefined) {
     auto_download_updates: false,
     install_cli_on_path: false,
     show_tray_icon: false,
-    agent_commands: { 'workspace-search': 'pi' },
+    agent_commands: { 'workspace-search': 'hermes' },
   }, null, 2) + '\n');
   console.log(JSON.stringify({ project, config, paths: count }));
 } else {
