@@ -1,7 +1,7 @@
 use super::super::test_support::{drain, test_state};
 use super::super::{
     attach_subscriber, attach_subscriber_with_permissions, fan_out_output, notify,
-    observe_subscriber, record_output,
+    ObserveFeatures, observe_subscriber, observe_subscriber_with_features, record_output,
 };
 use super::*;
 use std::path::PathBuf;
@@ -265,6 +265,26 @@ fn attach_to_a_dead_pane_replays_exited() {
         rx.try_recv(),
         Ok(DaemonMsg::Exited { code: None })
     ));
+}
+
+#[test]
+fn opted_in_observer_receives_initial_exit_before_the_replay_boundary() {
+    let mut st = test_state(false);
+    st.ring.append(b"final screen");
+    st.exit_code = Some(7);
+    let (tx, rx) = mpsc::channel();
+    observe_subscriber_with_features(
+        &mut st,
+        tx,
+        Arc::new(OutputGate::new()),
+        false,
+        ObserveFeatures { replay_end: true, ..ObserveFeatures::default() },
+    );
+    let frames = drain(&rx);
+    assert!(matches!(frames.as_slice(), [
+        DaemonMsg::Size(_), DaemonMsg::Snapshot(_), DaemonMsg::Progress(None),
+        DaemonMsg::Exited { code: Some(7) }, DaemonMsg::ReplayEnd,
+    ]));
 }
 
 #[test]

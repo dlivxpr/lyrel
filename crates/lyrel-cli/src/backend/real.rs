@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use lyrel_protocol::client::{ControlClient, PaneClient, PaneSession};
@@ -23,9 +23,9 @@ const SESSION_SIZE: WinSize = WinSize {
 
 const REPLAY_FIRST_WAIT: Duration = Duration::from_secs(10);
 const REPLAY_SETTLE: Duration = Duration::from_millis(300);
-/// A backstop on reading the replay: it ends on the first live output or a
-/// quiet spell, and this only bounds a daemon that keeps sending status.
-const EXEC_REPLAY_MAX: Duration = Duration::from_secs(10);
+/// Bound replay at a peer with an explicit boundary, and also bound exec's
+/// legacy replay when a peer keeps sending status without printing.
+const REPLAY_MAX: Duration = Duration::from_secs(10);
 /// How long a prompt that came back before the command started is given to
 /// turn out to be the one the shell was still drawing. The daemon reports a
 /// pane at its prompt from the `D` precmd writes first, before the user's own
@@ -160,8 +160,10 @@ impl Backend for RealBackend {
     fn capture(&mut self, pane: u64, scrollback: bool) -> Result<Vec<CaptureSegment>> {
         let mut session = self
             .pane_client()?
-            .observe(pane, SESSION_SIZE)
+            .observe_with_replay_end(pane, SESSION_SIZE)
             .with_context(|| format!("observing pane %{pane}"))?;
+        let has_replay_end = session.has_replay_end();
+        let until = Instant::now() + REPLAY_MAX;
         // Best effort throughout: once the pane is gone the daemon closes the
         // connection, and setsockopt on a peerless socket fails (EINVAL on
         // macOS). That must not turn a completed capture into an error — the
@@ -176,22 +178,17 @@ impl Backend for RealBackend {
         let mut size = SESSION_SIZE;
         loop {
             match session.recv() {
-                Ok(DaemonMsg::Size(seen)) => {
-                    size = seen;
-                    let _ = session.set_recv_timeout(Some(REPLAY_SETTLE));
-                }
-                Ok(DaemonMsg::Snapshot(bytes)) => {
-                    segments.push(CaptureSegment { size, bytes });
-                    let _ = session.set_recv_timeout(Some(REPLAY_SETTLE));
-                }
-                Ok(DaemonMsg::Output(_)) | Ok(DaemonMsg::Exited { .. }) => break,
-                Ok(_) => {
-                    let _ = session.set_recv_timeout(Some(REPLAY_SETTLE));
-                }
-                Err(e) if timed_out(&e) => break,
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Ok(DaemonMsg::Size(seen)) => size = seen,
+                Ok(DaemonMsg::Snapshot(bytes)) => segments.push(CaptureSegment { size, bytes }),
+                Ok(DaemonMsg::Exited { .. } | DaemonMsg::ReplayEnd) => break,
+                Ok(DaemonMsg::Output(_)) if !has_replay_end => break,
+                Ok(DaemonMsg::Output(_)) => bail!("live output arrived before the pane replay ended"),
+                Ok(DaemonMsg::Error(message)) => bail!("reading the pane replay: {message}"),
+                Ok(_) => {}
+                Err(e) if !has_replay_end && legacy_replay_end(&e) => break,
                 Err(e) => return Err(anyhow!(e).context("reading the pane replay")),
             }
+            wait_for_replay(&session, has_replay_end, until)?;
         }
         let _ = session.detach();
         Ok(what_was_asked_for(segments, scrollback))
@@ -293,15 +290,16 @@ impl Backend for RealBackend {
         let deadline = timeout.and_then(|t| std::time::Instant::now().checked_add(t));
         // Watching starts before anything is typed, so no byte the command
         // prints can go past unseen. The replay that comes first is only read
-        // for the pane's state — the daemon sends its prompt report last.
+        // for the pane's state — the daemon includes its initial prompt report.
         let mut session = self
             .pane_client()?
-            .observe(pane, SESSION_SIZE)
+            .observe_with_replay_end(pane, SESSION_SIZE)
             .with_context(|| format!("observing pane %{pane}"))?;
         let mut size = SESSION_SIZE;
         // (integration active, at a prompt), as the daemon last reported them.
         let mut prompt: Option<(bool, bool)> = None;
-        let until = std::time::Instant::now() + EXEC_REPLAY_MAX;
+        let has_replay_end = session.has_replay_end();
+        let until = Instant::now() + REPLAY_MAX;
         let _ = session.set_recv_timeout(Some(REPLAY_FIRST_WAIT));
         let finish = |session: PaneSession, end, size| -> Result<ExecRun> {
             let _ = session.detach();
@@ -321,21 +319,22 @@ impl Backend for RealBackend {
                 Ok(DaemonMsg::Exited { code }) => {
                     return finish(session, ExecEnd::PaneExited(code), size);
                 }
-                // Live output: the replay is over, and so is `capture`'s
-                // reading of it. A pane still printing is not at a prompt,
-                // and its report has already said so.
-                Ok(DaemonMsg::Output(_)) => break,
+                Ok(DaemonMsg::ReplayEnd) => break,
+                // Old peers signal the end by live output or a quiet spell.
+                Ok(DaemonMsg::Output(_)) if !has_replay_end => break,
+                Ok(DaemonMsg::Output(_)) => bail!("live output arrived before the pane replay ended"),
+                Ok(DaemonMsg::Error(message)) => bail!("reading the pane replay: {message}"),
                 Ok(_) => {}
-                Err(e) if timed_out(&e) => break,
-                Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                Err(e) if !has_replay_end && timed_out(&e) => break,
+                Err(e) if !has_replay_end && e.kind() == std::io::ErrorKind::UnexpectedEof => {
                     return finish(session, ExecEnd::PaneExited(None), size);
                 }
                 Err(e) => return Err(anyhow!(e).context("reading the pane replay")),
             }
-            if std::time::Instant::now() >= until {
+            if !has_replay_end && Instant::now() >= until {
                 break;
             }
-            let _ = session.set_recv_timeout(Some(REPLAY_SETTLE));
+            wait_for_replay(&session, has_replay_end, until)?;
         }
         match prompt {
             Some((true, true)) => {}
@@ -493,6 +492,24 @@ fn timed_out(e: &std::io::Error) -> bool {
         e.kind(),
         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
     )
+}
+
+fn legacy_replay_end(error: &std::io::Error) -> bool {
+    timed_out(error) || error.kind() == std::io::ErrorKind::UnexpectedEof
+}
+
+fn wait_for_replay(session: &PaneSession, has_replay_end: bool, until: Instant) -> Result<()> {
+    let wait = if has_replay_end {
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            bail!("timed out waiting for the pane replay to end");
+        }
+        left
+    } else {
+        REPLAY_SETTLE
+    };
+    let _ = session.set_recv_timeout(Some(wait));
+    Ok(())
 }
 
 fn hostname() -> String {

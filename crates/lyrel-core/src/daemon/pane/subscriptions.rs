@@ -234,6 +234,8 @@ pub(super) struct SubscriberCaps {
     pub glyph_render: bool,
     /// The consumer takes the program-status projection.
     pub program: bool,
+    /// This observer explicitly requested `ReplayEnd`.
+    pub replay_end: bool,
 }
 
 /// A controller attach: who subscribes, the gate its output is charged to,
@@ -561,10 +563,7 @@ impl Subscriptions {
             &replay,
             graphics.as_ref(),
             &subscriber,
-            caps.foreground,
-            caps.colors,
-            caps.glyphs,
-            caps.program,
+            caps,
         );
         attach.gate.add(queued);
         if complete {
@@ -596,10 +595,7 @@ impl Subscriptions {
             &replay,
             graphics.as_ref(),
             &observer,
-            caps.foreground,
-            caps.colors,
-            caps.glyphs,
-            caps.program,
+            caps,
         );
         gate.add(queued);
         if complete {
@@ -709,10 +705,7 @@ fn replay_state(
     st: &ReplayState<'_>,
     graphics: Option<&GraphicsState>,
     subscriber: &Sender<DaemonMsg>,
-    foreground_command: bool,
-    pane_colors: bool,
-    glyph_state: bool,
-    program_status: bool,
+    caps: SubscriberCaps,
 ) -> (usize, bool) {
     // What the replay queues is charged to the stream's gate like live output,
     // by the same measure its writer credits back (`gated_len`).
@@ -764,7 +757,7 @@ fn replay_state(
     // an older set inside the ring cannot resurrect a slot that was reset
     // later. The frame is sent even when empty — a reattached consumer may
     // still hold the previous link's overrides.
-    if pane_colors {
+    if caps.colors {
         let colors = graphics
             .map(GraphicsState::colors)
             .copied()
@@ -777,7 +770,7 @@ fn replay_state(
     // applied by this build's consumer; this full snapshot follows every
     // replayed mutation and precedes live output. It is sent even when empty,
     // so a reattached consumer cannot keep a stale registry.
-    if glyph_state {
+    if caps.glyphs {
         let frame = st
             .glyphs
             .map(GlyphSession::frame)
@@ -788,12 +781,12 @@ fn replay_state(
     // empty: a reattached/reconnected consumer must replace whatever records
     // it held for the previous link, never mistake a baseline for live news,
     // and never ask the daemon to replay query answers.
-    if program_status {
+    if caps.program {
         send(DaemonMsg::ProgramStatus(
             crate::core::program_status::ProgramStatusFrame::Baseline(st.program.snapshot()),
         ));
     }
-    if let Some(prompt) = st.facts.prompt(foreground_command) {
+    if let Some(prompt) = st.facts.prompt(caps.foreground) {
         send(prompt);
     }
     st.facts.replay_context(&mut send);
@@ -805,6 +798,9 @@ fn replay_state(
     st.facts.replay_agent(&mut send);
     if !st.alive {
         send(DaemonMsg::Exited { code: st.exit_code });
+    }
+    if caps.replay_end {
+        send(DaemonMsg::ReplayEnd);
     }
     (queued, true)
 }

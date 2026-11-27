@@ -255,6 +255,10 @@ pub const FEATURE_PROGRAM_STATUS: &str = "program-status";
 /// using the session while telling the user that endpoint needs updating.
 pub const FEATURE_VALIDATED_TITLES: &str = "validated-titles";
 
+/// A client may request an observer with an explicit initial replay boundary.
+/// Older clients keep using `Observe`, which never receives `ReplayEnd`.
+pub const FEATURE_OBSERVER_REPLAY_END: &str = "observer-replay-end";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonVersion {
     pub protocol: u32,
@@ -285,6 +289,7 @@ impl DaemonVersion {
             FEATURE_XTGETTCAP_OWNER.to_string(),
             FEATURE_STATIC_SIXEL.to_string(),
             FEATURE_VALIDATED_TITLES.to_string(),
+            FEATURE_OBSERVER_REPLAY_END.to_string(),
         ];
         if cfg!(unix) {
             features.push(FEATURE_HANDOFF.to_string());
@@ -1374,6 +1379,9 @@ pub enum ClientMsg {
         pane_id: u64,
         size: WinSize,
     },
+    /// An `Observe` whose replay ends with `DaemonMsg::ReplayEnd`. Send only
+    /// after the peer advertises `FEATURE_OBSERVER_REPLAY_END`.
+    ObserveWithReplayEnd { pane_id: u64 },
     Input(Vec<u8>),
     /// Clear the controlling pane's presentation in the ordered output stream.
     ClearPresentation {
@@ -1514,6 +1522,9 @@ pub enum DaemonMsg {
     },
     Size(WinSize),
     Snapshot(Vec<u8>),
+    /// Queued after all initial replay, including initial prompt or exit state,
+    /// before any live messages. Only sent to `ObserveWithReplayEnd` clients.
+    ReplayEnd,
     Output(Vec<u8>),
     /// An authoritative pane-local graphics resource/placement update.
     /// [`crate::core::kitty_graphics::GraphicsUpdate`] carries compact metadata
@@ -1640,6 +1651,7 @@ mod kind {
     /// Client -> daemon: opt in to the daemon-owned program-status projection.
     /// The kind spaces are direction-scoped, so 75 is also the daemon frame.
     pub const SUBSCRIBE_PROGRAM_STATUS: u8 = 75;
+    pub const OBSERVE_WITH_REPLAY_END: u8 = 77;
     pub const DETACH: u8 = 5;
     pub const KILL: u8 = 6;
     pub const LIST: u8 = 7;
@@ -1706,6 +1718,7 @@ mod kind {
     /// Daemon -> opted-in consumer: baseline or live program-status frame.
     pub const PROGRAM_STATUS: u8 = 75;
     pub const PROGRAM_NOTE: u8 = 76;
+    pub const REPLAY_END: u8 = 77;
 }
 
 pub fn write_frame<W: Write>(w: &mut W, kind: u8, payload: &[u8]) -> io::Result<()> {
@@ -1923,6 +1936,9 @@ impl ClientMsg {
             ClientMsg::Observe { pane_id, size } => {
                 write_frame(w, kind::OBSERVE, &to_json(&(pane_id, size))?)
             }
+            ClientMsg::ObserveWithReplayEnd { pane_id } => {
+                write_frame(w, kind::OBSERVE_WITH_REPLAY_END, &to_json(pane_id)?)
+            }
             ClientMsg::GraphicsCapacity {
                 encoded_bytes,
                 decoded_bytes,
@@ -2088,6 +2104,9 @@ impl ClientMsg {
                 let (pane_id, size) = from_json(&payload)?;
                 ClientMsg::Observe { pane_id, size }
             }
+            kind::OBSERVE_WITH_REPLAY_END => ClientMsg::ObserveWithReplayEnd {
+                pane_id: from_json(&payload)?,
+            },
             kind::GRAPHICS_CAPACITY => {
                 let (encoded_bytes, decoded_bytes, offers) = from_json(&payload)?;
                 ClientMsg::GraphicsCapacity {
@@ -2214,6 +2233,7 @@ impl DaemonMsg {
             DaemonMsg::Spawned { pane_id } => write_frame(w, kind::SPAWNED, &to_json(pane_id)?),
             DaemonMsg::Size(size) => write_frame(w, kind::SIZE, &to_json(size)?),
             DaemonMsg::Snapshot(bytes) => write_frame(w, kind::SNAPSHOT, bytes),
+            DaemonMsg::ReplayEnd => write_frame(w, kind::REPLAY_END, &[]),
             DaemonMsg::Output(bytes) => write_frame(w, kind::OUTPUT, bytes),
             DaemonMsg::ProgramNote(note) => write_frame(w, kind::PROGRAM_NOTE, &to_json(note)?),
             DaemonMsg::Graphics(frame) => write_frame(w, kind::GRAPHICS, frame),
@@ -2300,6 +2320,7 @@ impl DaemonMsg {
             },
             kind::SIZE => DaemonMsg::Size(from_json(&payload)?),
             kind::SNAPSHOT => DaemonMsg::Snapshot(payload),
+            kind::REPLAY_END if payload.is_empty() => DaemonMsg::ReplayEnd,
             kind::OUTPUT => DaemonMsg::Output(payload),
             kind::PROGRAM_NOTE => DaemonMsg::ProgramNote(from_json(&payload)?),
             kind::GRAPHICS => DaemonMsg::Graphics(payload.into()),
@@ -3180,6 +3201,21 @@ mod tests {
         assert_eq!(k, kind::OBSERVE);
         assert_ne!(k, kind::ATTACH, "observing must never preempt an attach");
         assert_eq!(ClientMsg::from_frame(k, payload).unwrap(), msg);
+    }
+
+    #[test]
+    fn observe_replay_end_is_an_explicit_wire_opt_in() {
+        let request = ClientMsg::ObserveWithReplayEnd { pane_id: 42 };
+        let mut wire = Vec::new();
+        request.encode(&mut wire).unwrap();
+        let (kind, payload) = read_frame(&mut wire.as_slice()).unwrap();
+        assert_ne!(kind, kind::OBSERVE);
+        assert_eq!(ClientMsg::from_frame(kind, payload).unwrap(), request);
+
+        wire.clear();
+        DaemonMsg::ReplayEnd.encode(&mut wire).unwrap();
+        assert_eq!(DaemonMsg::read(&mut wire.as_slice()).unwrap(), DaemonMsg::ReplayEnd);
+        assert!(DaemonVersion::current().has_feature(FEATURE_OBSERVER_REPLAY_END));
     }
 
     #[test]

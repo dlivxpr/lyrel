@@ -91,3 +91,17 @@ fps 的定义保持不变——从火焰开始运行起的总帧数 / 经过的�
 - DOOM-fire 的 FPS 同时受生产端调度、PTY 排空和终端消费影响，不应直接等同于绘制性能。
 - `cat` 的完成时间反映输出排空，不代表所有文字已显示；分析持续吞吐和渲染延迟时须分别测量。
 - lyrel 内存包含 GUI 与守护进程；对比时保持冷启动、空闲时间和配置一致。
+
+## CLI capture 与 exec（#436）
+
+在预留机器上的专用测试账户运行。准备对应版本的 Release `lyrel`、`lyrel-server`，以及一份 Release `cli_e2e` 驱动。每轮交替替换待测版本的 CLI 和 server，驱动保持相同。在 Windows 使用 Git Bash 并通过 `scripts/cargo-windows.ps1` 构建和暂存 ConPTY 文件。
+
+```bash
+cargo build --locked --release -p lyrel-cli -p lyrel-server
+cargo test --locked --release -p lyrel-cli --test cli_e2e --no-run
+"$workload_exe" --capture-exec-workload "$revision" "$cli" "$server" "$bash" > "$samples"
+```
+
+`$workload_exe` 取 `cargo test --no-run` 报出的 `cli_e2e` 路径。其余路径分别指向待测 CLI、server 和 Bash。Linux 用上述 headless 入口。在 Windows 或 macOS 的专用桌面会话中，另用相同版本的 `lyrel-app`，在命令末尾加 `--gui "$app"`。测量时保持目标窗格可见、窗口大小固定且没有其他输入。可另跑一轮 `--gui "$app" --inspect`，在计时结束后观察 `verified.last_display_line` 指定的最后一行。
+
+每次命令启动独立 daemon 和窗格并输出一轮 JSONL。`workload` 提供版本、进程 ID、终端几何和负载大小。`sample` 按操作记录 CLI 启动到输出及退出的耗时，成功的 `exec` 还记录到 PTY 命令进程开始的耗时。`verified` 必须出现，表示编号字节序列、完整命令输出、退出状态和同一窗格可继续执行命令均通过。比较时保留原始记录、固定预热次数并报告各操作的样本量、中位数、p95 和波动。资源数据按 daemon、CLI、GUI 和生产进程分别归属。

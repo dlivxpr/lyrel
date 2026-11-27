@@ -948,6 +948,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
             | ClientMsg::SpawnNativeSsh { .. }
             | ClientMsg::Attach { .. }
             | ClientMsg::Observe { .. }
+            | ClientMsg::ObserveWithReplayEnd { .. }
     ) && negotiated
         && graphics_capacity.is_none()
     {
@@ -962,6 +963,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                 | ClientMsg::SpawnNativeSsh { .. }
                 | ClientMsg::Attach { .. }
                 | ClientMsg::Observe { .. }
+                | ClientMsg::ObserveWithReplayEnd { .. }
         )
     {
         let mut w = &write_stream;
@@ -1154,7 +1156,8 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
         // the controller. The replay tells the observer the pane's real size;
         // the field stays on the wire so a future observer-side viewport does
         // not need another message kind.
-        ClientMsg::Observe { pane_id, size: _ } => match registry.get(pane_id) {
+        request @ (ClientMsg::Observe { pane_id, size: _ }
+        | ClientMsg::ObserveWithReplayEnd { pane_id }) => match registry.get(pane_id) {
             Some(pane) => {
                 let Some(_graphics_lease) = GraphicsCapacityLease::reserve(
                     &pane,
@@ -1177,6 +1180,7 @@ fn handle_conn(stream: Stream, registry: Arc<Registry>) -> anyhow::Result<()> {
                         glyph_render: false,
                         program_status,
                     },
+                    matches!(request, ClientMsg::ObserveWithReplayEnd { .. }),
                 )
             }
             None => {
@@ -1542,6 +1546,7 @@ fn publish_spawn_with_glyphs(
                 glyph_state,
                 glyph_render,
                 program_status,
+                replay_end: false,
             },
         );
     }
@@ -1602,6 +1607,7 @@ fn stream_pane_with_attach(
                 glyph_state,
                 glyph_render,
                 program_status,
+                replay_end: false,
             },
         );
     }
@@ -1649,6 +1655,7 @@ fn stream_pane(
                 glyph_state,
                 glyph_render,
                 program_status,
+                replay_end: false,
             },
         );
     }
@@ -1705,6 +1712,7 @@ fn stream_observer(
     write_stream: Stream,
     registry: Arc<Registry>,
     options: PublishOptions,
+    replay_end: bool,
 ) -> anyhow::Result<()> {
     let PublishOptions {
         graphics_endpoint,
@@ -1731,6 +1739,7 @@ fn stream_observer(
                 // answers `s`; it keeps no render credential at all.
                 glyph_render: false,
                 program_status,
+                replay_end,
             },
         );
     }
@@ -1741,12 +1750,10 @@ fn stream_observer(
     // on a connection nothing will ever be sent down again.
     let (tx, rx) = mpsc::channel::<DaemonMsg>();
     let gate = Arc::new(crate::daemon::pane::subscriptions::OutputGate::new());
-    let observer_id = pane.observe_with_colors_glyphs_and_program(
+    let observer_id = pane.observe_with_features(
         tx,
         gate.clone(),
-        pane_colors,
-        glyph_state,
-        program_status,
+        crate::daemon::pane::ObserveFeatures { pane_colors, glyph_state, program_status, replay_end },
     );
     let writer = spawn_writer(rx, write_stream, gate);
 

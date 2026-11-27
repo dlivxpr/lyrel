@@ -280,13 +280,60 @@ pub(super) fn capture_tail_trims_a_real_panes_answer(daemon: &Daemon) {
         "--tail must not shrink the reported replay size: {tail}"
     );
 
-    daemon.run_ok(&["send", &address, "--enter"]);
+    let client = PaneClient::at(daemon.pane_endpoint());
+    let id = pane.pane_id();
+    let size = WinSize { cols: 80, rows: 24, cell_w: 8, cell_h: 16 };
+    let mut opted = client.observe_with_replay_end(id, size).expect("observe with boundary");
+    opted.set_recv_timeout(Some(CLOSE_WITHIN)).unwrap();
+    assert!(opted.has_replay_end());
+    let mut replay = Vec::new();
     loop {
-        if let DaemonMsg::Exited { code } = pane.recv().expect("wait for capture-tail fixture exit")
-        {
-            assert_eq!(code, Some(0), "capture-tail fixture failed");
+        match opted.recv().expect("read through the replay boundary") {
+            DaemonMsg::Snapshot(bytes) => replay.extend(bytes),
+            DaemonMsg::ReplayEnd => break,
+            DaemonMsg::Output(_) | DaemonMsg::Exited { .. } | DaemonMsg::Error(_) => {
+                panic!("a quiet pane did not finish replay")
+            }
+            _ => {}
+        }
+    }
+    let replay = String::from_utf8(replay).unwrap();
+    let mut remainder = replay.as_str();
+    for n in 1..=6 {
+        let line = format!("lyrel_e2e_tail_line_{n}\r\n");
+        let (_, after) = remainder.split_once(&line)
+            .unwrap_or_else(|| panic!("incomplete/out-of-order replay: {replay:?}"));
+        remainder = after;
+    }
+
+    let mut legacy = client.observe(id, size).expect("observe without the opt-in");
+    legacy.set_recv_timeout(Some(CLOSE_WITHIN)).unwrap();
+
+    daemon.run_ok(&["send", &address, "--enter"]);
+    for observer in [&mut opted, &mut legacy] {
+        let mut live = Vec::new();
+        loop {
+            match observer.recv().expect("wait for capture-tail fixture exit") {
+                DaemonMsg::Output(bytes) => live.extend(bytes),
+                DaemonMsg::Exited { code } => {
+                    assert_eq!(code, Some(0), "capture-tail fixture failed");
+                    break;
+                }
+                DaemonMsg::ReplayEnd => panic!("unexpected extra replay boundary"),
+                DaemonMsg::Error(error) => panic!("observer error: {error}"),
+                _ => {}
+            }
+        }
+        let live = String::from_utf8(live).unwrap();
+        assert!(live.contains("lyrel_e2e_after_capture\r\n"), "incomplete live bytes: {live:?}");
+    }
+    loop {
+        if let DaemonMsg::Exited { code } = pane.recv().expect("wait for controller exit") {
+            assert_eq!(code, Some(0), "controller lost the fixture's exit status");
             break;
         }
     }
+    let _ = opted.detach();
+    let _ = legacy.detach();
     let _ = pane.detach();
 }

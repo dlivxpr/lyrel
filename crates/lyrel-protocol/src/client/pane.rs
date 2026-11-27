@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::daemon::protocol::{
-    ClientMsg, DaemonMsg, DaemonVersion, PaneInfo, PaneProcs, ShellSpec, WinSize, is_error_kind,
-    peek_frame_kind, take_frame,
+    ClientMsg, DaemonMsg, DaemonVersion, FEATURE_OBSERVER_REPLAY_END, PaneInfo, PaneProcs,
+    ShellSpec, WinSize, is_error_kind, peek_frame_kind, take_frame,
 };
 use crate::daemon::router::{RouteAction, RouteChannel, RouteHeader, RouteTarget, negotiate};
 use crate::daemon::transport;
@@ -187,7 +187,13 @@ impl PaneClient {
     }
 
     pub fn observe(&self, pane_id: u64, size: WinSize) -> io::Result<PaneSession> {
-        PaneSession::observe_over(self.open()?, pane_id, size, OPEN_REPLY_WAIT)
+        PaneSession::observe_over(self.open()?, pane_id, size, false, OPEN_REPLY_WAIT)
+    }
+
+    /// Prefer an explicit replay boundary, falling back to the old observer
+    /// on an endpoint that does not advertise it. Check `has_replay_end()`.
+    pub fn observe_with_replay_end(&self, pane_id: u64, size: WinSize) -> io::Result<PaneSession> {
+        PaneSession::observe_over(self.open()?, pane_id, size, true, OPEN_REPLY_WAIT)
     }
 }
 
@@ -195,12 +201,13 @@ impl PaneClient {
 pub struct PaneSession {
     input: PaneInput,
     output: PaneOutput,
+    has_replay_end: bool,
 }
 
 impl PaneSession {
-    fn negotiate(stream: &mut transport::Stream, wait: Duration) -> io::Result<()> {
+    fn negotiate(stream: &mut transport::Stream, wait: Duration) -> io::Result<DaemonVersion> {
         let _ = stream.set_read_timeout(Some(wait));
-        let result = crate::daemon::protocol::negotiate_pane(stream).map(|_| ());
+        let result = crate::daemon::protocol::negotiate_pane(stream);
         let _ = stream.set_read_timeout(None);
         result
     }
@@ -273,11 +280,20 @@ impl PaneSession {
         mut stream: transport::Stream,
         pane_id: u64,
         size: WinSize,
+        want_replay_end: bool,
         reply_wait: Duration,
     ) -> io::Result<PaneSession> {
-        Self::negotiate(&mut stream, reply_wait)?;
-        ClientMsg::Observe { pane_id, size }.encode(&mut stream)?;
-        PaneSession::checked(stream, "Observe", pane_id, reply_wait)
+        let version = Self::negotiate(&mut stream, reply_wait)?;
+        let has_replay_end = want_replay_end && version.has_feature(FEATURE_OBSERVER_REPLAY_END);
+        let request = if has_replay_end {
+            ClientMsg::ObserveWithReplayEnd { pane_id }
+        } else {
+            ClientMsg::Observe { pane_id, size }
+        };
+        request.encode(&mut stream)?;
+        let mut session = PaneSession::checked(stream, "Observe", pane_id, reply_wait)?;
+        session.has_replay_end = has_replay_end;
+        Ok(session)
     }
 
     fn checked(
@@ -313,11 +329,17 @@ impl PaneSession {
                 reader,
                 buffered: Vec::new(),
             },
+            has_replay_end: false,
         })
     }
 
     pub fn pane_id(&self) -> u64 {
         self.input.pane_id()
+    }
+
+    /// Whether this observer's initial state ends with `DaemonMsg::ReplayEnd`.
+    pub fn has_replay_end(&self) -> bool {
+        self.has_replay_end
     }
 
     pub fn input(&mut self, bytes: &[u8]) -> io::Result<()> {
@@ -488,15 +510,21 @@ mod tests {
     }
 
     fn accept_protocol(reader: &mut transport::Stream, writer: &mut transport::Stream) {
+        accept_protocol_with_version(reader, writer, DaemonVersion::current());
+    }
+
+    fn accept_protocol_with_version(
+        reader: &mut transport::Stream,
+        writer: &mut transport::Stream,
+        version: DaemonVersion,
+    ) {
         match ClientMsg::read(reader).expect("read pane negotiation") {
             ClientMsg::Negotiate { protocol } => {
                 assert_eq!(protocol, crate::daemon::protocol::PROTOCOL_VERSION);
             }
             other => panic!("expected pane negotiation, got {other:?}"),
         }
-        DaemonMsg::Version(DaemonVersion::current())
-            .encode(writer)
-            .unwrap();
+        DaemonMsg::Version(version).encode(writer).unwrap();
         assert!(
             matches!(
                 ClientMsg::read(reader).unwrap(),
@@ -625,7 +653,9 @@ mod tests {
         let server = std::thread::spawn(move || {
             let mut r = server_end.try_clone().expect("clone server end");
             let mut w = server_end;
-            accept_protocol(&mut r, &mut w);
+            let mut old = DaemonVersion::current();
+            old.features.retain(|feature| feature != FEATURE_OBSERVER_REPLAY_END);
+            accept_protocol_with_version(&mut r, &mut w, old);
             match ClientMsg::read(&mut r).expect("read Observe") {
                 ClientMsg::Observe { pane_id, .. } => assert_eq!(pane_id, 9),
                 other => panic!("expected Observe, got {other:?}"),
@@ -637,7 +667,8 @@ mod tests {
         });
 
         let mut session =
-            PaneSession::observe_over(client_end, 9, size(), REPLY_WAIT).expect("observe");
+            PaneSession::observe_over(client_end, 9, size(), true, REPLY_WAIT).expect("observe");
+        assert!(!session.has_replay_end());
         match session.recv().expect("replayed size") {
             DaemonMsg::Size(_) => {}
             other => panic!("expected Size, got {other:?}"),
@@ -657,7 +688,7 @@ mod tests {
             let mut w = server_end;
             accept_protocol(&mut r, &mut w);
             match ClientMsg::read(&mut r).expect("read Observe") {
-                ClientMsg::Observe { pane_id, .. } => assert_eq!(pane_id, 42),
+                ClientMsg::ObserveWithReplayEnd { pane_id } => assert_eq!(pane_id, 42),
                 other => panic!("expected Observe, got {other:?}"),
             }
             DaemonMsg::Error("no such pane 42".into())
@@ -665,7 +696,7 @@ mod tests {
                 .expect("refuse the observe");
         });
 
-        let err = PaneSession::observe_over(client_end, 42, size(), REPLY_WAIT)
+        let err = PaneSession::observe_over(client_end, 42, size(), true, REPLY_WAIT)
             .expect_err("observing a missing pane must fail");
         assert!(
             err.to_string().contains("no such pane 42"),
