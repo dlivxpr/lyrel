@@ -125,7 +125,7 @@ lyrel 通过 [russh](https://github.com/Eugeny/russh) 处理 SSH 协议，连接
 shell／control 报告的 HOME 与 SFTP `Realpath(".")` 必须同属该隔离目录；
 仅在 shell 中修改 `HOME` 不足以隔离 SFTP。不要指向真实工作账号的 HOME。
 
-`lyrel-server` 的 `native_ssh_graphics`、`native_ssh_lifecycle`、`native_ssh_surface` 需要显式启用 `native-ssh-tests` 才参与普通测试命令的编译。具备真实端点后，按下文选择目标并用 `--ignored` 执行。
+`lyrel-server` 的 `native_ssh_graphics`、`native_ssh_lifecycle`、`native_ssh_surface` 和 `remote_interrupt` 需要显式启用 `native-ssh-tests` 才参与普通测试命令的编译。具备真实端点后，按下文选择目标并用 `--ignored` 执行。
 
 本机与远端必须真正满足路径隔离前提：本机创建的绝对路径哨兵在远端应不存在。Linux 客户端连接同 UID、同文件系统的 loopback SSH 时，只有隔离 HOME 并不满足这个条件；先以真实 SSH 检查哨兵的不可见性，再运行 locality 用例。本轮使用不提权的 user／mount namespace，将 propagation 设为 private，**只给新建的任务自有本机 `TMPDIR` 挂 256 MiB 有界 tmpfs**；sshd 与远端 daemon 留在 namespace 外，结束后卸载该自有挂载。不挂全局 `/tmp`，不修改 sysctl、账号、系统 sshd 或个人配置；内核不允许该方式时如实记录前提阻塞，不能关闭断言或把失败记为通过。
 
@@ -207,6 +207,36 @@ cargo test --locked -p lyrel --lib native_ssh_host_menu_disconnect_preserves_oth
 这不是两个独立原生 GUI 进程的验收。菜单用例经过生产工作区行更多菜单与真实 pointer down/up，
 检查断开后无关 rooted 窗口的工作区与标签仍有效；原生窗口仍须另做同一旅程验收。
 测试入口和夹具就绪不代表这些场景已经通过；须分别记录 rooted、真实 SSH 与原生窗口证据。
+
+### 双路由前台中断与远程工作区重连（#433）
+
+复用上文的 `LYREL_TEST_SSH_*` 固定 pin、隔离 HOME 和 Node 环境。远端还需提供 Linux `/proc`、`/bin/bash`、`/usr/bin/env` 与 `stty`。由端点维护者预先提供与待测提交匹配的 Release server 和专用 daemon。仅在已授权的专用端点上运行，保持现有 OpenSSH、主机密钥与账号配置。缺少配置时显式失败。
+
+先在采样窗口之外完成下列同参数构建和测试编译。使用基线和候选各自的工作树与匹配的远端 Release server。在保留相同夹具的前提下，于同一对预留机器上交替运行，暂停其他构建、测试和 GPU 工作负载。
+
+```bash
+cargo test --release --locked -p lyrel-server --features native-ssh-tests --test remote_interrupt --no-run
+LYREL_TEST_SSH_INTERRUPT_SAMPLES=25 cargo test --release --locked -p lyrel-server \
+  --features native-ssh-tests --test remote_interrupt ssh_interrupt_and_workspace_reconnect \
+  -- --ignored --exact --nocapture --test-threads=1 > "$LYREL_SSH433_LOG" 2>&1
+```
+
+```powershell
+pwsh scripts/cargo-windows.ps1 test --release --locked -p lyrel-server --features native-ssh-tests --test remote_interrupt --no-run
+$env:LYREL_TEST_SSH_INTERRUPT_SAMPLES = '25'
+pwsh scripts/cargo-windows.ps1 test --release --locked -p lyrel-server --features native-ssh-tests --test remote_interrupt ssh_interrupt_and_workspace_reconnect -- --ignored --exact --nocapture --test-threads=1 > $env:LYREL_SSH433_LOG 2>&1
+```
+
+每次指定一个本次自有的 `LYREL_SSH433_LOG` 路径，保存完整输出和真实退出码。每条路由先跑 1 个预热，再跑 `LYREL_TEST_SSH_INTERRUPT_SAMPLES` 个样本，默认值 `1` 用于最小功能验收。正式比较保留每轮的所有样本和 p95，以及多轮的范围和失败数。记录两端 `git rev-parse HEAD`、系统及硬件、Node／OpenSSH 版本、daemon PID 与网络条件。在同一条件下先记录实际网络 RTT，可将独立测得的 RTT 毫秒中位数填入 `LYREL_TEST_SSH_INTERRUPT_NETWORK_RTT_MS`。`ssh_control_rtt_*` 是 12 次生产 SSH control `Ping` 的往返时间，包含 IPC 和处理开销。网络 RTT 未提供时输出 `null`。
+
+- 两条路由使用相同的 Linux 前台任务和 `80×24` 网格。正常原生 SSH shell channel 与远端 daemon 持有的工作区 PTY 各运行同一脚本。脚本每 16 ms 写入 128 行，每行含 CRLF 共 64 bytes，目标 512,000 PTY bytes/s。客户端校验编号和 payload，读到第 3,072 行后用生产 pane `Input` 发送 `0x03`。隔离 PTY 启用 `ISIG` 和 `NOFLSH`，令 Ctrl-C 触发真正的 SIGINT 并保留已写入的输出。记录每轮实际产量与按远端单调时钟计算的输出率。
+- `input_to_ack_ms` 从本地 `Input` 发送前计至收到任务的 ACK 行。验证 ACK 前每一行完整、连续、无重复，ACK 的行数与接收一致，ACK 后任务停止输出，Bash 返回状态 130。继续等真实 Bash prompt 并发送一条新命令，等到对应结果才记为可用。指标边界是生产 pane 协议层。
+- `remote_receipt` 来自本轮私有远端目录中的独立文件。任务在 SIGINT 回调入口读取 Linux 远端单调时钟，写出 ACK 后保存文件。回调时间包含从内核投递到 Node 回调开始的调度时延。只在远端时钟域内求差，客户端从终端 ACK 获得的时间保留为往返量。文件同时记录前台进程组、任务 PID 和处理时的行数，并由客户端逐项核对。
+- 原生 SSH 在同一本地 router 上断开 pane 客户端，重新附着同一 pane 并核对 Bash PID。远程工作区另做一次硬重连。仅重启本次自有的本地 router，确认旧流断开，再建立新的真实 SSH control 和 pane 路由，核对同一个远端 daemon instance／PID、workspace、tab、pane 和 Bash PID。两条路由都用 `Snapshot` 验证已完成任务的编号行、ACK、退出状态和探测结果，再经实时 `Output` 核验新命令成功。远程工作区的 `restore_to_usable_prompt_ms` 包含本机 router 重建、固定 pin 的重连、fixture 的 SFTP HOME 核验、回放验证和新命令往返。原生 shell channel 的附着指标适用于同一个仍在运行的 router。
+- `SSH433` JSON 行记录样本、汇总和进程身份。远端 Node 的 `resourceUsage` 包含进程 CPU 时间（µs）和峰值 RSS（KiB）。正式运行另用 OS 计数器按 PID 采集本机 router、远端 daemon 与专用 sshd 会话进程的 CPU 和内存。Linux 可运行 `pidstat -u -r -p <PID列表> 1`。Windows 可轮询 `Get-Process -Id <PID>` 的 `CPU`、`WorkingSet64`、`PrivateMemorySize64`。保存采样间隔、单位、空闲与负载阶段的原始数据，并按同等工作量比较。该 headless 进程链的 GPU 指标不适用。实际桌面按键、自动重连状态条和已呈现像素需在专用原生窗口中另行记录。
+- 原生窗口补验使用同一份 `crates/lyrel-server/tests/fixtures/remote_interrupt.mjs`。由专用端点维护者准备脚本和私有临时目录，使用已有、已核验的 SSH 配置，通过隔离的普通 `lyrel-app` 分别打开原生 SSH 窗格和远程工作区窗格。在两条路由各启动 `stty isig intr '^C' noflsh; node <任务脚本绝对路径> 001 <私有目录中的新证据文件>`, 在编号行滚动时按 Ctrl-C，检查 ACK、紧接着的 prompt 和新命令输出。退出再打开同一隔离窗口，核验原生 SSH 窗格的本地 router 附着。重连远程工作区时保持远端 daemon 存活，检查原始窗格、任务最后几行、ACK 和新命令回显。手动按键与精确到第 3,072 行的自动化样本分别记录。
+
+当前条目提供运行方法。真实两端的网络、CPU／内存、原生窗口和基线／候选比较仍待在已授权的预留环境中采样。
 
 ### 标准原生桌面与双 pane 全尺寸入口
 
