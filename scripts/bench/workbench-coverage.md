@@ -338,6 +338,15 @@ Windows 上用 #438 的 5,000 文件夹具回放全局文件搜索。基线查�
 
 同一 50,000 路径夹具上，Windows 候选版的文件页输入 `flareq` 后显示 `No results`，输入 `file_04242.txt` 后只有一个候选。按 Enter 打开的文档正文为 `LYREL_SEARCH_PATH=file_04242.txt`。在停靠消息框，`@flare` 显示两项，追加 `q` 后菜单消失。输入 `@file_04242.txt` 时菜单只显示该文件，按 Enter 后输入 `END` 得到 `@file_04242.txt END`。PTY 回放包含 `LYREL_SEARCH_READY`，未出现 `LYREL_SEARCH_UNEXPECTED_INPUT`。本轮只校验可见结果与选择行为。
 
+同一 Windows x64 测量机依次运行 `cb897016` 和 `0daaff48`，复用 [#438 文件夹具](workspace-search.md)。每档在独立窗口打开文件页，预热一次后反复按 `f` 和 Backspace。计时从发起 `f` 按键调用开始，到 AX 观察到正确的前八个有序结果结束。每组采样 12 次，全部匹配。时间包含输入调用与 AX 读取，采样间隔设为 10 ms。
+
+| 路径数 | 基线 p50／p95（ms） | 候选 p50／p95（ms） |
+|---|---:|---:|
+| 5,000 | 66.09／70.27 | 61.78／72.46 |
+| 50,000 | 65.60／72.32 | 66.14／72.22 |
+
+两版、两种规模的停靠消息框均在输入 `@f` 后显示预期列表，通过 Down、Enter 选中 `fritz.txt`，并生成 `@fritz.txt END` 草稿。四轮 PTY 均未收到误输入。测试窗口的 AX 树未列出消息框浮层行，四轮用截图和键盘结果校验。记录和文件摘要见 `windows-438-ax-97Pxct/manifest.json`。两个入口的输入至正确呈现仍待采样。
+
 Windows 候选 Release 的 #439 本地夹具有 515 个跟踪文件和 `main`、`other` 两个检出。文件树展开 `levels/alpha` 后，在外部创建 `watched-439.txt`。从写入开始到 AX 观察到文件树新行约 432 ms，各测一次。更改面板将该文件列为未跟踪。通过底栏的工作树菜单切换到 `other-tree / other` 后，更改面板只显示另一个工作树修改的 `config.json` 和 `report.txt`，与 `git status --short --branch` 一致。
 
 在同一夹具中验收 #440。并排文本差异在第 180 行显示 `WORKTREE_MAIN` 至 `TEXT_DIFF_MAIN` 或 `WORKTREE_OTHER` 至 `TEXT_DIFF_OTHER`。内容感知视图显示 `destination` 的移动和 `unit0007` 的值修改。切换检出并快速交替选择两个文件后，最终显示 `move-OTHER` 和 `CHANGED_OTHER`。这两项是本地正确性试验，远程 Host、并发前台回显、成对时延和资源仍待测。
