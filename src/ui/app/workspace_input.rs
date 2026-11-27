@@ -106,10 +106,15 @@ impl LyrelApp {
         let Some(handoff) = self.waiting_for_workspace_input(window) else {
             return;
         };
+        // AltGr and dead keys belong to the native text service. Their
+        // keydown cannot be replayed as committed text, but it is not a
+        // navigation command and must not discard the preceding keys.
+        if event.prefer_character_input {
+            return;
+        }
         let key = &event.keystroke;
         let modifiers = key.modifiers;
-        if event.prefer_character_input
-            || modifiers.control
+        if modifiers.control
             || modifiers.alt
             || modifiers.platform
             || modifiers.function
@@ -216,5 +221,75 @@ impl LyrelApp {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::daemon::protocol::ClientMsg;
+    use crate::ui::app::test_window;
+    use crate::ui::{pane::Pane, tab::Tab};
+    use gpui_kit::{Keystroke, TestAppContext};
+    use lyrel_terminal::view::quiet_test_pane;
+
+    #[gpui_kit::test]
+    fn native_text_keys_do_not_discard_earlier_workspace_typing(cx: &mut TestAppContext) {
+        let (app, mut vcx) = test_window::harness(cx);
+        app.update_in(&mut vcx, |app, window, cx| {
+            let mut handoff = WorkspaceInput::begin(app.workspace);
+            handoff.deadline = Instant::now() + Duration::from_secs(60);
+            app.workspace_input = Some(handoff);
+            window.focus(&app.home_focus, cx);
+            cx.notify();
+        });
+        vcx.update(|window, cx| {
+            for (key, text, native) in [
+                ("a", "a", false),
+                ("ctrl-alt-q", "@", true),
+                ("b", "b", false),
+            ] {
+                let mut keystroke = Keystroke::parse(key).unwrap();
+                keystroke.key_char = Some(text.into());
+                window.dispatch_event(
+                    PlatformInput::KeyDown(KeyDownEvent {
+                        keystroke,
+                        is_held: false,
+                        prefer_character_input: native,
+                    }),
+                    cx,
+                );
+            }
+        });
+        let mut stream = app.update_in(&mut vcx, |app, window, cx| {
+            let (view, stream) = quiet_test_pane(1, window, cx);
+            let slot = view.entity_id();
+            let focus = view.read(cx).focus_handle.clone();
+            app.tabs
+                .push(Tab::new(Pane::leaf(PaneSlot::Ready(view.clone()))));
+            if let Some(handoff) = app.workspace_input.as_mut() {
+                handoff.target = Some(PendingTarget {
+                    slot,
+                    pane: 1,
+                    focus: focus.clone(),
+                });
+            }
+            window.focus(&focus, cx);
+            app.deliver_workspace_input(slot, &view, true, window, cx);
+            cx.notify();
+            stream
+        });
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut input = Vec::new();
+        while input.len() < 2 {
+            if let ClientMsg::Input(bytes) =
+                ClientMsg::read(&mut stream).expect("queued input reaches the terminal")
+            {
+                input.extend(bytes);
+            }
+        }
+        assert_eq!(input, b"ab");
     }
 }
