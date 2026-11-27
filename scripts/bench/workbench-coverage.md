@@ -427,7 +427,11 @@ Windows 上用 #438 的 5,000 文件夹具回放全局文件搜索。基线查�
 
 Windows 候选 Release 的 #439 本地夹具有 515 个跟踪文件和 `main`、`other` 两个检出。文件树展开 `levels/alpha` 后，在外部创建 `watched-439.txt`。从写入开始到 AX 观察到文件树新行约 432 ms，各测一次。更改面板将该文件列为未跟踪。通过底栏的工作树菜单切换到 `other-tree / other` 后，更改面板只显示另一个工作树修改的 `config.json` 和 `report.txt`，与 `git status --short --branch` 一致。
 
-在同一夹具中验收 #440。并排文本差异在第 180 行显示 `WORKTREE_MAIN` 至 `TEXT_DIFF_MAIN` 或 `WORKTREE_OTHER` 至 `TEXT_DIFF_OTHER`。内容感知视图显示 `destination` 的移动和 `unit0007` 的值修改。切换检出并快速交替选择两个文件后，最终显示 `move-OTHER` 和 `CHANGED_OTHER`。这两项是本地正确性试验，远程 Host、并发前台回显、成对时延和资源仍待测。
+在同一夹具中验收 #440。并排文本差异在第 180 行显示 `WORKTREE_MAIN` 至 `TEXT_DIFF_MAIN` 或 `WORKTREE_OTHER` 至 `TEXT_DIFF_OTHER`。内容感知视图显示 `destination` 的移动和 `unit0007` 的值修改。切换检出并快速交替选择两个文件后，最终显示 `move-OTHER` 和 `CHANGED_OTHER`。
+
+另用 Windows 基线 `cb897016` 和候选 `0daaff48` 各打开一份具有相同内容的 515 文件仓库。两版均显示新增的未跟踪文件、预期的修改列表和 `main` 的文本与结构差异。写入至 AX 文件树出现新行为 363.61／389.52 ms，点击底栏变更统计至 AX 出现正确列表为 204.79／201.79 ms，点击文本文件至 AX 出现差异工具栏为 118.20／130.92 ms，均按基线／候选列出。两轮在写入后、等候 AX 刷新期间通过 CLI 向夹具窗格发送一个 `a`，PTY 回放均确认恰好一次回显。差异内容另由截图核对。
+
+使用真实 Git Bash 重跑工作树菜单入口，点击 `other-tree` 至 AX 出现正确检出标识，三对基线／候选分别为 776.05／1,452.30、777.28／781.92、773.37／781.63 ms。首轮候选的长延迟未在后两轮重现。单实例纯文本夹具启动时使用固定回执目录，两版在该配置下均未完成工作树跳转；Git Bash 对照记录分开归档。摘要、经校验的 PTY 输出和截图见 `windows-439-paired-XXZntD/manifest.json`。远程 Host、真实按键至回显、差异首个正确呈现及重复释放资源待测。
 
 Windows 候选 Release 实窗按 [#441 长文档回放](README.md#441-长文档编辑回放windowsmacos) 编辑两个 1 MiB 文件。在 `typing.md` 连续输入 100 个 `x`，保存、一次撤销、一次重做后，文件分别与 `typing-100.bin`、`original.bin`、`typing-100.bin` 逐字节一致。在 `replace.md` 对 100 行分别替换首字符，各撤销和重做 100 次。两个方向在第 50 次和第 100 次的保存结果均与对应修订逐字节一致，保留 UTF-8 BOM、混合行尾和文件末尾字节。
 
