@@ -357,6 +357,8 @@ Windows 候选版 #444 从文件树打开四象限 PNG，界面显示其尺寸 1
 
 本地 HTML 经 `lyrel preview PATH --pane %2` 进入 WebView2。打开并关闭应用内收件箱后，预览显示预期标题、正文及四个色块。HTML 可见时首次发送整串 `echo` 命令丢失首字符，Bash 报 `cho: command not found`。显式点击终端后单独发送首字符，再发送其余命令，目标窗格出现完整预期回执，HTML 仍可见。随后预览标签关闭。离线 draw.io 夹具从文件树打开后，在 70% 缩放下显示两个预期方框和连线，关闭时文档标签和画布文字同时消失。重复释放、首帧、逐渲染器资源和丢键原因仍待验证。
 
+在 Windows Release `f28ccfd4` 的隔离 WebView2 窗口中，HTML 预览显示 `LYREL444-PREVIEW-FOCUS`，AX 同时报告原终端输入面仍持有焦点。未点击终端，从窗口逐键发送 `abcdabcd`，原窗格按序收到全部八键，另一工作区未收到任何键。截图和回执存于 `windows-444-focus-6SLCHP/`。此前丢失首字符的是整串输入，原因仍待定位。
+
 #445 在 Docker Linux Release 上运行 `cli_e2e agents_report_continuous_state_age -- --exact`，通过真实 PTY 上的请求、状态年龄和轮次身份断言。在 Windows 候选版中，从窗格 2 写入固定 OSC 777 消息，核对应用内收件箱正文与目标。点击来源按钮后，下一条命令仅在窗格 2 回显。系统通知中心激活、会话发现全路径及状态到显示和回跳到输入延迟仍待测。
 
 #446 的 Docker Linux Release `insights_conformance` 通过 8 项测试，覆盖本机及真实 stdio Host 的 skills、omp／Kimi 用量统计和 GitHub remote 识别。Windows 候选版的技能页列出本机用户共享及所选工作区项目共享的两个同名安装，打开项目来源时显示预期正文。两份 `SKILL.md` 的字节在浏览前后相同。隔离的统计页从一份合成 omp 会话读取已知用量 10,000 Token、会话数 1。在源文件追加一条 2,000 Token 的用量事件并按「刷新历史」后，显示 12,000 Token、会话数 1，读取前后源文件字节一致。全部来源视图显示数据不完整。主机指标、GitHub 界面及刷新时延和资源归因仍待测。
