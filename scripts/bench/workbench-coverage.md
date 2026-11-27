@@ -562,7 +562,9 @@ Windows 基线 `cb897016` 和候选 `0daaff48` 各在一个隔离 GUI 进程中�
 
 同一 MSYS 运行库的 `dd bs=1 count=2` 在 raw 模式下逐字节读取。改尺寸和不改尺寸各四次均返回 `65 63`。逐字节读取本身未触发缺失。源码与回执见 `windows-pty-first-byte-EaRKbC/single-byte-read-manifest.json`。
 
-#445 在 Docker Linux Release 上运行 `cli_e2e agents_report_continuous_state_age -- --exact`，通过真实 PTY 上的请求、状态年龄和轮次身份断言。在 Windows 候选版中，从窗格 2 写入固定 OSC 777 消息，核对应用内收件箱正文与目标。点击来源按钮后，下一条命令仅在窗格 2 回显。系统通知中心激活、会话发现全路径及状态到显示和回跳到输入延迟仍待测。
+#445 在 Docker Linux Release 上运行 `cli_e2e agents_report_continuous_state_age -- --exact`，通过真实 PTY 上的请求、状态年龄和轮次身份断言。在 Windows 候选版中，从窗格 2 写入固定 OSC 777 消息，核对应用内收件箱正文与目标。点击来源按钮后，下一条命令仅在窗格 2 回显。
+
+Windows 基线 `cb897016` 和候选 `0daaff48` 各取一份配对样本。收件箱打开后，通过 CLI 在另一标签的 Bash 窗格触发同一 OSC 777 通知。从发起 CLI 调用到读取该通知的持久化记录分别为 510.97／509.34 ms，记录中的 pane 和 tab 均匹配预期。点击来源按钮到 AX 观察到终端焦点分别为 94.95／94.24 ms。点击来源到 CLI 确认下一条命令在目标窗格回显分别为 883.88／579.76 ms，其中包含窗口输入、命令执行和 PTY 回放。目标各返回一次结果，原窗格均未收到探针命令。六份原始回执及摘要见 `windows-445-paired-sbF0C3/manifest.json`。系统通知中心激活、会话发现全路径、首个正确显示帧及重复负载下的资源仍待测。
 
 #446 的 Docker Linux Release `insights_conformance` 通过 8 项测试，覆盖本机及真实 stdio Host 的 skills、omp／Kimi 用量统计和 GitHub remote 识别。Windows 候选版的技能页列出本机用户共享及所选工作区项目共享的两个同名安装，打开项目来源时显示预期正文。两份 `SKILL.md` 的字节在浏览前后相同。隔离的统计页从一份合成 omp 会话读取已知用量 10,000 Token、会话数 1。在源文件追加一条 2,000 Token 的用量事件并按「刷新历史」后，显示 12,000 Token、会话数 1，读取前后源文件字节一致。全部来源视图显示数据不完整。主机指标、GitHub 界面及刷新时延和资源归因仍待测。
 
