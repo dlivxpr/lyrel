@@ -454,7 +454,9 @@ Windows 候选版 #444 从文件树打开四象限 PNG，界面显示其尺寸 1
 | 原生 `ReadConsoleW` 子进程，实际改尺寸，标志 `7` | 0／6 |
 | Bash，Windows 系统 ConPTY，实际改尺寸／无请求，标志 `7` | 1／3、0／3 |
 
-独立程序确认 Git Bash 在两种 ConPTY 实现上都可能于改尺寸后丢首字。具体丢失输入记录的位置仍待跟踪。诊断源码、原始 VT 输出和摘要见 `windows-pty-first-byte-EaRKbC/resize-manifest.json`。
+独立程序确认 Git Bash 在两种 ConPTY 实现上都可能于改尺寸后丢首字。诊断源码、原始 VT 输出和摘要见 `windows-pty-first-byte-EaRKbC/resize-manifest.json` 和同目录的 `system-conpty-manifest.json`。
+
+固定版 ConPTY 加载后，向子进程写入 `ecd`。原生 `ReadConsoleInputW` 在四次改尺寸样本中均收到 `WINDOW_BUFFER_SIZE_EVENT(128, 38)` 和全部键记录。Git for Windows 2.56.1 的 `od -An -tx1 -N2` 在 raw 和 canonical 模式下各通过四次改尺寸及四次无改尺寸对照，均读出 `65 63`。同一套 Bash 的 `read -r -N 2` 在改尺寸后四次返回 `cd`，无改尺寸时四次返回 `ec`。显式忽略 `SIGWINCH` 后仍有三次返回 `cd`。另三次实际执行了 `SIGWINCH` trap，也均返回 `cd`。相关源码、MSYS 运行库版本和 37 个原始回执见同目录的 `input-boundary-manifest.json`。独立回放已将可重放的缺失定位到 Bash 读取路径，具体丢字的调用尚未确认。
 
 #445 在 Docker Linux Release 上运行 `cli_e2e agents_report_continuous_state_age -- --exact`，通过真实 PTY 上的请求、状态年龄和轮次身份断言。在 Windows 候选版中，从窗格 2 写入固定 OSC 777 消息，核对应用内收件箱正文与目标。点击来源按钮后，下一条命令仅在窗格 2 回显。系统通知中心激活、会话发现全路径及状态到显示和回跳到输入延迟仍待测。
 
