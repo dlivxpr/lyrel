@@ -73,10 +73,15 @@ pub(crate) enum PendingLaunch {
 pub(crate) struct PaneInstallation {
     view: Entity<TerminalView>,
     focused: bool,
+    restored: bool,
     launch: PendingLaunch,
 }
 
 impl PaneInstallation {
+    pub(crate) fn restored(&self) -> bool {
+        self.restored
+    }
+
     pub(crate) fn into_parts(self) -> (Entity<TerminalView>, bool, PendingLaunch) {
         (self.view, self.focused, self.launch)
     }
@@ -386,6 +391,7 @@ impl PendingPane {
         Some(PaneInstallation {
             view,
             focused,
+            restored,
             launch,
         })
     }

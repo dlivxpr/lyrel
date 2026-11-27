@@ -48,6 +48,7 @@ mod initialization;
 mod pane_binding;
 pub(crate) use pane_binding::PendingTerminalRequest;
 mod settings_bridge;
+mod workspace_input;
 use crate::ui::theme::{apply_theme, set_menus};
 
 use crate::ui::window_chrome::{ChromeCommand, WindowChrome, window_controls_drawn};
@@ -253,6 +254,7 @@ pub struct LyrelApp {
     pub(crate) mod_hint_fade_generation: Option<u64>,
     pub(crate) mod_hint_gen: u64,
     pub(crate) home_focus: gpui_kit::FocusHandle,
+    workspace_input: Option<workspace_input::WorkspaceInput>,
     /// Whether the home page's cursor block is on this half-second.
     ///
     /// A `bool` a timer flips, not a per-frame animation — the same shape the
@@ -730,6 +732,7 @@ impl LyrelApp {
         if id == Some(previous) {
             return;
         }
+        self.workspace_input = None;
         // Anything parked for the workspace we are leaving is now meaningless.
         self.tabs.clear_pending();
         self.pending_notification_source = None;
@@ -753,6 +756,9 @@ impl LyrelApp {
         // says otherwise.
         crate::ui::tree_sync::forget(cx, claimed);
         self.adopt_workspace(claimed, Session::default(), window, cx);
+        if id == Some(claimed) && self.home_focus.is_focused(window) {
+            self.workspace_input = Some(workspace_input::WorkspaceInput::begin(claimed));
+        }
         // This method runs under the app's own update lease, so the tabs the
         // pull must see are the ones just adopted here — reading the app back
         // out of `cx` (as `tabs_on_screen` would) is an abort in gpui.
@@ -778,6 +784,11 @@ impl LyrelApp {
         self.adopt_tool_layout(id, cx);
         self.rebind_host(previous_host, cx);
         self.refresh_shells(cx);
+        let handoff_tab = self.workspace_input.as_ref().and_then(|handoff| {
+            handoff
+                .requested_tab()
+                .or_else(|| session.tabs.get(session.active)?.tree_id)
+        });
         let font_size = self.font_size;
         let pane_ws = self.window_workspace(cx);
         let (tabs, active, dropped) = SessionRestore::tabs(
@@ -804,6 +815,10 @@ impl LyrelApp {
         self.save_session(cx);
         crate::ui::windows::refresh_menu(cx);
         self.focus_active(window, cx);
+        if handoff_tab.is_some() {
+            self.claim_pending_tab(window, cx);
+        }
+        self.bind_workspace_input(handoff_tab, window, cx);
         cx.notify();
     }
 
@@ -1749,6 +1764,7 @@ impl LyrelApp {
         let Some(installation) = installation else {
             return;
         };
+        let restored = installation.restored();
         let (view, was_focused, launch) = installation.into_parts();
         Self::watch_terminal(&view, window, cx);
         let slot = PaneSlot::Ready(view.clone());
@@ -1777,7 +1793,7 @@ impl LyrelApp {
                     session,
                     argv,
                     scope.map(|s| *s),
-                    view,
+                    view.clone(),
                     window,
                     cx,
                 );
@@ -1786,6 +1802,13 @@ impl LyrelApp {
         if was_focused {
             self.focus_leaf(&slot, window, cx);
         }
+        self.deliver_workspace_input(
+            pending.entity_id(),
+            &view,
+            was_focused && restored,
+            window,
+            cx,
+        );
         self.save_session(cx);
         cx.notify();
     }
@@ -3319,6 +3342,9 @@ impl LyrelApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(handoff) = self.workspace_input.as_mut() {
+            handoff.request_tab(id);
+        }
         if let Some(index) = self.tabs.request(id) {
             self.activate(index, window, cx);
         }

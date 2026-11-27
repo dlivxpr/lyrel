@@ -259,6 +259,9 @@ impl LyrelApp {
             crate::ui::theme::replay_window_backdrop(window, cx);
             this.dismiss_mod_hint(cx);
             this.set_link_modifier(false, cx);
+            if !window.is_window_active() {
+                this.workspace_input = None;
+            }
             // A modifier released over another window never reports here, so a
             // Ctrl+Tab panel would hang waiting for a commit that cannot come.
             this.switcher_release_hold(cx);
@@ -426,6 +429,7 @@ impl LyrelApp {
             mod_hint_fade_generation: None,
             mod_hint_gen: 0,
             home_focus: cx.focus_handle(),
+            workspace_input: None,
             home_cursor_on: true,
             working_dot_on: true,
             shells: ShellInventory::default(),

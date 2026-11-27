@@ -68,6 +68,8 @@ Get-Process -Id $app.Id,$daemon.Id | Select-Object Id,Path,MainWindowHandle
 
 同样的前台 pane 可用于三种场景及其他竞争工作量。
 
+使用 `capture --plain` 做逐行校验时，先确认产生输出的窗格完成首次 resize，且生产全程至少为 83 列。Windows 夹具关闭自动换行，初始 80 列网格会覆写超宽行的末列。需要校验 PTY 字节时用原始 `capture --scrollback`。
+
 | 场景 | 探针的最后一个参数 |
 | --- | --- |
 | 空闲 | 省略。前台 fixture 等候 `start` 文件，只有回显 |
