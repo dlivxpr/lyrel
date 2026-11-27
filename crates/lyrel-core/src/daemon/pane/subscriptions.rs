@@ -559,12 +559,7 @@ impl Subscriptions {
         self.subscriber_program = caps.program;
         attach.gate.reset();
         let epoch = self.subscriber_epoch;
-        let (queued, complete) = replay_state(
-            &replay,
-            graphics.as_ref(),
-            &subscriber,
-            caps,
-        );
+        let (queued, complete) = replay_state(&replay, graphics.as_ref(), &subscriber, caps);
         attach.gate.add(queued);
         if complete {
             self.subscriber = Some(subscriber);
@@ -591,12 +586,7 @@ impl Subscriptions {
         let observer = observer.into();
         self.observer_seq += 1;
         // Charge the entire replay before exposing this observer to live output.
-        let (queued, complete) = replay_state(
-            &replay,
-            graphics.as_ref(),
-            &observer,
-            caps,
-        );
+        let (queued, complete) = replay_state(&replay, graphics.as_ref(), &observer, caps);
         gate.add(queued);
         if complete {
             self.observers.push(Observer {

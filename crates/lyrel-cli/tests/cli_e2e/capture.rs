@@ -282,8 +282,15 @@ pub(super) fn capture_tail_trims_a_real_panes_answer(daemon: &Daemon) {
 
     let client = PaneClient::at(daemon.pane_endpoint());
     let id = pane.pane_id();
-    let size = WinSize { cols: 80, rows: 24, cell_w: 8, cell_h: 16 };
-    let mut opted = client.observe_with_replay_end(id, size).expect("observe with boundary");
+    let size = WinSize {
+        cols: 80,
+        rows: 24,
+        cell_w: 8,
+        cell_h: 16,
+    };
+    let mut opted = client
+        .observe_with_replay_end(id, size)
+        .expect("observe with boundary");
     opted.set_recv_timeout(Some(CLOSE_WITHIN)).unwrap();
     assert!(opted.has_replay_end());
     let mut replay = Vec::new();
@@ -301,12 +308,15 @@ pub(super) fn capture_tail_trims_a_real_panes_answer(daemon: &Daemon) {
     let mut remainder = replay.as_str();
     for n in 1..=6 {
         let line = format!("lyrel_e2e_tail_line_{n}\r\n");
-        let (_, after) = remainder.split_once(&line)
+        let (_, after) = remainder
+            .split_once(&line)
             .unwrap_or_else(|| panic!("incomplete/out-of-order replay: {replay:?}"));
         remainder = after;
     }
 
-    let mut legacy = client.observe(id, size).expect("observe without the opt-in");
+    let mut legacy = client
+        .observe(id, size)
+        .expect("observe without the opt-in");
     legacy.set_recv_timeout(Some(CLOSE_WITHIN)).unwrap();
 
     daemon.run_ok(&["send", &address, "--enter"]);
@@ -325,7 +335,10 @@ pub(super) fn capture_tail_trims_a_real_panes_answer(daemon: &Daemon) {
             }
         }
         let live = String::from_utf8(live).unwrap();
-        assert!(live.contains("lyrel_e2e_after_capture\r\n"), "incomplete live bytes: {live:?}");
+        assert!(
+            live.contains("lyrel_e2e_after_capture\r\n"),
+            "incomplete live bytes: {live:?}"
+        );
     }
     loop {
         if let DaemonMsg::Exited { code } = pane.recv().expect("wait for controller exit") {

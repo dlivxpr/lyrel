@@ -1753,7 +1753,12 @@ fn stream_observer(
     let observer_id = pane.observe_with_features(
         tx,
         gate.clone(),
-        crate::daemon::pane::ObserveFeatures { pane_colors, glyph_state, program_status, replay_end },
+        crate::daemon::pane::ObserveFeatures {
+            pane_colors,
+            glyph_state,
+            program_status,
+            replay_end,
+        },
     );
     let writer = spawn_writer(rx, write_stream, gate);
 

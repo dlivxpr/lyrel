@@ -1381,7 +1381,9 @@ pub enum ClientMsg {
     },
     /// An `Observe` whose replay ends with `DaemonMsg::ReplayEnd`. Send only
     /// after the peer advertises `FEATURE_OBSERVER_REPLAY_END`.
-    ObserveWithReplayEnd { pane_id: u64 },
+    ObserveWithReplayEnd {
+        pane_id: u64,
+    },
     Input(Vec<u8>),
     /// Clear the controlling pane's presentation in the ordered output stream.
     ClearPresentation {
@@ -3214,7 +3216,10 @@ mod tests {
 
         wire.clear();
         DaemonMsg::ReplayEnd.encode(&mut wire).unwrap();
-        assert_eq!(DaemonMsg::read(&mut wire.as_slice()).unwrap(), DaemonMsg::ReplayEnd);
+        assert_eq!(
+            DaemonMsg::read(&mut wire.as_slice()).unwrap(),
+            DaemonMsg::ReplayEnd
+        );
         assert!(DaemonVersion::current().has_feature(FEATURE_OBSERVER_REPLAY_END));
     }
 

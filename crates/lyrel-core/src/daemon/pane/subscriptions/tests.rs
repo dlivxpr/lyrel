@@ -1,7 +1,7 @@
 use super::super::test_support::{drain, test_state};
 use super::super::{
-    attach_subscriber, attach_subscriber_with_permissions, fan_out_output, notify,
-    ObserveFeatures, observe_subscriber, observe_subscriber_with_features, record_output,
+    ObserveFeatures, attach_subscriber, attach_subscriber_with_permissions, fan_out_output, notify,
+    observe_subscriber, observe_subscriber_with_features, record_output,
 };
 use super::*;
 use std::path::PathBuf;
@@ -278,13 +278,22 @@ fn opted_in_observer_receives_initial_exit_before_the_replay_boundary() {
         tx,
         Arc::new(OutputGate::new()),
         false,
-        ObserveFeatures { replay_end: true, ..ObserveFeatures::default() },
+        ObserveFeatures {
+            replay_end: true,
+            ..ObserveFeatures::default()
+        },
     );
     let frames = drain(&rx);
-    assert!(matches!(frames.as_slice(), [
-        DaemonMsg::Size(_), DaemonMsg::Snapshot(_), DaemonMsg::Progress(None),
-        DaemonMsg::Exited { code: Some(7) }, DaemonMsg::ReplayEnd,
-    ]));
+    assert!(matches!(
+        frames.as_slice(),
+        [
+            DaemonMsg::Size(_),
+            DaemonMsg::Snapshot(_),
+            DaemonMsg::Progress(None),
+            DaemonMsg::Exited { code: Some(7) },
+            DaemonMsg::ReplayEnd,
+        ]
+    ));
 }
 
 #[test]

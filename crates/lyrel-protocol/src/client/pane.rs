@@ -654,7 +654,8 @@ mod tests {
             let mut r = server_end.try_clone().expect("clone server end");
             let mut w = server_end;
             let mut old = DaemonVersion::current();
-            old.features.retain(|feature| feature != FEATURE_OBSERVER_REPLAY_END);
+            old.features
+                .retain(|feature| feature != FEATURE_OBSERVER_REPLAY_END);
             accept_protocol_with_version(&mut r, &mut w, old);
             match ClientMsg::read(&mut r).expect("read Observe") {
                 ClientMsg::Observe { pane_id, .. } => assert_eq!(pane_id, 9),

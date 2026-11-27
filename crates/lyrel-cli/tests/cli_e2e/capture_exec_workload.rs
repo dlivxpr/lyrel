@@ -55,7 +55,10 @@ pub(super) fn run(args: impl Iterator<Item = OsString>) {
     let bash = executable(&options.bash);
     let gui = options.gui.as_deref().map(executable);
     assert!(
-        matches!(bash.file_name().and_then(|s| s.to_str()), Some("bash" | "bash.exe")),
+        matches!(
+            bash.file_name().and_then(|s| s.to_str()),
+            Some("bash" | "bash.exe")
+        ),
         "use Bash (Git Bash on Windows) so lyrel loads its shell integration"
     );
 
@@ -77,7 +80,10 @@ pub(super) fn run(args: impl Iterator<Item = OsString>) {
     )
     .expect("write isolated config");
     let mut server_command = isolated_command(&server, &config);
-    server_command.arg("--daemon").arg("--config-dir").arg(&config);
+    server_command
+        .arg("--daemon")
+        .arg("--config-dir")
+        .arg(&config);
     let daemon = Daemon::launch(dir, config, server_command);
     let mut workload = Workload {
         cli,
@@ -86,7 +92,10 @@ pub(super) fn run(args: impl Iterator<Item = OsString>) {
         address: String::new(),
     };
     let status = workload.checked(&["status", "--json"]);
-    assert_eq!(status["pid"].as_u64(), Some(u64::from(workload.daemon.child.id())));
+    assert_eq!(
+        status["pid"].as_u64(),
+        Some(u64::from(workload.daemon.child.id()))
+    );
     let cwd = workload.work.to_str().expect("UTF-8 workload path");
     let created = workload.checked(&["new", cwd, "--json"]);
     let pane = created["pane"].as_u64().expect("created pane ID");
@@ -105,7 +114,13 @@ pub(super) fn run(args: impl Iterator<Item = OsString>) {
 
     workload.await_free();
     workload.checked(&[
-        "exec", &workload.address, "--json", "--timeout", "8", "--", &producer_line("S"),
+        "exec",
+        &workload.address,
+        "--json",
+        "--timeout",
+        "8",
+        "--",
+        &producer_line("S"),
     ]);
     // Let Bash finish redrawing the prompt after its command-end report.
     thread::sleep(Duration::from_millis(100));
@@ -116,25 +131,53 @@ pub(super) fn run(args: impl Iterator<Item = OsString>) {
     workload.send("B");
     let busy_started = wait_for_stamp(&workload.work.join("B.start"));
     workload.await_busy_output(pane);
-    emit(json!({ "kind": "busy_producer", "pid": busy_started.1, "start_unix_ns": busy_started.0 }));
+    emit(
+        json!({ "kind": "busy_producer", "pid": busy_started.1, "start_unix_ns": busy_started.0 }),
+    );
     let busy_rows = workload.capture("capture_busy", true);
     let refused = workload.invoke(&[
-        "exec", &workload.address, "--timeout", "8", "--", &producer_line("R"),
+        "exec",
+        &workload.address,
+        "--timeout",
+        "8",
+        "--",
+        &producer_line("R"),
     ]);
     emit(refused.record("exec_busy", json!({ "exit": refused.output.status.code() })));
-    assert_eq!(refused.output.status.code(), Some(1), "{}", stderr(&refused.output));
-    assert!(stderr(&refused.output).contains("not at a shell prompt"), "{}", stderr(&refused.output));
-    assert!(refused.output.stdout.is_empty(), "busy exec returned unexpected stdout");
-    assert!(!workload.work.join("B.end").exists(), "busy samples did not complete under continuous output");
+    assert_eq!(
+        refused.output.status.code(),
+        Some(1),
+        "{}",
+        stderr(&refused.output)
+    );
+    assert!(
+        stderr(&refused.output).contains("not at a shell prompt"),
+        "{}",
+        stderr(&refused.output)
+    );
+    assert!(
+        refused.output.stdout.is_empty(),
+        "busy exec returned unexpected stdout"
+    );
+    assert!(
+        !workload.work.join("B.end").exists(),
+        "busy samples did not complete under continuous output"
+    );
 
     let busy_ended = wait_for_stamp(&workload.work.join("B.end"));
     workload.await_free();
     thread::sleep(Duration::from_millis(100));
     workload.exec("exec_after_busy", "N", 0);
-    assert!(!workload.work.join("R.start").exists(), "busy exec dispatched later");
+    assert!(
+        !workload.work.join("R.start").exists(),
+        "busy exec dispatched later"
+    );
     let replay_end = workload.check_replay_to_live(pane);
     if let Some((child, _)) = &mut gui {
-        assert!(child.0.try_wait().unwrap().is_none(), "desktop exited during the workload");
+        assert!(
+            child.0.try_wait().unwrap().is_none(),
+            "desktop exited during the workload"
+        );
     }
     emit(json!({
         "kind": "verified", "pane": pane, "busy_capture_rows": busy_rows,
@@ -166,11 +209,18 @@ impl Workload {
         let deadline = Instant::now() + LIMIT;
         let mut output = Vec::new();
         loop {
-            if let DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) = recv(&mut observer, deadline) {
+            if let DaemonMsg::Snapshot(bytes) | DaemonMsg::Output(bytes) =
+                recv(&mut observer, deadline)
+            {
                 let offset = output.len().saturating_sub(first.len() - 1);
                 output.extend(bytes);
-                if output[offset..].windows(first.len()).any(|w| w == first.as_bytes()) {
-                    observer.detach().expect("retire the readiness probe before sampling");
+                if output[offset..]
+                    .windows(first.len())
+                    .any(|w| w == first.as_bytes())
+                {
+                    observer
+                        .detach()
+                        .expect("retire the readiness probe before sampling");
                     return;
                 }
             }
@@ -194,22 +244,35 @@ impl Workload {
         let hello = ControlHello::host_rpc("capture-exec-workload", "capture-exec-workload");
         let deadline = Instant::now() + super::READY_WITHIN;
         loop {
-            assert!(gui.0.try_wait().unwrap().is_none(), "desktop exited before attaching");
-            let client = ControlClient::connect_at(&self.daemon.control_endpoint(), &hello).unwrap();
-            let reply = client.request(ControlRequest::GuiOpen { path: None, workspace: Some(workspace) });
+            assert!(
+                gui.0.try_wait().unwrap().is_none(),
+                "desktop exited before attaching"
+            );
+            let client =
+                ControlClient::connect_at(&self.daemon.control_endpoint(), &hello).unwrap();
+            let reply = client.request(ControlRequest::GuiOpen {
+                path: None,
+                workspace: Some(workspace),
+            });
             match reply {
                 Ok(ReplyOk::Bool(true)) => break,
-                Ok(ReplyOk::Bool(false)) => {},
+                Ok(ReplyOk::Bool(false)) => {}
                 other => panic!("opening the owned workspace: {other:?}"),
             }
-            assert!(Instant::now() < deadline, "desktop never registered with the isolated daemon");
+            assert!(
+                Instant::now() < deadline,
+                "desktop never registered with the isolated daemon"
+            );
             thread::sleep(Duration::from_millis(100));
         }
         loop {
             if let DaemonMsg::Size(size) = recv(&mut observer, deadline)
                 && size != INITIAL_SIZE
             {
-                assert!(size.cols >= 40 && size.rows >= 12, "fixture requires a grid of at least 40×12: {size:?}");
+                assert!(
+                    size.cols >= 40 && size.rows >= 12,
+                    "fixture requires a grid of at least 40×12: {size:?}"
+                );
                 return (gui, size);
             }
         }
@@ -224,7 +287,9 @@ impl Workload {
             .stderr(Stdio::piped());
         let start_unix_ns = unix_nanos();
         let start = Instant::now();
-        let mut child = command.spawn().unwrap_or_else(|e| panic!("starting lyrel {args:?}: {e}"));
+        let mut child = command
+            .spawn()
+            .unwrap_or_else(|e| panic!("starting lyrel {args:?}: {e}"));
         let pid = child.id();
         let mut stdout = child.stdout.take().unwrap();
         let mut stderr = child.stderr.take().unwrap();
@@ -249,7 +314,12 @@ impl Workload {
             };
             (output, start.elapsed())
         });
-        Invocation { output, elapsed, start_unix_ns, pid }
+        Invocation {
+            output,
+            elapsed,
+            start_unix_ns,
+            pid,
+        }
     }
 
     fn checked(&self, args: &[&str]) -> Value {
@@ -261,14 +331,28 @@ impl Workload {
 
     fn await_free(&self) {
         let args = [
-            "wait", &self.address, "--until", "free", "--interval", "50", "--timeout", "8", "--json",
+            "wait",
+            &self.address,
+            "--until",
+            "free",
+            "--interval",
+            "50",
+            "--timeout",
+            "8",
+            "--json",
         ];
         let report = self.checked(&args);
         assert_eq!(report["status"], "free", "{report}");
     }
 
     fn send(&self, phase: &str) {
-        let args = ["send", &self.address, &producer_line(phase), "--enter", "--json"];
+        let args = [
+            "send",
+            &self.address,
+            &producer_line(phase),
+            "--enter",
+            "--json",
+        ];
         self.checked(&args);
     }
 
@@ -276,18 +360,25 @@ impl Workload {
         let args = ["capture", &self.address, "--scrollback", "--json"];
         let invocation = self.invoke(&args);
         check_exit(&invocation.output, 0, &args);
-        let result: Value = serde_json::from_slice(&invocation.output.stdout).expect("capture JSON");
+        let result: Value =
+            serde_json::from_slice(&invocation.output.stdout).expect("capture JSON");
         let text = result["text"].as_str().expect("capture text");
         let still_busy = busy && !self.work.join("B.end").exists();
-        emit(invocation.record(name, json!({
-            "bytes": result["bytes"], "still_busy": still_busy,
-        })));
+        emit(invocation.record(
+            name,
+            json!({
+                "bytes": result["bytes"], "still_busy": still_busy,
+            }),
+        ));
         assert_eq!(result["pane"].as_u64(), self.address[1..].parse().ok());
         assert_eq!(result["bytes"].as_u64(), Some(text.len() as u64));
         assert_eq!(rows(text, "S", false), SEED_ROWS);
         let seen = rows(text, "B", busy);
         if busy {
-            assert!(seen > 0 && still_busy, "busy capture missed continuous output: {seen} rows, running={still_busy}");
+            assert!(
+                seen > 0 && still_busy,
+                "busy capture missed continuous output: {seen} rows, running={still_busy}"
+            );
         } else {
             assert_eq!(seen, 0);
         }
@@ -295,17 +386,34 @@ impl Workload {
     }
 
     fn exec(&self, name: &str, phase: &str, code: i32) {
-        let args = ["exec", &self.address, "--json", "--timeout", "8", "--", &producer_line(phase)];
+        let args = [
+            "exec",
+            &self.address,
+            "--json",
+            "--timeout",
+            "8",
+            "--",
+            &producer_line(phase),
+        ];
         let invocation = self.invoke(&args);
         check_exit(&invocation.output, code, &args);
         let result: Value = serde_json::from_slice(&invocation.output.stdout).expect("exec JSON");
-        let (dispatched, producer_pid) = read_stamp(&self.work.join(format!("{phase}.start"))).unwrap();
-        let dispatch_ns = dispatched.checked_sub(invocation.start_unix_ns).expect("system clock moved backwards");
-        assert!(dispatch_ns <= invocation.elapsed.as_nanos(), "system clock moved during exec");
-        emit(invocation.record(name, json!({
-            "dispatch_ns": dispatch_ns, "producer_pid": producer_pid, "exit": code,
-            "bytes": result["bytes"], "backend_ms": result["elapsed_ms"],
-        })));
+        let (dispatched, producer_pid) =
+            read_stamp(&self.work.join(format!("{phase}.start"))).unwrap();
+        let dispatch_ns = dispatched
+            .checked_sub(invocation.start_unix_ns)
+            .expect("system clock moved backwards");
+        assert!(
+            dispatch_ns <= invocation.elapsed.as_nanos(),
+            "system clock moved during exec"
+        );
+        emit(invocation.record(
+            name,
+            json!({
+                "dispatch_ns": dispatch_ns, "producer_pid": producer_pid, "exit": code,
+                "bytes": result["bytes"], "backend_ms": result["elapsed_ms"],
+            }),
+        ));
         assert_eq!(result["pane"].as_u64(), self.address[1..].parse().ok());
         assert_eq!(result["exit"], code);
         assert_eq!(result["exit_code_known"], true);
@@ -313,7 +421,10 @@ impl Workload {
         assert_eq!(result["pane_exited"], false);
         let expected: Vec<_> = (1..=RESULT_ROWS).map(|n| row(phase, n)).collect();
         let actual = result["output"].as_str().unwrap();
-        assert!(actual.lines().eq(expected.iter().map(String::as_str)), "incomplete/wrong exec stdout: {actual:?}");
+        assert!(
+            actual.lines().eq(expected.iter().map(String::as_str)),
+            "incomplete/wrong exec stdout: {actual:?}"
+        );
     }
 
     fn check_replay_to_live(&self, pane: u64) -> bool {
@@ -330,20 +441,32 @@ impl Workload {
         loop {
             match recv(&mut observer, deadline) {
                 DaemonMsg::Snapshot(bytes) => {
-                    assert!(!ended && live.is_empty(), "snapshot after the replay boundary");
+                    assert!(
+                        !ended && live.is_empty(),
+                        "snapshot after the replay boundary"
+                    );
                     replay.extend(bytes);
                 }
                 DaemonMsg::ReplayEnd => {
-                    assert!(negotiated && !ended && live.is_empty(), "out-of-order replay boundary");
+                    assert!(
+                        negotiated && !ended && live.is_empty(),
+                        "out-of-order replay boundary"
+                    );
                     ended = true;
                 }
                 DaemonMsg::Output(bytes) => {
-                    assert!(!negotiated || ended, "live bytes before the replay boundary");
+                    assert!(
+                        !negotiated || ended,
+                        "live bytes before the replay boundary"
+                    );
                     live.extend(bytes);
                 }
-                DaemonMsg::Prompt { at_prompt: true, last_exit: Some(0), .. }
-                    if live.windows(last.len()).any(|w| w == last.as_bytes()) => break,
-                _ => {},
+                DaemonMsg::Prompt {
+                    at_prompt: true,
+                    last_exit: Some(0),
+                    ..
+                } if live.windows(last.len()).any(|w| w == last.as_bytes()) => break,
+                _ => {}
             }
         }
         let replay = String::from_utf8_lossy(&replay);
@@ -402,7 +525,10 @@ fn executable(path: &Path) -> PathBuf {
 }
 
 fn unix_nanos() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos()
 }
 
 fn emit(record: Value) {
@@ -411,8 +537,17 @@ fn emit(record: Value) {
 }
 
 fn check_exit(output: &Output, code: i32, args: &[&str]) {
-    assert_eq!(output.status.code(), Some(code), "lyrel {args:?}: {}", stderr(output));
-    assert!(output.stderr.is_empty(), "lyrel {args:?}: {}", stderr(output));
+    assert_eq!(
+        output.status.code(),
+        Some(code),
+        "lyrel {args:?}: {}",
+        stderr(output)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "lyrel {args:?}: {}",
+        stderr(output)
+    );
 }
 
 fn stderr(output: &Output) -> std::borrow::Cow<'_, str> {
@@ -453,7 +588,10 @@ fn rows(text: &str, phase: &str, allow_incomplete_tail: bool) -> usize {
         if allow_incomplete_tail && tail.len() < expected.len() && expected.starts_with(tail) {
             break;
         }
-        assert!(tail.starts_with(&expected), "expected row {expected:?} at offset {offset}");
+        assert!(
+            tail.starts_with(&expected),
+            "expected row {expected:?} at offset {offset}"
+        );
         count += 1;
     }
     count
@@ -484,7 +622,11 @@ fn wait_for_stamp(path: &Path) -> (u128, u32) {
         if let Some(stamp) = read_stamp(path) {
             return stamp;
         }
-        assert!(Instant::now() < deadline, "fixture did not write {}", path.display());
+        assert!(
+            Instant::now() < deadline,
+            "fixture did not write {}",
+            path.display()
+        );
         thread::sleep(Duration::from_millis(5));
     }
 }

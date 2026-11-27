@@ -624,7 +624,11 @@ impl DaemonPane {
             subscriber,
             gate,
             admission,
-            ObserveFeatures { pane_colors, glyph_state, ..ObserveFeatures::default() },
+            ObserveFeatures {
+                pane_colors,
+                glyph_state,
+                ..ObserveFeatures::default()
+            },
         )
     }
 
@@ -1372,7 +1376,11 @@ impl DaemonPane {
         self.observe_with_features(
             observer,
             gate,
-            ObserveFeatures { pane_colors, glyph_state, ..ObserveFeatures::default() },
+            ObserveFeatures {
+                pane_colors,
+                glyph_state,
+                ..ObserveFeatures::default()
+            },
         )
     }
 
@@ -1384,13 +1392,8 @@ impl DaemonPane {
     ) -> u64 {
         let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
-        let id = observe_subscriber_with_features(
-            &mut st,
-            observer,
-            gate,
-            foreground_command,
-            features,
-        );
+        let id =
+            observe_subscriber_with_features(&mut st, observer, gate, foreground_command, features);
         let nudge = redraw_nudge(
             &mut st,
             self.runs_foreground_program(foreground_command),
@@ -1954,7 +1957,10 @@ fn observe_subscriber(
         observer,
         gate,
         foreground_command,
-        ObserveFeatures { pane_colors, ..ObserveFeatures::default() },
+        ObserveFeatures {
+            pane_colors,
+            ..ObserveFeatures::default()
+        },
     )
 }
 

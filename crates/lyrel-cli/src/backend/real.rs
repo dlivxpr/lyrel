@@ -182,7 +182,9 @@ impl Backend for RealBackend {
                 Ok(DaemonMsg::Snapshot(bytes)) => segments.push(CaptureSegment { size, bytes }),
                 Ok(DaemonMsg::Exited { .. } | DaemonMsg::ReplayEnd) => break,
                 Ok(DaemonMsg::Output(_)) if !has_replay_end => break,
-                Ok(DaemonMsg::Output(_)) => bail!("live output arrived before the pane replay ended"),
+                Ok(DaemonMsg::Output(_)) => {
+                    bail!("live output arrived before the pane replay ended")
+                }
                 Ok(DaemonMsg::Error(message)) => bail!("reading the pane replay: {message}"),
                 Ok(_) => {}
                 Err(e) if !has_replay_end && legacy_replay_end(&e) => break,
@@ -322,7 +324,9 @@ impl Backend for RealBackend {
                 Ok(DaemonMsg::ReplayEnd) => break,
                 // Old peers signal the end by live output or a quiet spell.
                 Ok(DaemonMsg::Output(_)) if !has_replay_end => break,
-                Ok(DaemonMsg::Output(_)) => bail!("live output arrived before the pane replay ended"),
+                Ok(DaemonMsg::Output(_)) => {
+                    bail!("live output arrived before the pane replay ended")
+                }
                 Ok(DaemonMsg::Error(message)) => bail!("reading the pane replay: {message}"),
                 Ok(_) => {}
                 Err(e) if !has_replay_end && timed_out(&e) => break,
