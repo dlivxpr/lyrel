@@ -15,12 +15,14 @@ const pollMs = 20;
 const now = () => Number(process.hrtime.bigint()) / 1e6;
 const usage = `node scripts/bench/desktop-restore-434.mjs --app RELEASE_APP --cli RELEASE_CLI
   --revision COMMIT [--bash GIT_BASH_EXE] [--cycles 1] [--steady-ms 2000]
+  [--input-check warm|wake]
 Windows 需要 --bash 指向 Git for Windows 的原生 bash.exe。macOS 使用 /bin/bash。`;
 
 const { values: options } = parseArgs({ options: {
   app: { type: 'string' }, cli: { type: 'string' }, bash: { type: 'string' },
   revision: { type: 'string' },
   cycles: { type: 'string', default: '1' }, 'steady-ms': { type: 'string', default: '2000' },
+  'input-check': { type: 'string' },
   help: { type: 'boolean' },
 } });
 if (options.help) {
@@ -32,8 +34,11 @@ assert(options.app && options.cli && options.revision, usage);
 assert(windows ? options.bash : !options.bash, usage);
 const cycles = Number(options.cycles);
 const steadyMs = Number(options['steady-ms']);
+const inputCheck = options['input-check'];
 assert(Number.isSafeInteger(cycles) && cycles >= 1, '--cycles 必须为正整数');
 assert(Number.isSafeInteger(steadyMs) && steadyMs >= 0, '--steady-ms 必须为非负整数');
+assert(inputCheck === undefined || inputCheck === 'warm' || inputCheck === 'wake',
+  '--input-check 必须为 warm 或 wake');
 
 const [app, cli, bash] = await Promise.all(
   [options.app, options.cli, options.bash ?? '/bin/bash'].map(path => realpath(path)),
@@ -233,8 +238,33 @@ async function receipt(token) {
   return { token, pane: Number(id), owner, cwd };
 }
 
+async function captureInputFailure(token, side) {
+  const { panes } = await lyrel('pane', 'ls', '--all');
+  const captures = await Promise.all(panes.filter(pane => pane.live && pane.owner === workspace)
+    .map(async ({ pane, cwd }) => {
+      const file = `${stage}-input-${token}-pane-${pane}.txt`;
+      try {
+        const { text } = await lyrel('capture', `%${pane}`, '--plain', '--scrollback');
+        await writeFile(join(root, file), text);
+        return { pane, cwd, file };
+      } catch (error) {
+        return { pane, cwd, error: error.message };
+      }
+    }));
+  await event('input-failure', { token, side, captures });
+}
+
 async function accepted(token, side, start) {
-  const ack = await until(`桌面输入 ${token} 的 Shell 回执`, () => receipt(token), 45_000, pollMs);
+  let ack;
+  try {
+    ack = await until(`桌面输入 ${token} 的 Shell 回执`, () => receipt(token), 45_000, pollMs);
+  } catch (error) {
+    if (inputCheck && workspace && stage !== 'setup') {
+      await captureInputFailure(token, side).catch(captureError =>
+        event('input-failure', { token, side, error: captureError.message }));
+    }
+    throw error;
+  }
   const observed = now();
   assert.equal(cwdKey(ack.cwd), cwdKey(paths[side]), `输入 ${token} 到达错误目录`);
   if (workspace) assert.equal(ack.owner, workspace, `输入 ${token} 到达错误工作区`);
@@ -421,6 +451,7 @@ async function wake(before, index) {
 try {
   await event('metadata', {
     revision: options.revision, profile: 'Release (operator supplied)', cycles, steadyMs, pollMs,
+    inputCheck,
     node: process.version, app, cli, bash, appSha256: await digest(app), cliSha256: await digest(cli),
     platform: process.platform, release: release(), architecture: arch(), cpus: cpus().length,
     cpu: cpus()[0]?.model, memoryBytes: totalmem(), argv: process.argv.slice(2),
@@ -428,18 +459,20 @@ try {
   });
   let before = await initialSetup();
   for (let i = 1; i <= cycles; i++) {
-    before = await restoreWindow(before, 'warm', i);
-    before = await restoreWindow(before, 'cold', i);
-    before = await wake(before, i);
+    if (inputCheck !== 'wake') before = await restoreWindow(before, 'warm', i);
+    if (!inputCheck) before = await restoreWindow(before, 'cold', i);
+    if (inputCheck !== 'warm') before = await wake(before, i);
   }
-  stage = 'tray-setup';
-  await closeWindow(before);
-  config.show_tray_icon = true;
-  await writeConfig();
-  await ask('按 Enter 启动托盘模式。确认本次窗口提示符出现后，直接输入 b434 traysetup。');
-  gui = await launch();
-  before = await result(before, 'warm', 'traysetup', await accepted('traysetup', 'left'));
-  for (let i = 1; i <= cycles; i++) before = await restoreWindow(before, 'reattach', i);
+  if (!inputCheck) {
+    stage = 'tray-setup';
+    await closeWindow(before);
+    config.show_tray_icon = true;
+    await writeConfig();
+    await ask('按 Enter 启动托盘模式。确认本次窗口提示符出现后，直接输入 b434 traysetup。');
+    gui = await launch();
+    before = await result(before, 'warm', 'traysetup', await accepted('traysetup', 'left'));
+    for (let i = 1; i <= cycles; i++) before = await restoreWindow(before, 'reattach', i);
+  }
   succeeded = true;
 } catch (error) {
   await event('failure', { message: error.message });
