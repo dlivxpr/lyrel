@@ -37,6 +37,8 @@ node scripts/bench/desktop-restore-434.mjs --app target/release/lyrel-app --cli 
 
 历史样本用 `window.type()` 输入整串，再用 `window.press('enter')` 提交。暖启动失败的那一轮先从 CLI 中找到存活窗格的 `[left]` 回放，再等 AX 树出现 `Restore434`。休眠失败的那一轮在 `F8` 后等 AX 树只剩一个 `textfield`。两个预期 Shell 都存活，CLI 回放分别显示 `434 warm1` 和 `434 hold1`，紧跟 `bash: 434: command not found`。另一次暖启动用 AX 标签存在作为发送条件，整串输入成功。唤醒复测先单独发 `b`，从左窗格的 CLI 回放读到 `[left] $ b` 后接续命令并收到回执。存活与回放确认 Shell 状态，AX 标签和输入面数量确认窗口内容。两次失败都缺少当时的终端焦点和窗口收键数据。
 
+同类症状已在不经过恢复或 HTML 预览的新 Git Bash 窗格复现，其中一次已有同步的 GUI 和 daemon 探针。该样本的目标 pane 正确，首字 `e` 成功写入 PTY，Bash 执行了 `cho`。原基线用 CLI 注入也会复现。后续恢复样本用下面的步骤捕获同一命令的 Shell 回执和边界事件，再与新窗格对照。详见[工作台覆盖表](workbench-coverage.md#首轮运行记录)。
+
 用已经构建的隔离产物运行下列命令。`warm` 只循环暖启动。将它替换为 `wake` 可循环 `F8` 切到备用窗格和 `Alt+1` 唤醒，分别提交 `holdN` 和 `wakeN`。每个回执仍按原场景校验。等待回执失败时，脚本会在关闭窗口和停止 daemon 前保存该工作区所有存活窗格的回放，并在 `events.jsonl` 的 `input-failure` 事件中记录 token、预期窗格和文件名。
 
 ```powershell
