@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { appendFile, mkdir, mkdtemp, open, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { appendFile, lstat, mkdir, mkdtemp, open, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import { arch, cpus, release, tmpdir, totalmem } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -14,12 +14,12 @@ const windows = process.platform === 'win32';
 const pollMs = 20;
 const now = () => Number(process.hrtime.bigint()) / 1e6;
 const usage = `node scripts/bench/desktop-restore-434.mjs --app RELEASE_APP --cli RELEASE_CLI
-  --revision COMMIT --disposable-account [--bash GIT_BASH_EXE] [--cycles 1] [--steady-ms 2000]
+  --revision COMMIT [--bash GIT_BASH_EXE] [--cycles 1] [--steady-ms 2000]
 Windows 需要 --bash 指向 Git for Windows 的原生 bash.exe。macOS 使用 /bin/bash。`;
 
 const { values: options } = parseArgs({ options: {
   app: { type: 'string' }, cli: { type: 'string' }, bash: { type: 'string' },
-  revision: { type: 'string' }, 'disposable-account': { type: 'boolean' },
+  revision: { type: 'string' },
   cycles: { type: 'string', default: '1' }, 'steady-ms': { type: 'string', default: '2000' },
   help: { type: 'boolean' },
 } });
@@ -28,15 +28,16 @@ if (options.help) {
   process.exit(0);
 }
 assert(windows || process.platform === 'darwin', '需要 Windows 或 macOS 原生桌面');
-assert(process.stdin.isTTY, '需要单独的交互式控制终端');
-assert(options.app && options.cli && options.revision && options['disposable-account'], usage);
+assert(options.app && options.cli && options.revision, usage);
 assert(windows ? options.bash : !options.bash, usage);
 const cycles = Number(options.cycles);
 const steadyMs = Number(options['steady-ms']);
 assert(Number.isSafeInteger(cycles) && cycles >= 1, '--cycles 必须为正整数');
 assert(Number.isSafeInteger(steadyMs) && steadyMs >= 0, '--steady-ms 必须为非负整数');
 
-const [app, cli, bash] = await Promise.all([options.app, options.cli, options.bash ?? '/bin/bash'].map(realpath));
+const [app, cli, bash] = await Promise.all(
+  [options.app, options.cli, options.bash ?? '/bin/bash'].map(path => realpath(path)),
+);
 for (const [file, name] of [[app, 'lyrel-app'], [cli, 'lyrel'], [bash, 'bash']]) {
   assert.equal(basename(file).toLowerCase(), windows ? `${name}.exe` : name);
   assert((await stat(file)).isFile(), `${file} 不是文件`);
@@ -44,18 +45,64 @@ for (const [file, name] of [[app, 'lyrel-app'], [cli, 'lyrel'], [bash, 'bash']])
 for (const binary of [app, cli]) {
   const folders = dirname(binary).split(sep).map(part => part.toLowerCase());
   assert(folders.at(-1) === 'release' && folders.includes('target'), `使用 Cargo target/.../release 中的原始产物：${binary}`);
+  if (windows) {
+    // Startup reconciles portable backups even with update checks disabled.
+    for (const name of ['.lyrel-portable', '.lyrel-inno-install']) {
+      const marker = join(dirname(binary), name);
+      try {
+        await lstat(marker);
+        assert.fail(`发现安装标记 ${marker}，需要独立的 Cargo 构建目录`);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+    }
+  } else {
+    // A bundle's updater can sweep its containing directory at startup.
+    assert(!folders.some(part => part.endsWith('.app')), `使用 .app 之外的 Cargo 原始产物：${binary}`);
+  }
 }
 
-// Pass --config-dir to the GUI, keeping LYREL_CONFIG_DIR out of its environment:
-// legacy adoption distinguishes the override from the machine's default instance.
-const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^lyrel_/i.test(key)));
+// Inherit only OS/locale settings. Agent-specific selectors, IPC overrides,
+// login rc overrides and loader variables must not reach the fixture.
+const systemEnv = Object.fromEntries(Object.entries(process.env).flatMap(([key, value]) => {
+  const name = windows ? key.toUpperCase() : key;
+  return /^(PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|PROGRAMDATA|LANG|LC_[A-Z_]+|TERM)$/.test(name)
+    ? [[name, value]] : [];
+}));
+let loginShell;
+if (!windows) {
+  systemEnv.PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+  // GUI startup probes the account's passwd shell independently of the pane
+  // shell and $SHELL. Only the system shells' startup paths are covered here.
+  const { stdout } = await exec('/usr/bin/id', ['-P'], { env: systemEnv, timeout: 5_000 });
+  const fields = stdout.trimEnd().split(':');
+  loginShell = fields[9];
+  assert(fields.length === 10 && ['/bin/zsh', '/bin/bash'].includes(loginShell),
+    'macOS 登录 Shell 必须为系统 /bin/zsh 或 /bin/bash，且使用系统自带的全局启动脚本');
+}
 const root = await mkdtemp(join(await realpath(windows ? tmpdir() : '/tmp'), 'lyrel434-'));
 const configDir = join(root, 'config');
+const fixtureHome = join(root, 'home');
+const temp = join(root, 'tmp');
+const isolatedEnv = {
+  HOME: fixtureHome, USERPROFILE: fixtureHome,
+  APPDATA: join(fixtureHome, 'roaming'), LOCALAPPDATA: join(fixtureHome, 'local'),
+  XDG_CONFIG_HOME: join(fixtureHome, '.config'), XDG_DATA_HOME: join(fixtureHome, '.local', 'share'),
+  XDG_STATE_HOME: join(fixtureHome, '.local', 'state'), XDG_CACHE_HOME: join(fixtureHome, '.cache'),
+  XDG_RUNTIME_DIR: join(root, 'runtime'),
+  TMP: temp, TEMP: temp, TMPDIR: temp,
+  ZDOTDIR: fixtureHome,
+};
+const env = { ...systemEnv, ...isolatedEnv };
 const journal = join(root, 'events.jsonl');
 const ackFile = join(root, 'shell.tsv');
 const fixture = ['left', 'right', 'anchor'];
 const paths = Object.fromEntries(fixture.map(side => [side, join(root, side)]));
+// GUI and its daemon use the explicit flag. The standalone CLI uses its
+// private environment; never declare this override in the control terminal.
 const cliEnv = { ...env, LYREL_CONFIG_DIR: configDir };
+await Promise.all([...new Set(Object.values(isolatedEnv))]
+  .map(path => mkdir(path, { recursive: true, mode: 0o700 })));
 await Promise.all([configDir, ...Object.values(paths)].map(path => mkdir(path)));
 await writeFile(ackFile, '');
 console.log(`隔离目录 ${root}`);
@@ -63,11 +110,15 @@ console.log(`隔离目录 ${root}`);
 const config = {
   gui_language: 'en', restore_session: true, install_cli_on_path: false,
   check_for_updates: false, show_tray_icon: false,
+  agent_launch: {},
   shell: {
     program: bash,
-    args: ['--noprofile', '--rcfile', join(configDir, 'fixture.bash').replaceAll('\\', '/'), '-i'],
+    args: ['--noprofile', '--rcfile', join(configDir, 'fixture.bash').replaceAll('\\', '/'), '-pi'],
   },
   env: {
+    // On Windows the daemon refreshes pane environment variables from HKLM /
+    // HKCU. Config overrides win over those values as well as inherited ones.
+    ...isolatedEnv,
     INPUTRC: join(configDir, 'inputrc').replaceAll('\\', '/'),
     LYREL_RESTORE434_ACK: ackFile.replaceAll('\\', '/'),
   },
@@ -373,6 +424,7 @@ try {
     node: process.version, app, cli, bash, appSha256: await digest(app), cliSha256: await digest(cli),
     platform: process.platform, release: release(), architecture: arch(), cpus: cpus().length,
     cpu: cpus()[0]?.model, memoryBytes: totalmem(), argv: process.argv.slice(2),
+    isolation: { configDir, fixtureHome, temp, loginShell },
   });
   let before = await initialSetup();
   for (let i = 1; i <= cycles; i++) {

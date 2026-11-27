@@ -4,7 +4,7 @@
 
 ## 前提与运行
 
-- 使用能访问原生桌面的专用测试账户，且该账户没有已有的 Lyrel 安装会话或代理配置。`--disposable-account` 是对此前提的确认。Release 启动会按用户账户刷新过期的 Lyrel 代理钩子，`--config-dir` 不隔离该行为。测试账户使用自己的环境，也不要从工作账户继承代理的配置路径。Windows 的 AUMID 是进程级标记。使用 Cargo 构建目录中的可执行文件以避免便携版的 Start Menu 快捷方式接线。
+- 可在已有 Lyrel 安装的原生桌面账户运行。脚本只向 GUI、daemon、CLI 和 Bash 夹具传入本轮配置与环境。每轮新建 home、AppData、XDG 和临时目录，并清除继承的代理路径、Lyrel 端点和 Shell 启动环境。使用当前受测源码的原始 Cargo Release 产物。两个受测版本都须具备下文的启动隔离边界。
 - 为每次比较独占采样设备和显示器。Baseline 和 candidate 都用相同 Release 构建参数、同一终端网格、相同字体/DPI/刷新率和同一自动化输入方法。每次运行使用独立 build 和新的配置目录，交替运行 baseline/candidate。暂停其他编译、测试和 GPU 工作。
 - 使用 Node.js 22 或更新版。Windows 需要可用的交互式托盘、原生 Git for Windows `bash.exe`（使用实际 `usr/bin/bash.exe`，非 WSL）和已按开发规范准备及暂存的 ConPTY 资产。macOS 使用 `/bin/bash` 及实际可用的托盘。
 
@@ -13,13 +13,13 @@
 ```powershell
 pwsh scripts/cargo-windows.ps1 build --release --locked -p lyrel -p lyrel-cli
 node scripts/bench/desktop-restore-434.mjs --app target/release/lyrel-app.exe --cli target/release/lyrel.exe `
-  --bash 'C:/Program Files/Git/usr/bin/bash.exe' --revision '<commit>' --disposable-account --cycles 1
+  --bash 'C:/Program Files/Git/usr/bin/bash.exe' --revision '<commit>' --cycles 1
 ```
 
 ```sh
 cargo build --release --locked -p lyrel -p lyrel-cli
 node scripts/bench/desktop-restore-434.mjs --app target/release/lyrel-app --cli target/release/lyrel \
-  --revision '<commit>' --disposable-account --cycles 1
+  --revision '<commit>' --cycles 1
 ```
 
 窗口启动后按控制终端提示操作。使用本次启动的窗口和该窗口自带的关闭按钮。macOS 也可以用 `⌘⇧W`。每次启动、重附着或唤醒后，直接向恢复时的焦点键入一次 `b434 TOKEN` 并按 Enter。先点窗格会绕过焦点验证。左、右和备用窗格的标记分别由对应 Shell 打印。检查画面时可滚动访问旧标记，检查后回到实时提示符。保留脚本输出目录和每次画面记录。
@@ -31,7 +31,14 @@ node scripts/bench/desktop-restore-434.mjs --app target/release/lyrel-app --cli 
 | `wake` | `F8` 触发产品的 `HibernateTab`，切到 `Anchor434`，旧左右 Shell 停止，布局与旧 ID 保留为休眠记录。选择 `Restore434` 唤醒，恢复左右窗格及屏幕，两个 Shell 重新创建，备用窗格保持原会话。这个动作只针对应用内标签页。 |
 | `reattach` | 托盘保留图形进程。关闭窗口后验证工作区失去附着且 Shell 保留。路径为空的启动将请求转交同一 GUI PID，恢复原 pane ID、Shell PID 和标记。当前平台缺少可用托盘时该阶段缺前提。 |
 
-脚本记录 `events.jsonl`（启动、工作区树、daemon 和 Shell PID、各阶段的稳态检查点和错误）、`shell.tsv`（实际 Shell 收到的 token、pane、workspace、cwd）、每阶段的 CLI 回放和 `gui.log`。标记恰好在受测窗格出现一次，其他窗格的 CLI 回放不含本次回执。窗口画面另留证。结束时回收脚本启动的 GUI 进程和本次专用 daemon，保留证据目录。若需手动收尾，先确认目录和 PID 属于当前样本，再给测试 CLI 的子进程设置该目录的 `LYREL_CONFIG_DIR` 并执行 `server stop`。产品规则见 [会话恢复、休眠与关闭窗口](../../docs/window/tabs-and-splits.mdx#会话恢复休眠与关闭窗口)。
+脚本记录 `events.jsonl`（启动、工作区树、daemon 和 Shell PID、各阶段的稳态检查点和错误）、`shell.tsv`（实际 Shell 收到的 token、pane、workspace、cwd）、每阶段的 CLI 回放和 `gui.log`。标记恰好在受测窗格出现一次，其他窗格的 CLI 回放不含本次回执。窗口画面另留证。结束时回收脚本启动的 GUI 进程和本次专用 daemon，保留证据目录。若需手动收尾，先确认目录和 PID 属于当前样本。用本轮测试 CLI 创建子进程，在其环境中清除继承的 `LYREL_*`，将 `LYREL_CONFIG_DIR` 设为本轮的 `config` 目录后执行 `server stop`。产品规则见 [会话恢复、休眠与关闭窗口](../../docs/window/tabs-and-splits.mdx#会话恢复休眠与关闭窗口)。
+
+## 启动隔离边界
+
+- GUI 通过 `--config-dir` 启动和派生 daemon，CLI 通过子进程的 `LYREL_CONFIG_DIR` 定位本轮实例。实例目录持有 IPC、锁、布局、历史、日志和更新状态。旧机器树的迁移也只会看到本轮的 `HOME`／`XDG_DATA_HOME` 或 `LOCALAPPDATA`。见 [`spawn_detached`](../../crates/lyrel-protocol/src/daemon/spawn.rs#L1340) 和 [`adopt_legacy_data_dir`](../../crates/lyrel-protocol/src/core/machine/paths.rs#L85)。
+- Release 保留启动时的 hook 检查。它只刷新已发现的过期 hook。空的 `agent_launch` 与隔离的 `HOME`／`USERPROFILE`、`LOCALAPPDATA`、`XDG_CONFIG_HOME` 使 Pi、OMP、Kimi、Hermes、OpenCode 和 Antigravity 只探查新建目录。Windows 重新读取注册表中的 pane 环境时，本轮配置中的隔离目录优先。真实 Bash 使用夹具的 rc 与 Readline 配置，`-p` 阻止导入环境中的 Shell 函数和启动脚本。见 [`refresh_hooks_at_launch`](../../crates/lyrel-protocol/src/core/agent_hooks.rs#L824)、[`agent_home`](../../crates/lyrel-protocol/src/core/agent_hooks/launch_scope.rs#L76) 和 [`merge_environment`](../../crates/lyrel-core/src/daemon/windows_env.rs#L85)。
+- Windows 的 AUMID 是进程级标记。原始 Cargo 产物走跳过 Start Menu 快捷方式写入的分支。Explorer 菜单标签只允许真实 Windows Roaming AppData 下的默认实例写入，独立的 `--config-dir` 由此跳过 `HKCU` 写入。CLI 安装和更新检查在配置中禁用。更新启动清理仍会运行。脚本拒绝安装标记和 `.app` 内的产物，并将 Windows 交互用户进程的临时目录指向本轮目录。见 [`decide_with`](../../crates/lyrel-terminal/src/aumid.rs#L167)、[`refresh_labels`](../../src/core/explorer_context_menu.rs#L362) 和 [`stage_roots`](../../src/core/update.rs#L1052)。
+- macOS GUI 会在可见窗口前探测账户数据库中的登录 Shell 来补充 `PATH`。脚本只接受系统 `/bin/zsh` 或 `/bin/bash`，并为子进程设置隔离的 `HOME` 和 `ZDOTDIR`。系统级启动脚本仍会运行，包括 zsh 的 `/etc/zshenv` 或 Bash 的 `/etc/profile`。如有自定义脚本，请先核对其写入目标。若它会写入实际用户配置或无法核实，请在独立的原生 macOS 环境运行。见 [`enrich_path_from_login_shell`](../../src/lib.rs#L511) 和 [`login_shell`](../../crates/lyrel-protocol/src/core/shells.rs#L242)。
 
 ## 采样与判读
 
