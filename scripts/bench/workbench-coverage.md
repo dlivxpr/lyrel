@@ -131,6 +131,8 @@ Windows 候选 Release 使用同一测量机与 GUI 文件摘要，固定 `Q27G4
 
 六轮离线复核中，377 个未匹配样本里有 310 个仅有一个候选呈现，但其时间戳超出半个刷新周期的容差。各轮此类样本的 WGC 时间戳比候选呈现晚约 8.30–8.31 ms（各轮中位数）。其余 67 个样本有多个候选。已匹配样本的时间戳差值中位数为 −0.03 至 −0.02 ms。WGC 帧接收时间也可早于 `SystemRelativeTime`。后续采样需要能把正确内容与实际呈现关联的独立证据。复核记录见 `windows-430/paired-displays-xlF1QO/timing-audit.json`。
 
+另用 DXGI Desktop Duplication 读取隔离前台窗格的字形区域，将标记与同一帧的 [`LastPresentTime`](https://learn.microsoft.com/windows/win32/api/dxgi1_2/ns-dxgi1_2-dxgi_outdupl_frame_info) 记录在一起。基线 `cb897016` 和候选 `0daaff48` 各运行一轮空闲和可见输出。每轮从隔离 CLI 注入 12 个单字符，48 个标记均在 DXGI 帧和 PTY 回放中各出现一次。所有标记帧的 `AccumulatedFrames` 均为 1。两轮可见输出均通过 `plaintext-check`，各保留 600 批、9,600 行。首轮 `SendInput` 对照发送 12 个虚拟键，PTY 回显为零。新夹具的键盘布局读取为 `0804`，英语直输对照未运行。本组证据覆盖桌面更新时刻及画面识别，前台按键到该画面的时延仍待采集。探针、帧时间戳和回执摘要见 `windows-430-dxgi-phQIJG/manifest.json`。
+
 Windows 候选版 #431 的单轮正确性回放以每秒 400 行运行同一夹具。滚轮上移后可见 `PLAIN 0253` 等历史行。搜索 `PLAIN 0200` 时显示 `1/1`，该行编号被高亮。改为 `LYREL431_NO_MATCH` 时显示 `0/0`。搜索在日志第 58 批时已完成，最终 CLI 回放通过全部 9,600 行顺序及内容校验。输出结束后用三击选中 `PLAIN 0200`，经 `Ctrl+Shift+C` 复制的内容为该行 82 字节正文加一个 LF，共 83 字节。
 
 另在生产期间三击选中 `PLAIN 0200` 并复制，剪贴板精确匹配 83 字节预期内容，生产者从第 42 批推进至第 54 批。前一次回放的点击坐标选中了相邻的 `PLAIN 0199`，截图和剪贴板一致。成功回放的原始 CLI 捕获通过了 9,600 行、806,400 字节和唯一 `PLAIN_DONE` 的校验。`capture --plain` 的首批 16 行均为原文前 79 个字符加最后一个字符，其余行精确匹配。原始回放含关闭自动换行的 `CSI ?7l`，截断形态符合新窗格的 80 列初始尺寸。本轮未记录 resize 和显示时间戳。
@@ -474,7 +476,7 @@ Windows 候选版 #444 从文件树打开四象限 PNG，界面显示其尺寸 1
 
 | 尚缺前提 | 待完成的运行 |
 |---|---|
-| Windows 显示事件覆盖率与重复采样。 | #430 已在空闲、可见和隐藏输出各取得一对基线／候选，合计唯一匹配 103／480。待提高匹配覆盖率并重复各场景，另采集 [#431](https://github.com/dlivxpr/lyrel/issues/431) 滚动、搜索和 [#432](https://github.com/dlivxpr/lyrel/issues/432) 切换至目标画面的显示时延。 |
+| Windows 显示事件覆盖率与重复采样。 | #430 的 PresentMon 对照唯一匹配 103／480 个按键。DXGI 对照已逐个关联 48 个 CLI 注入标记与桌面更新。待在英语直输下采集输入时间，同跑显示事件并重复各场景，另采集 [#431](https://github.com/dlivxpr/lyrel/issues/431) 滚动、搜索和 [#432](https://github.com/dlivxpr/lyrel/issues/432) 切换至目标画面的显示时延。 |
 | 预留的原生 macOS 桌面和可关联到输入的显示采集。 | 按独立的 [macOS 验收工单 #451](https://github.com/dlivxpr/lyrel/issues/451) 运行各条适用路径，并把证据链接回 #449。 |
 | 关联原生桌面呈现与跨物理主机采样。 | #433 已完成回环协议层交替采样、三对进程资源采样和候选双路由实窗验证。#437 已有 Linux 容器和 Windows 客户端的回环对照。两项仍缺原生显示时延及独立端点的对照。 |
 
