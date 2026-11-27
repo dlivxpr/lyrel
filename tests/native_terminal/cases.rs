@@ -621,5 +621,13 @@ pub(super) fn native_cases() -> Vec<NativeCase> {
             "terminal::view::gpui_tests::reading_copy_links_theme_and_ime_use_the_painted_semantic_rows",
             reading_copy_links_theme_and_ime_use_the_painted_semantic_rows,
         ),
+        NativeCase::new(
+            "terminal::view::native_terminal_tests::plaintext_echo_and_hidden_return",
+            super::plaintext::plaintext_echo_and_hidden_return,
+        ),
+        NativeCase::new(
+            "terminal::view::native_terminal_tests::plaintext_echo_while_visible",
+            super::plaintext::plaintext_echo_while_visible,
+        ),
     ]
 }

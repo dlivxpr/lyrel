@@ -17,6 +17,7 @@ pub mod hex;
 pub mod kitty_media;
 pub mod mouse_pty;
 pub mod native_ssh;
+pub mod plaintext_pty;
 pub mod pty;
 pub mod synchronized_capture;
 pub mod theme_pty;

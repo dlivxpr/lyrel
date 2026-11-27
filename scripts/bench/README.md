@@ -4,9 +4,9 @@
 用于对比 lyrel 与 Alacritty、Ghostty 和 Kitty 的可复现吞吐量、FPS 和内存基准测试，遵循
 [moktavizen/terminal-benchmark](https://github.com/moktavizen/terminal-benchmark)
 的方法。
-仅支持 macOS（驱动脚本使用 `/Applications` 路径、BSD `ps` 和 `pkill`）。
+吞吐量、帧率和内存的跨终端对比脚本使用 macOS 的 `/Applications` 路径、BSD `ps` 和 `pkill`。
 
-跨平台工作台性能实验的执行路径、逐进程采样和工单索引见[工作台性能覆盖表](workbench-coverage.md)。
+Lyrel 工作台的测量范围、进程计数器与工单见[性能覆盖表](workbench-coverage.md)。单项入口包括 [Windows 回显探针](terminal-echo.md)、[桌面会话恢复](desktop-restore-434.md)、[工作区文件搜索](workspace-search.md)和[结构树与表格编辑](structured-documents.md)。
 
 <a id="what-it-measures"></a>
 ## 测量内容
