@@ -136,6 +136,8 @@ Windows 候选版 #432 的空闲标签切换回放在两个已完成输出的窗
 
 修复版 Windows Release GUI 的 SHA-256 为 `6f9c0f1d99c1b40aa2a31dc52bb1809cc589aab7cafc892a409c31cdc0ced29a`，基于 `f751b51d` 加入 #432 修复。复用 [纯文本夹具](terminal-echo.md) 在两个独立工作区启动各自的前台进程。通过工作区切换器交替选择 B、A，每次按 Enter 后立即按下 `abcdabcd` 序列中的下一键。空闲和 A 以每秒 400 行输出时各运行一轮。两轮均为 8/8 正确，A 只收到 `bdbd`，B 只收到 `acac`。忙时回放覆盖输出的第 224 至 1,696 行，`plaintext-check` 验证最终 9,600 行完整有序。窗口截图显示返回 A 后的实时编号行。另运行一次 `Enter`、`a`、`Escape`，两个窗格均未收到 `a`，恢复焦点后 B 收到对照键 `b`。
 
+同机原始基线 `cb897016` 补跑同样的 8 次忙时切换。首键全部缺失，两个窗格均无回执，左侧 9,600 行仍通过校验。修复版另在工作区 B 创建两个标签，并从切换器右栏选择非默认标签。首键 `a` 只到了该标签的窗格，离开前的窗格和 B 的默认标签均没有回显。对应回执为 `workspace-handoff-baseline-busy.json` 和 `workspace-explicit-tab.json`。
+
 原始证据为 `windows-432/busy-split/workspace-handoff-fixed-*`。Enter 到探针键的驱动调用耗时为空闲 9.18–10.19 ms、忙时 9.40–10.43 ms。首次正确呈现、成对 p95、资源对照及 macOS 实窗交接仍待验收。
 
 #433 在 Windows x64 经回环 SSH 连接 Linux 容器，两种路由各预热一次、测量两次。原生 SSH 的 `Ctrl-C` 到远端回执为 1.3943–1.3948 ms，server 工作区为 1.4846–1.6087 ms。两条路由均收到 `SIGINT` 回执和退出码 130，恢复后校验了 3,072 行并向原 shell 成功输入命令。原生路由分离后重新附着耗时 14.83 ms，server 工作区重启本机 router 后恢复到可用 shell 耗时 789.94 ms，各测一次。观察边界是 pane 协议，跨物理主机和桌面显示延迟待测。
