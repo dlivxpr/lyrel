@@ -189,6 +189,8 @@ Windows 上用 #438 的 5,000 文件夹具回放全局文件搜索。基线查�
 
 在 50,000 文件的 Windows 候选工作区，全局搜索输入 `文` 得到 `f文-a.txt`、`f文-b.txt`。选择第二项后，正文为 `LYREL_SEARCH_PATH=f文-b.txt`。消息框从 `@frost` 快速退格、输入到 `@flarex` 再退格，记录的相邻按键间隔约 5 ms。最终菜单只显示 `flare-a.txt` 和 `flare-b.txt`，首项高亮。按 `Down`、`Up`、`Down`、`Enter` 并输入 `END` 得到 `@flare-b.txt END`，窗格回放中误输入标记出现零次。
 
+同一 50,000 路径夹具上，Windows 候选版的文件页输入 `flareq` 后显示 `No results`，输入 `file_04242.txt` 后只有一个候选。按 Enter 打开的文档正文为 `LYREL_SEARCH_PATH=file_04242.txt`。在停靠消息框，`@flare` 显示两项，追加 `q` 后菜单消失。输入 `@file_04242.txt` 时菜单只显示该文件，按 Enter 后输入 `END` 得到 `@file_04242.txt END`。PTY 回放包含 `LYREL_SEARCH_READY`，未出现 `LYREL_SEARCH_UNEXPECTED_INPUT`。本轮只校验可见结果与选择行为。
+
 Windows 候选 Release 实窗按 [#441 长文档回放](README.md#441-长文档编辑回放windowsmacos) 编辑两个 1 MiB 文件。在 `typing.md` 连续输入 100 个 `x`，保存、一次撤销、一次重做后，文件分别与 `typing-100.bin`、`original.bin`、`typing-100.bin` 逐字节一致。在 `replace.md` 对 100 行分别替换首字符，各撤销和重做 100 次。两个方向在第 50 次和第 100 次的保存结果均与对应修订逐字节一致，保留 UTF-8 BOM、混合行尾和文件末尾字节。
 
 用系统中文输入法把首行选中的 `🎉` 替换成 `你好`，保存文件与 `ime-commit.bin` 一致。一次撤销后重新选中 `🎉`，输入拼音并按 Escape 取消，保存结果与 `replace-100.bin` 一致。一次重做恢复了 `ime-commit.bin`。回放中的行列指示在按键处理后更新，批量撤销或重做要等到预期行列再保存。

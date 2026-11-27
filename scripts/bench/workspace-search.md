@@ -42,9 +42,9 @@ node scripts/bench/workspace-search.mjs prepare "$search_root" 5000 && \
 | `f` | `fable.txt`、`fritz.txt`、`f文-a.txt`、`f文-b.txt`、`flare-a.txt`、`flare-b.txt`、`frost-a.txt`、`frost-b.txt`。`@` 菜单到此结束。文件页继续按编号显示 `file_00000.txt` 至 `file_00191.txt`，共 200 行。默认高亮 `fable.txt`，按 `Down` 后高亮 `fritz.txt`。 | `fritz.txt` |
 | 逐键输入 `file_04242.txt` | 唯一行且默认高亮 `file_04242.txt`。 | `file_04242.txt` |
 | 一次 Unicode 文本提交 `文` | `f文-a.txt`、`f文-b.txt`。默认高亮第一行，按 `Down` 后高亮第二行。 | `f文-b.txt` |
-| 快速打字与退格 | 先使 `frost` 显示 `frost-a.txt`、`frost-b.txt`，按 `Down` 选第二行。连续发四次 `Backspace`、`l`、`a`、`r`、`e`、`x`、`Backspace`。目标键间距为 8 ms，记录实际间距。最终 `flare` 只显示 `flare-a.txt`、`flare-b.txt`，恢复首行高亮。按 `Down`、`Up`、`Down`，高亮须依次为第二、第一、第二行。 | `flare-b.txt` |
+| 快速打字与退格 | 先使 `frost` 显示 `frost-a.txt`、`frost-b.txt`，按 `Down` 选第二行。连续发四次 `Backspace`、`l`、`a`、`r`、`e`、`q`、`Backspace`。目标键间距为 8 ms，记录实际间距。最终 `flare` 只显示 `flare-a.txt`、`flare-b.txt`，恢复首行高亮。按 `Down`、`Up`、`Down`，高亮须依次为第二、第一、第二行。 | `flare-b.txt` |
 
-正确性轮逐项按 `Enter`，并滚动核对文件页宽查询的全序。快速回放结束后继续观察至少 1 秒。最终查询显示后不得出现对它无效的可选行，正确行也不得被旧查询覆盖。再重复快速回放，仅省略最后一个退格。最终 `flarex` 应持续显示无结果（文件页）或关闭候选菜单（输入框）。记录选择和路径，保留错误帧。跨越真实索引重走时，观察重走结果落地前后的查询和行序。
+正确性轮逐项按 `Enter`，并滚动核对文件页宽查询的全序。快速回放结束后继续观察至少 1 秒。最终查询显示后不得出现对它无效的可选行，正确行也不得被旧查询覆盖。再重复快速回放，仅省略最后一个退格。最终 `flareq` 应持续显示无结果（文件页）或关闭候选菜单（输入框）。`flarex` 会模糊匹配 `.txt` 中的 `x`。记录选择和路径，保留错误帧。跨越真实索引重走时，观察重走结果落地前后的查询和行序。
 
 ## 采样和已有证据
 
