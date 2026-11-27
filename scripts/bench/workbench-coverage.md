@@ -98,4 +98,10 @@ Windows 上用 #438 的 5,000 文件夹具回放全局文件搜索。基线查�
 
 在 50,000 文件的 Windows 候选工作区，全局搜索输入 `文` 得到 `f文-a.txt`、`f文-b.txt`。选择第二项后，正文为 `LYREL_SEARCH_PATH=f文-b.txt`。消息框从 `@frost` 快速退格、输入到 `@flarex` 再退格，记录的相邻按键间隔约 5 ms。最终菜单只显示 `flare-a.txt` 和 `flare-b.txt`，首项高亮。按 `Down`、`Up`、`Down`、`Enter` 并输入 `END` 得到 `@flare-b.txt END`，窗格回放中误输入标记出现零次。
 
+Windows 候选 Release 实窗按 [#441 长文档回放](README.md#441-长文档编辑回放windowsmacos) 编辑两个 1 MiB 文件。在 `typing.md` 连续输入 100 个 `x`，保存、一次撤销、一次重做后，文件分别与 `typing-100.bin`、`original.bin`、`typing-100.bin` 逐字节一致。在 `replace.md` 对 100 行分别替换首字符，各撤销和重做 100 次。两个方向在第 50 次和第 100 次的保存结果均与对应修订逐字节一致，保留 UTF-8 BOM、混合行尾和文件末尾字节。
+
+用系统中文输入法把首行选中的 `🎉` 替换成 `你好`，保存文件与 `ime-commit.bin` 一致。一次撤销后重新选中 `🎉`，输入拼音并按 Escape 取消，保存结果与 `replace-100.bin` 一致。一次重做恢复了 `ime-commit.bin`。回放中的行列指示在按键处理后更新，批量撤销或重做要等到预期行列再保存。
+
+同一轮在两个文档仍打开时，GUI 私有内存为 296.11 MiB。关闭两份文档，分别在约 2 秒、10 秒后取样，GUI 为 113.91、113.70 MiB，daemon 三次均为 15.20 MiB。此轮同时保留了两份文档及其历史。单事务成本、两版峰值和多轮关闭后的内存仍需对照。
+
 #448 的 Windows 便携包预检使用已发布的 `v0.5.0`（`ee9a10c5`）和 `v0.5.1`（`e03f1fa4`）。两个 ZIP 的 SHA-256 分别为 `4919445f94f180fb38b3c24d64f98db4c50c33dfafa6d59b06e51619e50624bc` 和 `af51c02b51813d76845b7fd942fa44b76ddcdf51f7d868bdc4bbc0b9dcf6691a`，均与各自的 `checksums.txt` 及 GitHub 资产摘要一致。按[便携更新步骤](../../docs/reference/updates.mdx#用本地资产复测安装更新和恢复)运行旧包的 `verify-portable`，一次成功预检用时 581 ms 并写出 `portable-payload`。旧包与暂存包的 CLI 分别报告 `0.5.0` 和 `0.5.1`。仅将校验文件中新包的摘要改为 64 个零后，预检退出码为 1，另行创建的暂存目录为空。安装替换、重开后会话和 shell 输入另行验收。
