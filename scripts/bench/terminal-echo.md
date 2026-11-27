@@ -89,13 +89,16 @@ $pm = Read-Host 'PresentMon 2.6.0 的绝对路径'
 Get-FileHash -Algorithm SHA256 $pm
 ```
 
-在第二个采样终端启动仅限本轮 PID 的 PresentMon 并保留退出码。若权限拒绝，记录错误并按下段省略 `--presentmon`，仍可采集合成窗格时延。
+在有 ETW 采集权限的第二个采样终端启动 PresentMon，仅采集本轮 PID。先确认夹具窗格使用英语直输布局（例如 English (United States)），并在采样开始前确认 UAC 已关闭、焦点回到同一个 HWND。若权限拒绝，记录错误并在分析命令中省略 `--presentmon`。
 
 ```powershell
 & $pm --process_id $app.Id --v2_metrics --qpc_time_ms --write_display_metadata `
   --session_name "lyrel430-$($app.Id)" --timed 45 --terminate_after_timed `
-  --output_file "$dir/evidence/presentmon.csv" *> "$dir/evidence/presentmon.log"
+  --no_console_stats --output_stdout > "$dir/evidence/presentmon.csv" 2> "$dir/evidence/presentmon.log"
+$LASTEXITCODE | Set-Content "$dir/evidence/presentmon.exit"
 ```
+
+确认 CSV 有本轮 PID 的数据行。PresentMon 退出码 0 仍可能只有空文件。若截图和 PTY 显示按键停留在 IME 预编辑中，保留失败样本并用新窗格复试。
 
 随后运行下面的探针，在四秒内把焦点放到本轮前台终端并停止手工输入。示例 80 次、间隔 250 ms，前台采样位于固定负载约 24 秒内。用表格中的最后一个参数选择场景。程序逐次检查前台 HWND 与 PID，捕获几何变化或焦点丢失时本轮失败。`inputs.csv` 的时间戳在 Windows `SendInput` 调用前读取 QPC，`frames.csv` 直接使用每个 WGC 框的 `SystemRelativeTime`。`>序号>键>` 的八个字形含真实回显字母，序号由四位 `a..d` 编码。探针比较同一窗口校准像素，仅保存字符身份与时间戳。校准 PNG 仅含合成 fixture 数据。
 
