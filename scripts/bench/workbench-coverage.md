@@ -359,6 +359,8 @@ Windows 候选版 #444 从文件树打开四象限 PNG，界面显示其尺寸 1
 
 在 Windows Release `f28ccfd4` 的隔离 WebView2 窗口中，HTML 预览显示 `LYREL444-PREVIEW-FOCUS`，AX 同时报告原终端输入面仍持有焦点。未点击终端，从窗口逐键发送 `abcdabcd`，原窗格按序收到全部八键，另一工作区未收到任何键。截图和回执存于 `windows-444-focus-6SLCHP/`。此前丢失首字符的是整串输入，原因仍待定位。
 
+同版在 WebView2 仍显示正文时关闭收件箱，紧跟整串 `echo LYREL444_WHOLE_COMMAND`。Bash 捕获到 `cho`，实窗同时显示预览正文和命令错误。随后在另一个隔离实例上验证了五条整串命令，分别在稳态、关闭收件箱后立即发送及 AX 确认焦点后发送，全部获得一次完整回执。截图、失败和对照回执存于 `windows-444-whole-command-DPVqLS/` 与 `windows-444-shell-focus-UCBnNi/`。目前缺少与失败样本同步的窗口收键记录。
+
 #445 在 Docker Linux Release 上运行 `cli_e2e agents_report_continuous_state_age -- --exact`，通过真实 PTY 上的请求、状态年龄和轮次身份断言。在 Windows 候选版中，从窗格 2 写入固定 OSC 777 消息，核对应用内收件箱正文与目标。点击来源按钮后，下一条命令仅在窗格 2 回显。系统通知中心激活、会话发现全路径及状态到显示和回跳到输入延迟仍待测。
 
 #446 的 Docker Linux Release `insights_conformance` 通过 8 项测试，覆盖本机及真实 stdio Host 的 skills、omp／Kimi 用量统计和 GitHub remote 识别。Windows 候选版的技能页列出本机用户共享及所选工作区项目共享的两个同名安装，打开项目来源时显示预期正文。两份 `SKILL.md` 的字节在浏览前后相同。隔离的统计页从一份合成 omp 会话读取已知用量 10,000 Token、会话数 1。在源文件追加一条 2,000 Token 的用量事件并按「刷新历史」后，显示 12,000 Token、会话数 1，读取前后源文件字节一致。全部来源视图显示数据不完整。主机指标、GitHub 界面及刷新时延和资源归因仍待测。
