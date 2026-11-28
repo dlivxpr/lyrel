@@ -959,6 +959,12 @@ Windows 候选 Release `0daaff48` 重新连接 #443 的 Docker Linux 工作区�
 
 空闲区间的 GUI 最忙 GPU 引擎样本均为 0%，daemon 无对应实例。基线与候选各进程在字号操作至 PTY 回执期间分别只有三个和一个点。单次回显读取包含窗口驱动与 CLI，耗时为基线 372.74 ms、候选 66.81 ms。截图、PTY 和 12 份文件摘要见 `windows-447-font-wcnJRG/manifest.json`。字号切换的首个正确帧与完整资源曲线仍待测。
 
+两版分别在隔离设置窗中把「聚焦终端标签侧栏」依次录制为 `Ctrl+Shift+F9`、`Ctrl+Shift+F10`、`Ctrl+Shift+F9`。六次写入均保存预期的 `secondary-shift-*` 列表，按键至读到配置的耗时为基线 744.91–748.00 ms、候选 744.12–750.41 ms。两版关闭设置后，新快捷键均将焦点交给当前标签。按 Escape 返回原窗格后，下一次 `a` 只回显一次。截图、窗口焦点和回放见 `windows-447-paired-ZgQfPK/shortcut-manifest.json`。
+
+同一 Windows 对照机上，两版在隔离 Git Bash 窗格读到 `LYREL_SHELL_INTEGRATION=1`，`cd src` 后 CLI 确认同一个 pane 的工作目录已更新。Ctrl-单击相对链接 `./fixture.txt:3:1` 后，两版均打开夹具并定位到第 3 行第 1 列。点击至 AX 确认用时各约 211 ms，每版一次。基线曾在等待 shell 提示符完成前尝试点击，未观察到打开文件。截图、回放和超时边界见 `windows-447-integration-egb4DW/shell-link-manifest.json`。
+
+另在两版各运行一次 `Ctrl+Shift+V` 粘贴合成 shell 命令。按 Enter 前的 PTY 回放均无结果行，按一次 Enter 后原 pane 中各出现一条 `LYREL447_PASTE_RECEIPT` 结果。Enter 到 CLI 捕获结果为基线 496.93 ms、候选 187.05 ms，包含启动 CLI 和读取回放。证据见 `windows-447-integration-egb4DW/clipboard-manifest.json`。上述入口的键到呈现、重复轮次资源和系统通知中心的原生激活仍待采样。
+
 #448 的 Windows 便携包预检使用已发布的 `v0.5.0`（`ee9a10c5`）和 `v0.5.1`（`e03f1fa4`）。两个 ZIP 的 SHA-256 分别为 `4919445f94f180fb38b3c24d64f98db4c50c33dfafa6d59b06e51619e50624bc` 和 `af51c02b51813d76845b7fd942fa44b76ddcdf51f7d868bdc4bbc0b9dcf6691a`，均与各自的 `checksums.txt` 及 GitHub 资产摘要一致。按[便携更新步骤](../../docs/reference/updates.mdx#用本地资产复测安装更新和恢复)运行旧包的 `verify-portable`，一次成功预检用时 581 ms 并写出 `portable-payload`。旧包与暂存包的 CLI 分别报告 `0.5.0` 和 `0.5.1`。仅将校验文件中新包的摘要改为 64 个零后，预检退出码为 1，另行创建的暂存目录为空。安装替换、重开后会话和 shell 输入另行验收。
 
 随后分别从两份全新的 `0.5.0` 便携安装运行 `install-portable`，每份使用独立配置、daemon 和 `cmd.exe` 工作区。两份旧版窗格均先执行命令输出独立的一行 `LYREL448_PREOK`。成功样本解包旧版用时 776 ms，新包预检用时 557 ms。从启动安装 helper 到其退出为 2,321 ms，退出码为 0，outcome 为 `ok: true`。自动重开的 `0.5.1` 恢复了同一工作区、标签、目录和历史，重建了 daemon 和 shell。原生窗口输入命令后显示 `LYREL448_NEWOK`，CLI 回放同时含有新旧结果行。
