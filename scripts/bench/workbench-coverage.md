@@ -604,9 +604,21 @@ Windows 候选 Release 的 #439 本地夹具有 515 个跟踪文件和 `main`、
 
 预先启动容器写入进程后，补做三对同路径复测。每轮预热一次，再写入两个唯一文件。每版六个正式样本，Windows QPC 命令至写入回执为基线 1.29–1.66 ms、候选 1.20–1.69 ms，至 AX 发现正确新行为基线 378–536 ms、候选 385–533 ms。容器独立 `fs.watch` 从写入开始至收到事件的样本均不足 0.5 ms。两版 AX 范围重叠，本轮未复现 4.22 秒样本。原样本未测写入回执，应用的 Host 监视、刷新和 AX 轮询也未单独计时。阶段回执和 12 份摘要见 `windows-439-remote-git-iI87Ox/watch-stages-manifest.json`。
 
+另对同一路径采集两对资源样本。每轮包含一次预热写入和两次正式写入。Windows GUI 与本地 daemon 请求每 250 ms 采样，计数窗口包住三次动作，基线窗口为 1.50 秒，候选为 1.49–2.24 秒。Linux server 的 `/proc` 数据在动作组前后各取一次。正式样本的 AX 时延为基线 406–432 ms、候选 406–420 ms。
+
+| 进程指标 | 基线 | 候选 |
+|---|---:|---:|
+| Windows GUI 采样峰值私有内存（MiB） | 123.41–124.94 | 123.34–124.77 |
+| Windows GUI 累计 CPU（ms） | 422–438 | 281–328 |
+| Windows GUI 最忙 GPU 引擎采样（%） | 0–1 | 0–1 |
+| Windows daemon 采样峰值私有内存（MiB） | 7.14–7.16 | 7.17–7.21 |
+| Linux server 两个采样点的较高 RSS（MiB） | 193.36–193.43 | 193.29–193.41 |
+
+两版 Windows daemon 的累计 CPU 增量均为 0 ms，未取得 GPU 引擎实例。Linux server 累计 CPU 增量为 0–10 ms 和 10 ms，时钟为 100 Hz。GUI 的样本窗口长度不同，CPU 结果保留为观察值。第三对的基线在夹具准备阶段失败，候选作为单次样本保留。记录见 `windows-439-remote-git-iI87Ox/watch-resources-manifest.json`。
+
 同一仓库的更改面板在两版均显示两份已修改文件和一份未跟踪文件，与 `git status --short --branch` 一致。点击变更统计至 AX 显示三项的耗时为基线 161 ms、候选 183 ms，各一次。截图核对了 `REMOTE_BEFORE` 至 `REMOTE_AFTER` 的文本差异、`destination` 的移动、`ORIGINAL_REMOTE` 至 `CHANGED_REMOTE` 的值修改。两版打开差异后，原 pane 均返回预期的 shell 回执。首次夹具 JSON 引号丢失，界面回退到行差异。上述结构比较使用逐字节核对过的有效 JSON。操作、回执和 30 份摘要见 `windows-439-remote-git-iI87Ox/manifest.json`。
 
-远端工作树菜单另测三对现有窗格切换。每轮显式激活 `main`，再选 `other-wt / fixture-other`。点击至 AX 显示目标检出的基线／候选三对分别为 116／110、116／124、121／114 ms。六轮都保留原 pane 和工作目录，并通过 CLI 从既有目标 pane 取得唯一 shell 回执。两版耗时范围重叠。试跑还验证了候选创建目标窗格以及基线切回原窗格。两次试跑方向和初始状态不同，分别归档在 `worktree-manifest.json`。三对同路径的回执和 18 份摘要见同目录的 `paired-worktree-manifest.json`。原生输入至呈现、远端各进程资源和文件监视长尾归因仍待验收。
+远端工作树菜单另测三对现有窗格切换。每轮显式激活 `main`，再选 `other-wt / fixture-other`。点击至 AX 显示目标检出的基线／候选三对分别为 116／110、116／124、121／114 ms。六轮都保留原 pane 和工作目录，并通过 CLI 从既有目标 pane 取得唯一 shell 回执。两版耗时范围重叠。试跑还验证了候选创建目标窗格以及基线切回原窗格。两次试跑方向和初始状态不同，分别归档在 `worktree-manifest.json`。三对同路径的回执和 18 份摘要见同目录的 `paired-worktree-manifest.json`。原生输入至呈现、切换与差异工作负载的进程计数和文件监视长尾归因仍待验收。
 
 Windows 候选 Release 实窗按 [#441 长文档回放](README.md#441-长文档编辑回放windowsmacos) 编辑两个 1 MiB 文件。在 `typing.md` 连续输入 100 个 `x`，保存、一次撤销、一次重做后，文件分别与 `typing-100.bin`、`original.bin`、`typing-100.bin` 逐字节一致。在 `replace.md` 对 100 行分别替换首字符，各撤销和重做 100 次。两个方向在第 50 次和第 100 次的保存结果均与对应修订逐字节一致，保留 UTF-8 BOM、混合行尾和文件末尾字节。
 
