@@ -30,6 +30,16 @@ node scripts/bench/workspace-search.mjs prepare "$search_root" 5000 && \
 
 只留一个本地终端窗格，确认 shell 的当前目录就是 `project`。在窗格中执行 `node "<仓库绝对路径>/scripts/bench/workspace-search.mjs" hold`。终端应显示 `LYREL_SEARCH_READY` 及项目绝对路径。独立配置用 `agent_commands` 将该脚本识别为 `hermes`，使用停靠在窗格底部的消息输入框。该前台进程只等待终端输入。Windows 用已启用 Lyrel shell integration 和 PSReadLine 的 PowerShell，保留默认启动参数。macOS 用 zsh 或 Bash。所有操作结束后将焦点还给终端网格，结束前台命令，关闭自有窗口，再用本轮的二进制执行 `--config-dir <本轮配置目录> --stop-daemon`。
 
+### Linux server 工作区
+
+把 `workspace-search.mjs` 放在隔离 Linux Host 上，运行同一个 `prepare` 命令生成夹具。由已连接该 Host 的 Lyrel 打开夹具的远端 `project`，并在对应窗格核对工作目录。用 Bash 启动夹具，把 `argv[0]` 设为 `hermes`，供 Linux 的前台进程检测识别。
+
+```sh
+bash -c 'exec -a hermes node "$1" hold' _ /path/to/workspace-search.mjs
+```
+
+看到 `LYREL_SEARCH_READY` 后执行下文的两个入口回放。远端正文和 PTY 回放都从该 Host 核对。读取 `flareq` 空结果时，Windows AX 树可核对查询和候选列表，`No results` 用窗口截图核对。
+
 ## 两个入口的可见断言
 
 - **全局搜索的「文件」页**。macOS 按 `Cmd+O`。Windows 按 `Ctrl+Shift+P`，搜索「转到文件」（英文 `Go to File`）并按 `Enter` 进入文件页。把鼠标移出结果区。用 `Up`、`Down` 移动高亮，`Enter` 应打开文档。悬停文档页签，提示中的绝对路径必须是 `project` 下该文件，正文必须匹配 `LYREL_SEARCH_PATH=<所选文件名>`。关闭文档并回到同一窗格，再进行下一次打开。
