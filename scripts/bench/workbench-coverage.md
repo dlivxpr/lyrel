@@ -980,11 +980,11 @@ Windows 候选 Release `0daaff48` 重新连接 #443 的 Docker Linux 工作区�
 
 从 GitHub 下载 `v0.5.0` 和 `v0.5.1` 的 Inno 安装包及各自的 `checksums.txt`。两个安装包的实际字节数和 SHA-256 均符合 GitHub 资产元数据，文件摘要也匹配各自校验文件中的同名条目。PE 文件版本分别为 `0.5.0.0` 和 `0.5.1.0`。核验记录见 `windows-448-inno-assets-WtV7ar/manifest.json`。Inno 安装会写入固定的应用注册和开始菜单入口，本机未找到可用的隔离 Windows 环境，安装器未运行。
 
-另从已核验的 `v0.5.0` 便携 ZIP 启动隔离副本。终端回显了 `LYREL448_ONLINE_BEFORE` 后，在「设置 → 关于」点击 `Check now`。界面报 `Could not check for updates: requesting desktop releases: sending the request`，尚未进入下载阶段。以 `curl.exe` 对同一公开发布列表发起请求，退出码为 `0`，HTTP 状态为 `200`。应用错误记录未给出底层原因。截图、执行边界和摘要见 `windows-448-resources-KhgE1F/online-portable-tePuHi/online-discovery-manifest.json`。
+从已核验的 `v0.5.0` 和 `v0.5.1` 便携 ZIP 分别启动隔离副本，在「设置 → 关于」点击 `Check now`。两份结果截图均显示 `invalid peer certificate: UnknownIssuer`，请求在 TLS 证书校验阶段失败。`v0.5.1` 关闭了后台下载，点击后约 93 ms 读到正在检查，约 662 ms 读到错误。独立的 `curl.exe` 直读同一公开发布列表，前一轮返回 HTTP 200，后一轮返回 HTTP 403 且限流额度为零。截图、计时和摘要见 `windows-448-resources-KhgE1F/online-portable-tePuHi/online-discovery-manifest.json` 与 `windows-448-resources-KhgE1F/online-051-0drkN7/online-discovery-manifest.json`。
 
 ## 集成版本处置
 
-本节处置引用的 Windows 配对实窗以 `cb897016` 为基线，以 `0daaff48` 为候选。从 `0daaff48` 到 `ddd66d1e` 的集成分支差异仅涉及本覆盖表及恢复运行说明。Linux、早期诊断及已发行更新包的版本以各自记录为准。
+本节处置引用的 Windows 配对实窗以 `cb897016` 为基线，以 `0daaff48` 为候选。`0daaff48` 之后至 `beb5afb2` 的变更限于本覆盖表及恢复运行说明。Linux、早期诊断及已发行更新包的版本以各自记录为准。
 
 - **CLI 回放（#436）**保留 `ReplayEnd` 协商和旧版回退。同机三对运行显示 Windows 和 Linux 的空闲 `capture` 与 `exec` 完成都快于各自的基线波动范围。忙时捕获范围有重叠。Windows 桌面并发期间 CPU 范围重叠，候选 GUI 私有内存更高，采到的最忙 GPU 引擎利用率更低。
 - **工作区切换（#432）**保留即时输入交接修复。同一忙时回放中，原基线的八次首键均丢失，修复版的八次首键全部精确送达目标窗格。等焦点再输入的 AX 延迟范围有重叠。
@@ -993,7 +993,7 @@ Windows 候选 Release `0daaff48` 重新连接 #443 的 Docker Linux 工作区�
 - **终端与远端（#430、#431、#433–435、#437）**保留现有窗口、字节、像素、协议与资源证据。Windows 隐藏输出在无前台输入时的候选 GUI 和 daemon CPU 较低，持续输入时两版 CPU 范围重叠。SSH 下载回显结果受轮次影响，交叉版本对照尚未归因。
 - **结构化文档（#443）**两版的 JSONC 和 CSV 均验证了最终修订和保存字节。Windows 打开和关闭时的 GUI 内存与 CPU 范围有重叠，CSV 打开时序在不同运行条件下方向相反。SQLite 本机每版三轮及 Windows 到 Docker Linux 的一次回放均验证了旧视图分页与重开后的新版本。编辑峰值、实际呈现与远程配对资源仍待验收。
 - **预览（#444）**HTML 三对首个正确桌面更新的耗时范围重叠。draw.io 每版三轮的打开耗时范围重叠，第二、三轮关闭约 10 秒的 GUI 私有内存低于各自第一轮。HTML 和 draw.io 就绪后的短时采样均归属到了 WebView2 子进程。实际呈现间隔、打开阶段逐进程峰值和切换期间的候选输入仍待验收。
-- **安装与更新（#448）**Windows 便携更新成功和安装阶段摘要校验拒绝两条路径均回到可用 shell。两个发布版 Inno 安装包通过字节与版本校验。`v0.5.0` 的应用内 stable 检查在请求阶段失败，线上安装及隔离 Inno 验收仍开放。
+- **安装与更新（#448）**Windows 便携更新成功和安装阶段摘要校验拒绝两条路径均回到可用 shell。两个发布版 Inno 安装包通过字节与版本校验。两份便携发布版的在线检查均在证书校验阶段失败，在线安装及隔离 Inno 验收仍开放。
 - **其余工作台能力（#439–440、#442、#445–447）**已记录各路径的正确性或有限配对样本。各行仍需完成上文列出的时序、长时资源或平台验证。
 
 ## 环境前提与未完成验收
