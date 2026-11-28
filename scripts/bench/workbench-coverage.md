@@ -745,6 +745,8 @@ Windows 每个进程在约 9 秒内采到 19 个点，其中 17 个点落在格�
 
 再按候选、基线顺序各跑一轮，固定 Dark 主题。格式化请求挂起期间两版各收到 12 个原生键，24 个键全部匹配 PTY 与 DXGI。两版收到迟到响应后保存出相同的完整 `a.c` 字节，`b.c` 保持原文。两个 LSP 进程均在关窗后退出。按键至正确桌面更新的 p50／p95 为基线 13.27／16.86 ms、候选 14.65／24.39 ms。本轮每进程各取 19 个资源点，其中 17–18 个落在挂起期间。GUI CPU 增量为基线 609.38 ms、候选 515.63 ms，私有内存采样峰值为 110.07／108.07 MiB。GUI 最忙 GPU 引擎峰值均为 1%。这两对运行的候选 p95 均高于对应基线，显示呈现及差异归因待测。原始数据见 `windows-442-resources-x1OeId/native-reverse-pair.json`。
 
+第三对按基线、候选顺序运行同一 Dark 主题夹具。24 个原生键全部匹配 PTY 回显与正确 DXGI 字形。两次保存结果的 SHA-256 一致，两个 LSP 进程均随窗口退出。此对的 p50／p95 为基线 10.40／13.05 ms、候选 9.09／15.68 ms。三对的轮内 p95 分别落在基线 13.05–16.86 ms、候选 15.68–24.39 ms。候选的三次 p95 均高于同对基线，两版跨轮范围仍有重叠。基线资源仅有六个采样点，候选有 19 个，不据此判断峰值变化。第三对回执和 SHA-256 见 `windows-442-resources-x1OeId/native-third-pair.json`。
+
 Windows 候选 Release 实窗完成一轮 [#443 结构文档回放](structured-documents.md)。JSONC 展开 3,500 项的 `payload` 后显示索引 `0`。在 `probe.target` 选择第二个 `phase` 并定位源码，选区落在第 7 行的 `"phase": "TREE-1111"`。结构编辑、撤销和重做依次显示 `TREE-2222`、`TREE-1111`、`TREE-2222`。源码连续退格、输入 `9` 后返回结构树，第二个值显示 `TREE-2229`，第一个值仍为 `"first\u4e2d"`。
 
 CSV 表格显示 50,005 条记录，选中 `R2 C3` 按 Enter 后，源码选区为 `CELL-1111`。用 F2 修改后撤销、重做，再从源码将末位改为 `9`，返回表格显示 `CELL-2229`。两个格式在保存前均通过 `verify original`。分别保存、关闭、从文件树重开后，JSONC 仍显示两个预期属性，CSV 仍显示探针值、含逗号字段及多行字段。`verify edited all` 逐字节核对了 JSONC 的 822,725 字节及 CSV 的 3,375,102 字节。
@@ -1099,6 +1101,8 @@ Windows 候选 Release `0daaff48` 重新连接 #443 的 Docker Linux 工作区�
 从 GitHub 下载 `v0.5.0` 和 `v0.5.1` 的 Inno 安装包及各自的 `checksums.txt`。两个安装包的实际字节数和 SHA-256 均符合 GitHub 资产元数据，文件摘要也匹配各自校验文件中的同名条目。PE 文件版本分别为 `0.5.0.0` 和 `0.5.1.0`。核验记录见 `windows-448-inno-assets-WtV7ar/manifest.json`。Inno 安装会写入固定的应用注册和开始菜单入口，本机未找到可用的隔离 Windows 环境，安装器未运行。
 
 从已核验的 `v0.5.0` 和 `v0.5.1` 便携 ZIP 分别启动隔离副本，在「设置 → 关于」点击 `Check now`。两份结果截图均显示 `invalid peer certificate: UnknownIssuer`，请求在 TLS 证书校验阶段失败。`v0.5.1` 关闭了后台下载，点击后约 93 ms 读到正在检查，约 662 ms 读到错误。独立的 `curl.exe` 直读同一公开发布列表，前一轮返回 HTTP 200，后一轮返回 HTTP 403 且限流额度为零。截图、计时和摘要见 `windows-448-resources-KhgE1F/online-portable-tePuHi/online-discovery-manifest.json` 与 `windows-448-resources-KhgE1F/online-051-0drkN7/online-discovery-manifest.json`。
+
+同一 `v0.5.1` 发布包复测时，关闭自动检查和后台下载的隔离窗口约 102 ms 显示检查状态，约 771 ms 再次报告 `UnknownIssuer`。Node.js v26.13.1 使用 `--use-bundled-ca` 或 `--use-system-ca` 对同一主机各完成两次 TLS 1.3 验证，四次观察到同一叶证书指纹。以 `e03f1fa4` 的锁文件为基线构建独立 Rust 探针。`ReqwestClient::user_agent` 和 `ReqwestClient::proxy_and_user_agent(None, …)` 在常规环境及便携夹具环境各请求两次，八次均返回 HTTP 200。应用请求与独立探针的差异仍未定位。源码、命令日志和应用截图见 `windows-448-resources-KhgE1F/tls-transport-comparison-n78k2P/manifest.json`。
 
 ## 集成版本处置
 
