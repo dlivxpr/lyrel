@@ -228,10 +228,126 @@ impl LyrelApp {
 mod tests {
     use super::*;
     use crate::daemon::protocol::ClientMsg;
+    use crate::daemon::transport::Stream;
     use crate::ui::app::test_window;
+    use crate::ui::pending_pane::PendingPane;
     use crate::ui::{pane::Pane, tab::Tab};
-    use gpui_kit::{Keystroke, TestAppContext};
+    use gpui_kit::{AppContext as _, Axis, Keystroke, TestAppContext};
     use lyrel_terminal::view::quiet_test_pane;
+    use lyrel_ui_base::session::{WindowView, WindowViews, WorkspaceStore};
+
+    fn assert_terminal_input(stream: &mut Stream, expected: &[u8]) {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut input = Vec::new();
+        while input.len() < expected.len() {
+            if let ClientMsg::Input(bytes) =
+                ClientMsg::read(stream).expect("input reaches the selected terminal")
+            {
+                input.extend(bytes);
+            }
+        }
+        assert_eq!(input, expected);
+    }
+
+    #[gpui_kit::test]
+    fn workspace_switch_from_terminal_delivers_first_keys_to_restored_pane(cx: &mut TestAppContext) {
+        let (app, mut vcx, mut departing_stream) = test_window::harness_with_pane(cx);
+        let (departing, target) = app.update_in(&mut vcx, |app, window, cx| {
+            let mut here = WindowView::default();
+            here.id = app.workspace;
+            let there = WindowView::default();
+            let target = there.id;
+            WorkspaceStore::install_for_test(
+                cx,
+                WindowViews {
+                    views: vec![here, there],
+                    active: Some(app.workspace),
+                },
+            );
+            let departing = app.tabs[0].pane.terminals()[0].clone();
+            app.focus_active(window, cx);
+            (departing, target)
+        });
+        app.update_in(&mut vcx, |app, window, cx| {
+            assert!(departing.read(cx).focus_handle.is_focused(window));
+            app.switch_workspace(Some(target), window, cx);
+            assert_eq!(app.workspace, target);
+            assert!(app.home_focus.is_focused(window));
+            let handoff = app.workspace_input.as_mut().expect("switch arms handoff");
+            handoff.deadline = Instant::now() + Duration::from_secs(60);
+        });
+        vcx.update(|window, cx| {
+            window.dispatch_keystroke(Keystroke::parse("a").unwrap(), cx);
+        });
+
+        let pending = app.update_in(&mut vcx, |app, window, cx| {
+            let pending = cx.new(|cx| {
+                PendingPane::shell(None, Some(target), app.font_size, None, Some(2), None, cx)
+            });
+            let tab = Tab::new(Pane::leaf(PaneSlot::Connecting(pending.clone())));
+            let tab_id = tab.id();
+            app.tabs.push(tab);
+            app.focus_active(window, cx);
+            app.bind_workspace_input(Some(tab_id), window, cx);
+            cx.notify();
+            pending
+        });
+        vcx.update(|window, cx| {
+            window.dispatch_keystroke(Keystroke::parse("b").unwrap(), cx);
+        });
+
+        let mut stream = app.update_in(&mut vcx, |app, window, cx| {
+            let (view, stream) = quiet_test_pane(2, window, cx);
+            let slot = PaneSlot::Ready(view.clone());
+            app.replace_pane_slot(pending.entity_id(), slot.clone(), cx);
+            app.focus_leaf(&slot, window, cx);
+            app.deliver_workspace_input(pending.entity_id(), &view, true, window, cx);
+            cx.notify();
+            stream
+        });
+        assert_terminal_input(&mut stream, b"ab");
+        departing_stream
+            .set_read_timeout(Some(Duration::from_millis(30)))
+            .unwrap();
+        while let Ok(message) = ClientMsg::read(&mut departing_stream) {
+            assert!(!matches!(message, ClientMsg::Input(_)));
+        }
+    }
+
+    #[gpui_kit::test]
+    fn live_tab_and_split_switches_deliver_first_key_to_selected_pane(cx: &mut TestAppContext) {
+        let (app, mut vcx, mut first) = test_window::harness_with_pane(cx);
+        let (mut left, mut right) = app.update_in(&mut vcx, |app, window, cx| {
+            let (left, left_stream) = quiet_test_pane(2, window, cx);
+            let (right, right_stream) = quiet_test_pane(3, window, cx);
+            app.tabs.push(Tab::new(Pane::split_node(
+                Axis::Horizontal,
+                0.5,
+                Pane::leaf(PaneSlot::Ready(left)),
+                Pane::leaf(PaneSlot::Ready(right)),
+            )));
+            app.tabs.select(0);
+            app.focus_active(window, cx);
+            cx.notify();
+            (left_stream, right_stream)
+        });
+
+        for (key, tab) in [("a", Some(1)), ("b", None), ("c", Some(0))] {
+            app.update_in(&mut vcx, |app, window, cx| match tab {
+                Some(tab) => app.activate(tab, window, cx),
+                None => app.cycle_pane(true, window, cx),
+            });
+            vcx.update(|window, cx| {
+                window.dispatch_keystroke(Keystroke::parse(key).unwrap(), cx);
+            });
+        }
+
+        assert_terminal_input(&mut first, b"c");
+        assert_terminal_input(&mut left, b"a");
+        assert_terminal_input(&mut right, b"b");
+    }
 
     #[gpui_kit::test]
     fn native_text_keys_do_not_discard_earlier_workspace_typing(cx: &mut TestAppContext) {

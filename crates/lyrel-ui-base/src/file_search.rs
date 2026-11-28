@@ -13,7 +13,7 @@ use std::collections::BinaryHeap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::fuzzy::{fold_query, score_folded};
+use crate::fuzzy::score_folded;
 use crate::host_ops::Host;
 
 /// How many entries one walk may return, directories included. A project
@@ -43,7 +43,7 @@ pub struct IndexedFile {
     pub rel: String,
     /// Where the file's own name starts in `rel`.
     pub name_at: usize,
-    /// `rel` lowercased once, for the prefilter and ASCII scoring.
+    /// `rel` case-folded once, for the prefilter and scoring.
     lower: String,
 }
 
@@ -154,7 +154,11 @@ pub fn build_index(roots: &[PathBuf], files: Vec<PathBuf>, capped: bool) -> File
                 false => under,
             };
             let name_at = rel.rfind(['/', '\\']).map_or(0, |i| i + 1);
-            let lower = rel.to_lowercase();
+            let lower = if rel.is_ascii() {
+                rel.to_ascii_lowercase()
+            } else {
+                fold(&rel).collect()
+            };
             Some(IndexedFile {
                 path,
                 rel,
@@ -164,6 +168,14 @@ pub fn build_index(roots: &[PathBuf], files: Vec<PathBuf>, capped: bool) -> File
         })
         .collect();
     FileIndex { files, capped }
+}
+
+fn fold(text: &str) -> impl Iterator<Item = char> + '_ {
+    // Lowercase each scalar independently and use the same form for both
+    // lowercase sigmas, regardless of their position in the path or query.
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| if c == 'ς' { 'σ' } else { c })
 }
 
 /// Whether every character of `needle` (already lowercase, no whitespace)
@@ -191,17 +203,14 @@ fn file_score(needle: &[char], file: &IndexedFile, scratch: &mut Vec<char>) -> O
         return score(needle, file.lower.as_bytes(), file.name_at);
     }
 
-    // The scorer folds each scalar independently, unlike the prefilter's
-    // str::to_lowercase (which handles final sigma contextually). Capture
-    // the basename offset in folded scalars, since lowercase can expand.
+    // Separators are unchanged by folding, but the basename can start at a
+    // different byte or scalar offset when a lowercase mapping expands.
+    let name_at = file.lower.rfind(['/', '\\']).map_or(0, |i| i + 1);
+    let (dir, name) = file.lower.split_at(name_at);
     scratch.clear();
-    scratch.extend(
-        file.rel[..file.name_at]
-            .chars()
-            .flat_map(char::to_lowercase),
-    );
+    scratch.extend(dir.chars());
     let name_at = scratch.len();
-    scratch.extend(file.name().chars().flat_map(char::to_lowercase));
+    scratch.extend(name.chars());
     score(needle, scratch, name_at)
 }
 
@@ -211,7 +220,7 @@ pub fn rank<'a>(index: &'a FileIndex, needle: &str, limit: usize) -> Vec<(i32, &
     if limit == 0 {
         return Vec::new();
     }
-    let needle = fold_query(needle);
+    let needle: Vec<_> = fold(needle).filter(|c| !c.is_whitespace()).collect();
     if needle.is_empty() {
         return Vec::new();
     }
@@ -356,7 +365,7 @@ mod tests {
         .chain(numbered.iter().map(String::as_str))
         .collect();
         for limit in [0, 8, 200, 300] {
-            let paths: Vec<_> = rank(&index, "f", limit)
+            let paths: Vec<_> = rank(&index, "F", limit)
                 .into_iter()
                 .map(|(_, file)| file.rel.as_str())
                 .collect();
@@ -377,9 +386,8 @@ mod tests {
             ranked(" \u{2003}İ . R S\t"),
             [(205, "İ/İ.rs"), (44, "İ/src/Note.rs")]
         );
-        // The contextual prefilter admits the final form in uppercase ΟΣ,
-        // but the scorer does not fold an uppercase scalar to final sigma.
-        assert_eq!(ranked("ΟΣ"), [(151, "οσ")]);
-        assert!(ranked("ος").is_empty());
+        for query in ["ΟΣ", "ος", "οσ"] {
+            assert_eq!(ranked(query), [(151, "ΟΣ"), (151, "οσ")], "{query}");
+        }
     }
 }

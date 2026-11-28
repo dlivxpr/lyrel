@@ -121,6 +121,27 @@ fn source_representation_is_atomic_for_batch_edits_and_native_undo(cx: &mut Test
 }
 
 #[gpui_kit::test]
+fn unchanged_replacement_preserves_undo_and_redo_selection(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        let document = cx.new(|_| Document::new("one two".into(), Default::default()));
+        let view = cx.new(|cx| EditorState::for_document(document.clone(), cx));
+        view.update(cx, |view, cx| {
+            view.select_range(0..3, cx);
+            view.replace_range(0..3, "first", cx);
+            view.select_range(6..9, cx);
+            view.replace_range(6..9, "two", cx);
+
+            assert!(view.undo_document(cx));
+            assert_eq!(view.text(), "one two");
+            assert_eq!(view.selected_range(), 0..3);
+            assert!(view.redo_document(cx));
+            assert_eq!(view.text(), "first two");
+            assert_eq!(view.selected_range(), 5..5);
+        });
+    });
+}
+
+#[gpui_kit::test]
 fn independent_edits_release_historical_text_buffers(cx: &mut TestAppContext) {
     let (document, view, original, intermediate) = cx.update(|cx| {
         let document = cx.new(|_| Document::new("alpha\r\nbeta\n".into(), Default::default()));

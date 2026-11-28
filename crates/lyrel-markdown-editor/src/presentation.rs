@@ -480,33 +480,32 @@ impl EditorState {
         let origin = cx.entity_id();
         let caret = self.cursor_offset();
         let before_selection = self.selection.selected_range.clone();
-        let after_caret = range.start + text.len() - text.matches("\r\n").count();
         let coalesced = self.pending_coalesce;
         let composing =
             self.selection.marked_range.is_some() && document.read(cx).has_composition();
-        let snapshot =
-            if self.selection.marked_range.is_some() && document.read(cx).has_composition() {
-                let owner = cx.weak_entity();
-                document.update(cx, |document, cx| {
-                    document.compose(range.clone(), text, owner, caret, cx);
-                    document.finish_composition(origin, false, range.start + text.len(), cx)
-                })
-            } else {
-                let coalesce = self.pending_coalesce;
-                document.update(cx, |document, cx| {
-                    document.replace(range, text, origin, caret, coalesce, cx)
-                })
-            };
-        if !composing {
-            document.update(cx, |document, _| {
-                document.set_history_selection(
-                    origin,
-                    before_selection,
-                    after_caret..after_caret,
-                    coalesced,
-                )
-            });
-        }
+        let snapshot = if composing {
+            let owner = cx.weak_entity();
+            document.update(cx, |document, cx| {
+                document.compose(range.clone(), text, owner, caret, cx);
+                document.finish_composition(origin, false, range.start + text.len(), cx)
+            })
+        } else {
+            document.update(cx, |document, cx| {
+                let revision = document.revision();
+                let start = range.start;
+                let snapshot = document.replace(range, text, origin, caret, coalesced, cx);
+                if document.revision() != revision {
+                    let after_caret = start + text.len() - text.matches("\r\n").count();
+                    document.set_history_selection(
+                        origin,
+                        before_selection,
+                        after_caret..after_caret,
+                        coalesced,
+                    );
+                }
+                snapshot
+            })
+        };
         self.content = snapshot.text_handle();
         self.frame.content_gen = document.read(cx).revision();
         self.frame.request_caret_reveal();
