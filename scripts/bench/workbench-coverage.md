@@ -184,6 +184,8 @@ Windows 候选 Release 使用同一测量机与 GUI 文件摘要，固定 `Q27G4
 
 另一对空闲校准在确认 PresentMon 进程已启动后，各发送 12 个原生按键。全部 24 个输入均通过 PTY 字节校验和 DXGI 字形匹配。基线的 PresentMon 标准输出为空，候选使用原生文件输出参数时未生成 CSV。两次 PresentMon 均退出为 0。探针参数、采集器退出码及 15 份文件摘要见 `windows-430-native-dxgi-MhmDpa/paired-presentmon-ZZ70En/short-calibration.json`。
 
+随后尝试在候选版的可见输出回放中采集。PresentMon 限定本轮 GUI PID，40 秒后以 `0` 退出，留下 130 条该 PID 的呈现记录。UAC 后目标窗格未恢复前台焦点，生产者和按键探针均未启动。另一轮将提权与采集计时分开，等待目标窗口焦点 55 秒后退出，退出码为 `22`，尚未启动 PresentMon。两次都没有输入至呈现配对样本。采集日志、退出记录及摘要见 `windows-430-visible-etw-6mOXOC/manifest.json` 和 `windows-430-focus-gated-etw-CHdAEZ/manifest.json`。
+
 Windows 候选版 #431 的单轮正确性回放以每秒 400 行运行同一夹具。滚轮上移后可见 `PLAIN 0253` 等历史行。搜索 `PLAIN 0200` 时显示 `1/1`，该行编号被高亮。改为 `LYREL431_NO_MATCH` 时显示 `0/0`。搜索在日志第 58 批时已完成，最终 CLI 回放通过全部 9,600 行顺序及内容校验。输出结束后用三击选中 `PLAIN 0200`，经 `Ctrl+Shift+C` 复制的内容为该行 82 字节正文加一个 LF，共 83 字节。
 
 另在生产期间三击选中 `PLAIN 0200` 并复制，剪贴板精确匹配 83 字节预期内容，生产者从第 42 批推进至第 54 批。前一次回放的点击坐标选中了相邻的 `PLAIN 0199`，截图和剪贴板一致。成功回放的原始 CLI 捕获通过了 9,600 行、806,400 字节和唯一 `PLAIN_DONE` 的校验。`capture --plain` 的首批 16 行均为原文前 79 个字符加最后一个字符，其余行精确匹配。原始回放含关闭自动换行的 `CSI ?7l`，截断形态符合新窗格的 80 列初始尺寸。本轮未记录 resize 和显示时间戳。
