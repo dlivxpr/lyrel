@@ -579,7 +579,7 @@ Windows Release 另经回环 SSH 访问 Docker Linux server 工作区。两版�
 
 远端消息框复用 `workspace-search.mjs hold`，由 Bash `exec -a hermes node <夹具脚本> hold` 提供 Linux 前台进程检测所需的 `argv[0]`。两版在两档索引中完整菜单区域的像素均与同一份八项有序参考截图一致。四轮按 Down、Enter 和 `END` 后均保留 `@fritz.txt END` 草稿，PTY 回放中没有误输入。记录见同目录的 `verified-composer-manifest.json`。
 
-50,000 路径远端消息框另做一对快速增删回放。窗口驱动以实测 12.5–16.5 ms 的相邻调用间隔将 `@frost` 改为 `@flare`。两版随后均用键盘选中第二项并生成 `@flare-b.txt END`，PTY 没有收到草稿。回执见同目录的 `rapid-composer-manifest.json`。全局搜索的快速回放也在两版取得最终查询 `flare` 和正确的两项结果，见 `rapid-global-manifest.json`。两版的 `flareq` 回放均显示 `No results`。AX 提供查询和空候选列表，文案由截图核对，见 `no-match-manifest.json`。消息框时序、逐帧旧结果排除、呈现事件和两端资源仍待验收。
+50,000 路径远端消息框另做一对快速增删回放。窗口驱动以实测 12.5–16.5 ms 的相邻调用间隔将 `@frost` 改为 `@flare`。两版随后均用键盘选中第二项并生成 `@flare-b.txt END`，PTY 没有收到草稿。回执见同目录的 `rapid-composer-manifest.json`。全局搜索的快速回放也在两版取得最终查询 `flare` 和正确的两项结果，见 `rapid-global-manifest.json`。两版的 `flareq` 回放均显示 `No results`。AX 提供查询和空候选列表，文案由截图核对，见 `no-match-manifest.json`。在消息框输入 `@flareq` 后，两版的候选菜单均关闭，查询留在草稿内且未进入 PTY，见 `composer-no-match-manifest.json`。消息框时序、逐帧旧结果排除、呈现事件和两端资源仍待验收。
 
 Windows 候选 Release 的 #439 本地夹具有 515 个跟踪文件和 `main`、`other` 两个检出。文件树展开 `levels/alpha` 后，在外部创建 `watched-439.txt`。从写入开始到 AX 观察到文件树新行约 432 ms，各测一次。更改面板将该文件列为未跟踪。通过底栏的工作树菜单切换到 `other-tree / other` 后，更改面板只显示另一个工作树修改的 `config.json` 和 `report.txt`，与 `git status --short --branch` 一致。
 
