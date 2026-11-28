@@ -918,7 +918,9 @@ Windows `cb897016` 和 `0daaff48` 各用一个隔离设置窗口连续刷新三�
 | 隐藏后 daemon CPU（逻辑核） | 0.005–0.013 | 0.005–0.010 |
 | 隐藏后 GUI 私有内存采样峰值（MiB） | 136.69–138.75 | 137.75–138.20 |
 
-各阶段的 GUI 最忙 GPU 引擎样本均为 0%，daemon 无对应实例。四轮资源、截图和 20 份文件摘要见 `windows-446-host-metrics-uwTcy1/controlled-visibility-manifest.json`。远程主机指标、GitHub 界面、原生输入至呈现和唤醒次数待测。
+各阶段的 GUI 最忙 GPU 引擎样本均为 0%，daemon 无对应实例。四轮资源、截图和 20 份文件摘要见 `windows-446-host-metrics-uwTcy1/controlled-visibility-manifest.json`。
+
+Windows 候选 Release `0daaff48` 重新连接 #443 的 Docker Linux 工作区，并恢复活动监视器。面板显示预期的远程主机和 Bash PID，PID 经远端 `lyrel procs` 与容器 `/proc` 核对。面板保持打开时，原窗格返回 `LYREL446_MONITOR_REMOTE` 和退出码 `0`。约 4.55 秒后截屏，顶栏和面板均显示约 0.8 GiB 的内存用量。面板总内存 15.4 GiB 与容器 `MemTotal` 的 16,166,756 KiB 一致，且显示网络读数和缺失的 GPU 读数。截图及校验见 `windows-446-host-metrics-uwTcy1/remote-8XyhJ9/manifest.json`。远程配对资源、GitHub 界面、原生输入至呈现和唤醒次数待测。
 
 #447 的 Windows 候选版在隔离设置中把主题从 Dark 切换为 Dracula。`config.json` 的 `theme_preset` 持久化为 `dracula`，原工作区下一条命令仍仅在窗格 2 回显。
 
@@ -961,7 +963,7 @@ Windows `cb897016` 和 `0daaff48` 各用一个隔离设置窗口连续刷新三�
 
 ## 集成版本处置
 
-本节处置引用的 Windows 配对实窗以 `cb897016` 为基线，以 `0daaff48` 为候选。从 `0daaff48` 到 `9f20a2ac` 的集成分支差异仅涉及本覆盖表及恢复运行说明。Linux、早期诊断及已发行更新包的版本以各自记录为准。
+本节处置引用的 Windows 配对实窗以 `cb897016` 为基线，以 `0daaff48` 为候选。从 `0daaff48` 到 `ddd66d1e` 的集成分支差异仅涉及本覆盖表及恢复运行说明。Linux、早期诊断及已发行更新包的版本以各自记录为准。
 
 - **CLI 回放（#436）**保留 `ReplayEnd` 协商和旧版回退。同机三对运行显示 Windows 和 Linux 的空闲 `capture` 与 `exec` 完成都快于各自的基线波动范围。忙时捕获范围有重叠。Windows 桌面并发期间 CPU 范围重叠，候选 GUI 私有内存更高，采到的最忙 GPU 引擎利用率更低。
 - **工作区切换（#432）**保留即时输入交接修复。同一忙时回放中，原基线的八次首键均丢失，修复版的八次首键全部精确送达目标窗格。等焦点再输入的 AX 延迟范围有重叠。
