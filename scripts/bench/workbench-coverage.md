@@ -1003,6 +1003,8 @@ draw.io 再按版本各启动一个隔离实例，在各自的同一窗口和 da
 
 同一 MSYS 运行库的 `dd bs=1 count=2` 在 raw 模式下逐字节读取。改尺寸和不改尺寸各四次均返回 `65 63`。逐字节读取本身未触发缺失。源码与回执见 `windows-pty-first-byte-EaRKbC/single-byte-read-manifest.json`。
 
+沿用同一独立程序和固定版 ConPTY，对照未设置 `MSYS` 与 `MSYS=disable_pcon`。每种设置下，实际改尺寸均丢首字（各 3／3），无改尺寸均完整执行（各 3／3）。两组使用同一 Git Bash 二进制、隔离环境和创建标志 `7`。12 份 VT 回执及其 SHA-256 见 `windows-pty-first-byte-EaRKbC/msys-option-ys20GS/manifest.json`。
+
 #445 在 Docker Linux Release 上运行 `cli_e2e agents_report_continuous_state_age -- --exact`，通过真实 PTY 上的请求、状态年龄和轮次身份断言。在 Windows 候选版中，从窗格 2 写入固定 OSC 777 消息，核对应用内收件箱正文与目标。点击来源按钮后，下一条命令仅在窗格 2 回显。
 
 Windows 基线 `cb897016` 和候选 `0daaff48` 各取一份配对样本。收件箱打开后，通过 CLI 在另一标签的 Bash 窗格触发同一 OSC 777 通知。从发起 CLI 调用到读取该通知的持久化记录分别为 510.97／509.34 ms，记录中的 pane 和 tab 均匹配预期。点击来源按钮到 AX 观察到终端焦点分别为 94.95／94.24 ms。点击来源到 CLI 确认下一条命令在目标窗格回显分别为 883.88／579.76 ms，其中包含窗口输入、命令执行和 PTY 回放。目标各返回一次结果，原窗格均未收到探针命令。六份原始回执及摘要见 `windows-445-paired-sbF0C3/manifest.json`。系统通知中心激活、会话发现全路径、首个正确显示帧及重复负载下的资源仍待测。
