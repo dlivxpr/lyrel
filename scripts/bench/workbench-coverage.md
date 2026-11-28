@@ -184,6 +184,8 @@ Windows 候选 Release 使用同一测量机与 GUI 文件摘要，固定 `Q27G4
 随后尝试让 DXGI 和 40 秒、仅跟踪本轮 GUI PID 的 PresentMon 同轮采样。空闲基线的 80 键均匹配 DXGI 字形，PresentMon 共写出 63 条记录，80 键均未匹配。候选的就绪等待在发键前超时，采集结束时写出 19 条记录。日志、分析和结果见 `windows-430-native-dxgi-MhmDpa/paired-presentmon-ZZ70En/manifest.json`。
 
 离线核对该空闲基线的同一 PID 和 swapchain，首末正确 DXGI 字形帧之间没有有效的 PresentMon 显示记录。两侧最近的显示事件相隔 23.31 秒，覆盖了 80 键的完整采样区间。此轮的缺样来自显示记录缺失，扩大匹配容差无法补齐。时间戳和源文件摘要见 `windows-430-native-dxgi-MhmDpa/paired-presentmon-ZZ70En/baseline-RFslhS/capture-gap.json`。
+集成版本（`d9faca1024` 及之后仅文档变更的 `83a3387b` 检出，`lyrel-app.exe` 摘要前缀 `88a6711f1628811a`）按同一路径复测空闲前台输入：重新标定 QPC 偏移后，免标定行哈希探针在 30 行网格捕获 DXGI 帧行变化，24 键中 15 键配对的 14 个干净样本 Δ 为 1.7–5.9 ms（一处帧戳重合的对折行卷绕命中按预定政策剔除），与基线行哈希范围一致。同轮泛洪复测不可行：持续输出时滚动使每帧全部行变化，行哈希无法区分 echo 行，该方法的适用范围限于空闲或低速输出，忙时输入至显示的关联仍依赖 `windows-430-dxgi-phQIJG` 的字形证据。复测帧序列与输入外部时钟见 `dxgi-active-sGgrXX/evidence/rowhash449-idle/`。
+
 
 另一对空闲校准在确认 PresentMon 进程已启动后，各发送 12 个原生按键。全部 24 个输入均通过 PTY 字节校验和 DXGI 字形匹配。基线的 PresentMon 标准输出为空，候选使用原生文件输出参数时未生成 CSV。两次 PresentMon 均退出为 0。探针参数、采集器退出码及 15 份文件摘要见 `windows-430-native-dxgi-MhmDpa/paired-presentmon-ZZ70En/short-calibration.json`。
 
