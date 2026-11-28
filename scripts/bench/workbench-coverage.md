@@ -178,6 +178,9 @@ Windows 候选 Release 使用同一测量机与 GUI 文件摘要，固定 `Q27G4
 
 两版的可见输出 GUI 最忙 GPU 引擎采样中位数均为 1%，隐藏输出均为 0%。daemon 和生产者无可用 GPU 引擎读数。按键至正确 DXGI 桌面更新的轮内 p95 在可见输出时为基线 13.45–18.25 ms、候选 13.49–15.60 ms，在隐藏输出时为基线 11.77–12.84 ms、候选 11.77–13.11 ms。两种场景的回显和 CPU 范围均重叠。前台持续输入时未复现无输入组的隐藏输出 CPU 降幅。各进程读数、帧、回放及 114 份文件摘要见 `windows-430-echo-resources-rhUzX6/manifest.json`。
 
+同机再用 DXGI 行哈希变体验证输入到可见帧关联的另一条路径。后台进程经 `SendInput`（虚拟键与 Unicode 形态）和 `PostMessage` 向 lyrel 与 notepad 注入均失败，键未到达任何目标，与交互式注入路径隔离有关，不证明产品行为。改用真实前台焦点下的窗口输入驱动，每键记录驱动调用前的本机单调时钟并换算到 QPC（`performance.now` 与 QPC 偏移经十次配对采样标定，散布 0.68 ms）。探针改为按行对终端网格做 FNV 哈希，逐帧记录行内容变化的 `LastPresentTime`。空闲夹具 24 键全部配对：每行恰好变化一次、无输入前噪声，输入至目标行首个变化帧的 p50 为 2.91 ms、p95 为 5.69 ms、范围 1.29–9.37 ms，截止于 DXGI 桌面更新。可见洪泛（400 行/秒）期间 24 键的保守上界（输入至任一帧行变化）p50 为 2.52 ms、p95 为 5.97 ms，单样本长尾 36.13 ms。输入时间戳为驱动调用时刻，真实延迟只低不高。帧、输入与行哈希原始记录见 `dxgi-active-sGgrXX/evidence/rowhash-{1,busy}`。
+
+早期的字形识别探针在本轮复核中证明不可靠：token 八字符挤在前四个指纹列内且 echo 为普通字重而模板 banner 为粗体，行内容变化配对取代字形识别后，此前基于字形识别的「配对」结论不再作为延迟证据。WGC 与 DXGI 桌面更新的既有结论不受影响。同轮洪泛的粗采样对照中，隐藏标签页输出的 GUI 每秒增量 CPU 约 0.084–0.095 核、可见输出约 0.075 核、空闲基线约 0.011 核；该采样未对齐生产窗口，不能与上文万行归一化数据直接比较，仅提示隐藏窗格输出期间 GUI 侧存在接近可见输出的工作量，归因待查。
 随后尝试让 DXGI 和 40 秒、仅跟踪本轮 GUI PID 的 PresentMon 同轮采样。空闲基线的 80 键均匹配 DXGI 字形，PresentMon 共写出 63 条记录，80 键均未匹配。候选的就绪等待在发键前超时，采集结束时写出 19 条记录。日志、分析和结果见 `windows-430-native-dxgi-MhmDpa/paired-presentmon-ZZ70En/manifest.json`。
 
 离线核对该空闲基线的同一 PID 和 swapchain，首末正确 DXGI 字形帧之间没有有效的 PresentMon 显示记录。两侧最近的显示事件相隔 23.31 秒，覆盖了 80 键的完整采样区间。此轮的缺样来自显示记录缺失，扩大匹配容差无法补齐。时间戳和源文件摘要见 `windows-430-native-dxgi-MhmDpa/paired-presentmon-ZZ70En/baseline-RFslhS/capture-gap.json`。
