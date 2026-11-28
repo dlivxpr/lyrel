@@ -252,7 +252,9 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn workspace_switch_from_terminal_delivers_first_keys_to_restored_pane(cx: &mut TestAppContext) {
+    fn workspace_switch_from_terminal_delivers_first_keys_to_restored_pane(
+        cx: &mut TestAppContext,
+    ) {
         let (app, mut vcx, mut departing_stream) = test_window::harness_with_pane(cx);
         let (departing, target) = app.update_in(&mut vcx, |app, window, cx| {
             let mut here = WindowView::default();
