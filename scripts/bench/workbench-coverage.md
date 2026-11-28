@@ -920,7 +920,19 @@ Windows `cb897016` 和 `0daaff48` 各用一个隔离设置窗口连续刷新三�
 
 各阶段的 GUI 最忙 GPU 引擎样本均为 0%，daemon 无对应实例。四轮资源、截图和 20 份文件摘要见 `windows-446-host-metrics-uwTcy1/controlled-visibility-manifest.json`。
 
-Windows 候选 Release `0daaff48` 重新连接 #443 的 Docker Linux 工作区，并恢复活动监视器。面板显示预期的远程主机和 Bash PID，PID 经远端 `lyrel procs` 与容器 `/proc` 核对。面板保持打开时，原窗格返回 `LYREL446_MONITOR_REMOTE` 和退出码 `0`。约 4.55 秒后截屏，顶栏和面板均显示约 0.8 GiB 的内存用量。面板总内存 15.4 GiB 与容器 `MemTotal` 的 16,166,756 KiB 一致，且显示网络读数和缺失的 GPU 读数。截图及校验见 `windows-446-host-metrics-uwTcy1/remote-8XyhJ9/manifest.json`。远程配对资源、GitHub 界面、原生输入至呈现和唤醒次数待测。
+Windows 候选 Release `0daaff48` 重新连接 #443 的 Docker Linux 工作区，并恢复活动监视器。面板显示预期的远程主机和 Bash PID，PID 经远端 `lyrel procs` 与容器 `/proc` 核对。面板保持打开时，原窗格返回 `LYREL446_MONITOR_REMOTE` 和退出码 `0`。约 4.55 秒后截屏，顶栏和面板均显示约 0.8 GiB 的内存用量。面板总内存 15.4 GiB 与容器 `MemTotal` 的 16,166,756 KiB 一致，且显示网络读数和缺失的 GPU 读数。截图及校验见 `windows-446-host-metrics-uwTcy1/remote-8XyhJ9/manifest.json`。远程配对资源、原生输入至呈现和唤醒次数待测。
+
+两版还从隔离的本机仓库恢复 GitHub 面板。`origin` 指向公开仓库 `dlivxpr/lyrel`，两版均以无凭据配置启动。两版交替各跑两轮。每轮依次刷新三次，确认列表暂时消失，再聚焦原终端并分别按 `a`、`b`、`c`。恢复的列表均显示预期的 #451 标题，六次 `lyrel capture` 累积回放在每版都核对到准确的输入顺序。独立的公开 API 请求前后返回相同的工单列表，两次请求总耗时为 1.42–1.59 秒。
+
+| GitHub 面板，首两轮每版 | 基线 | 候选 |
+|---|---:|---:|
+| 启动隔离 daemon 至 AX 读到预期条目（ms） | 2,574–4,107 | 2,342–2,613 |
+| 点击刷新至 AX 再次读到预期条目（ms，六次） | 223–240 | 230–262 |
+| AX 读到预期条目至 CLI 读到 PTY 回放（ms，六次） | 348–363 | 47–49 |
+| 隐藏面板后第 1–6 秒 GUI CPU（逻辑核） | 0.014 | 0.152–0.181 |
+| 隐藏面板后第 6–12 秒 GUI CPU（逻辑核） | 0.006 | 0.003–0.011 |
+
+回放计时包含 CLI 进程启动及读取。初次试验中，候选更早进入隐藏阶段。随后两版各做一轮 3.90 秒的固定时长对照，刷新间隔为 1.30 秒。刷新阶段 GUI CPU 为基线 0.076、候选 0.454 逻辑核，GUI 私有内存采样峰值为 116.84、142.24 MiB，最忙 GPU 引擎样本峰值为 1%、0%。隐藏面板后第 1–6 秒，每版各十点，GUI CPU 为 0.003、0.000 逻辑核，daemon 各约 0.007 逻辑核。第二对固定时长运行等待初始列表超时，随后独立的公开 API 请求返回 `403` 限流。六轮共 18 次刷新、资源原始计数、回放步骤和 75 份文件摘要见 `windows-446-github-ZC8Miy/manifest.json`。受控服务响应、重复的固定时长资源对照、原生输入至呈现和唤醒次数仍待测。
 
 #447 的 Windows 候选版在隔离设置中把主题从 Dark 切换为 Dracula。`config.json` 的 `theme_preset` 持久化为 `dracula`，原工作区下一条命令仍仅在窗格 2 回显。
 
