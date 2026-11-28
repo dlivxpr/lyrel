@@ -138,13 +138,16 @@ pub(super) fn run(
                     let _ = session.sender.as_ref().unwrap().send(ready);
                 }
                 if params.observer {
-                    pane.observe_admitted_with_colors_glyphs_and_program(
+                    pane.observe_admitted_with_features(
                         session.sender.as_ref().unwrap().clone(),
                         gate.clone(),
                         admission,
-                        params.pane_colors,
-                        params.glyph_state,
-                        params.program_status,
+                        crate::daemon::pane::ObserveFeatures {
+                            pane_colors: params.pane_colors,
+                            glyph_state: params.glyph_state,
+                            program_status: params.program_status,
+                            ..Default::default()
+                        },
                     )?
                     .map(Attached::Observer)
                 } else {

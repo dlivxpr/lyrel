@@ -14,6 +14,8 @@ use lyrel_protocol::daemon::protocol::{DaemonMsg, PROTOCOL_VERSION, ShellSpec, W
 mod agents;
 #[path = "cli_e2e/capture.rs"]
 mod capture;
+#[path = "cli_e2e/capture_exec_workload.rs"]
+mod capture_exec_workload;
 #[path = "cli_e2e/execution.rs"]
 mod execution;
 #[path = "cli_e2e/pane.rs"]
@@ -52,6 +54,17 @@ const SETTLE_WITHIN: Duration = Duration::from_secs(60);
 const CLOSE_WITHIN: Duration = Duration::from_secs(5);
 
 fn main() {
+    let mut args = std::env::args_os().skip(1);
+    match args.next().as_deref().and_then(std::ffi::OsStr::to_str) {
+        Some(capture_exec_workload::WORKLOAD_ARG) => {
+            capture_exec_workload::run(args);
+            return;
+        }
+        Some(capture_exec_workload::PRODUCER_ARG) => {
+            std::process::exit(capture_exec_workload::produce(args));
+        }
+        _ => {}
+    }
     if std::env::args().any(|arg| arg == agents::FIXTURE_ARG) {
         agents::fixture();
         return;
@@ -75,6 +88,7 @@ fn main() {
         std::io::stdin()
             .read_line(&mut done)
             .expect("wait for capture completion");
+        println!("lyrel_e2e_after_capture");
         return;
     }
     if std::env::args().any(|arg| arg == PASTE_AWARE_FIXTURE_ARG) {
@@ -401,25 +415,18 @@ impl Daemon {
         );
         std::fs::create_dir_all(&config_dir).expect("create the isolated profile");
         let own = std::env::current_exe().expect("own test binary path");
-        let child = Command::new(own)
-            .env(DAEMON_ENV, "1")
-            .env("LYREL_CONFIG_DIR", &config_dir)
-            .env("LYREL_DATA_DIR", &config_dir)
-            .env_remove("LYREL_CONTROL_SOCK")
-            .env_remove("LYREL_SOCKET")
-            // The shell integration's re-entrancy guard. A test run started
-            // from inside a lyrel pane would otherwise hand it to every pane
-            // this daemon spawns, and each of them would skip its own setup —
-            // no prompt marks anywhere, and any assertion about them green for
-            // the wrong reason. The injection blanks it per pane too; this is
-            // the belt to that's braces, and it also covers the panes the
-            // injection declines to touch.
-            .env_remove("LYREL_SHELL_INTEGRATION")
+        let mut command = isolated_command(own, &config_dir);
+        command.env(DAEMON_ENV, "1");
+        Self::launch(dir, config_dir, command)
+    }
+
+    fn launch(dir: tempfile::TempDir, config_dir: PathBuf, mut command: Command) -> Daemon {
+        let child = command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .expect("start the in-test lyrel server");
+            .expect("start the isolated lyrel server");
         #[cfg(windows)]
         let _job = job::Job::kill_on_close(&child);
         let daemon = Daemon {
@@ -469,14 +476,8 @@ impl Daemon {
     }
 
     fn cli(&self, args: &[&str]) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_lyrel"));
-        cmd.args(args)
-            .env("LYREL_CONFIG_DIR", &self.config_dir)
-            .env("LYREL_DATA_DIR", &self.config_dir)
-            .env_remove("LYREL_CONTROL_SOCK")
-            .env_remove("LYREL_PANE")
-            .env_remove("LYREL_WS")
-            .env_remove("LYREL_SOCKET");
+        let mut cmd = isolated_command(env!("CARGO_BIN_EXE_lyrel"), &self.config_dir);
+        cmd.args(args);
         cmd
     }
 
@@ -505,6 +506,21 @@ impl Daemon {
         serde_json::from_str(&out)
             .unwrap_or_else(|e| panic!("lyrel {args:?} --json printed no JSON ({e}): {out}"))
     }
+}
+
+fn isolated_command(program: impl AsRef<std::ffi::OsStr>, config_dir: &std::path::Path) -> Command {
+    let mut command = Command::new(program);
+    command
+        .env("LYREL_CONFIG_DIR", config_dir)
+        .env("LYREL_DATA_DIR", config_dir)
+        .env_remove("LYREL_CONTROL_SOCK")
+        .env_remove("LYREL_PANE")
+        .env_remove("LYREL_WS")
+        .env_remove("LYREL_SOCKET")
+        // A harness launched from a Lyrel pane must not cause a fresh shell
+        // in the isolated daemon to skip its own integration.
+        .env_remove("LYREL_SHELL_INTEGRATION");
+    command
 }
 
 impl Drop for Daemon {

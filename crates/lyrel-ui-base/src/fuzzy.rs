@@ -6,15 +6,24 @@
 /// are not a subsequence of the text. Case-insensitive; whitespace in the
 /// query is ignored.
 pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
-    let needle: Vec<char> = query
-        .chars()
-        .flat_map(char::to_lowercase)
-        .filter(|c| !c.is_whitespace())
-        .collect();
+    let needle = fold_query(query);
     if needle.is_empty() {
         return Some(0);
     }
     let hay: Vec<char> = text.chars().flat_map(char::to_lowercase).collect();
+    score_folded(&needle, &hay)
+}
+
+pub(crate) fn fold_query(query: &str) -> Vec<char> {
+    query
+        .chars()
+        .flat_map(char::to_lowercase)
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+/// The same scoring over lowercase scalars or a borrowed lowercase ASCII slice.
+pub(crate) fn score_folded(needle: &[char], hay: &[impl Copy + Into<char>]) -> Option<i32> {
     if needle.len() > hay.len() {
         return None;
     }
@@ -25,15 +34,13 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
     // against `New Worktree Tab…` spent its `w` on "New" and scattered the
     // rest, scoring the title as a poor match of the very word it contains.
     let best = (0..hay.len())
-        .filter(|&i| hay[i] == needle[0])
-        .filter_map(|start| align(&needle, &hay, start))
+        .filter(|&i| hay[i].into() == needle[0])
+        .filter_map(|start| align(needle, hay, start))
         .max()?;
 
     let mut score = best;
-    if hay == needle {
-        score += 120;
-    } else if hay.starts_with(&needle) {
-        score += 50;
+    if needle.iter().zip(hay).all(|(&n, &h)| n == h.into()) {
+        score += if hay.len() == needle.len() { 120 } else { 50 };
     }
     score -= (hay.len() as i32) / 6;
     Some(score)
@@ -41,22 +48,22 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
 
 /// `needle` as a subsequence of `hay` beginning at `start`, taken greedily
 /// from there; `None` when the rest of it does not fit.
-fn align(needle: &[char], hay: &[char], start: usize) -> Option<i32> {
+fn align(needle: &[char], hay: &[impl Copy + Into<char>], start: usize) -> Option<i32> {
     let mut qi = 0usize;
     let mut score = 0i32;
     let mut run = 0i32;
     let mut prev_hit = false;
-    for (i, ch) in hay.iter().enumerate().skip(start) {
+    for (i, &ch) in hay.iter().enumerate().skip(start) {
         if qi >= needle.len() {
             break;
         }
-        if *ch != needle[qi] {
+        if ch.into() != needle[qi] {
             prev_hit = false;
             run = 0;
             continue;
         }
         score += 1;
-        let word_start = i == 0 || !hay[i - 1].is_alphanumeric();
+        let word_start = i == 0 || !char::is_alphanumeric(hay[i - 1].into());
         if word_start {
             score += 12;
         }

@@ -1,7 +1,7 @@
 use super::super::test_support::{drain, test_state};
 use super::super::{
-    attach_subscriber, attach_subscriber_with_permissions, fan_out_output, notify,
-    observe_subscriber, record_output,
+    ObserveFeatures, attach_subscriber, attach_subscriber_with_permissions, fan_out_output, notify,
+    observe_subscriber, observe_subscriber_with_features, record_output,
 };
 use super::*;
 use std::path::PathBuf;
@@ -264,6 +264,105 @@ fn attach_to_a_dead_pane_replays_exited() {
     assert!(matches!(
         rx.try_recv(),
         Ok(DaemonMsg::Exited { code: None })
+    ));
+}
+
+#[test]
+fn opted_in_observer_receives_initial_exit_before_the_replay_boundary() {
+    let mut st = test_state(false);
+    st.ring.append(b"final screen");
+    st.exit_code = Some(7);
+    let (tx, rx) = mpsc::channel();
+    observe_subscriber_with_features(
+        &mut st,
+        tx,
+        Arc::new(OutputGate::new()),
+        false,
+        ObserveFeatures {
+            replay_end: true,
+            ..ObserveFeatures::default()
+        },
+    );
+    let frames = drain(&rx);
+    assert!(matches!(
+        frames.as_slice(),
+        [
+            DaemonMsg::Size(_),
+            DaemonMsg::Snapshot(_),
+            DaemonMsg::Progress(None),
+            DaemonMsg::Exited { code: Some(7) },
+            DaemonMsg::ReplayEnd,
+        ]
+    ));
+}
+
+#[test]
+fn text_observer_receives_complete_output_despite_graphics_transport_failure() {
+    use crate::core::kitty_graphics::{Control, Image, WireFormat};
+
+    let mut st = test_state(true);
+    let graphics = st.graphics.as_mut().unwrap();
+    graphics.apply(
+        Control::parse(b"Ga=T,f=32,i=1,s=1,v=1,c=1,r=1").unwrap(),
+        Some(Image {
+            width: 1,
+            height: 1,
+            data: vec![1, 2, 3, 255],
+            format: WireFormat::Rgba,
+            compressed: false,
+        }),
+    );
+    st.ring.append(b"retained text");
+    let (graphics_tx, graphics_rx) = mpsc::channel();
+    observe_subscriber(
+        &mut st,
+        graphics_tx,
+        Arc::new(OutputGate::new()),
+        false,
+        false,
+    );
+    let image = drain(&graphics_rx)
+        .into_iter()
+        .find_map(|msg| match msg {
+            DaemonMsg::Graphics(packet) => Some(packet),
+            _ => None,
+        })
+        .expect("the legacy observer receives retained graphics");
+
+    let (text_tx, text_rx) = mpsc::channel();
+    observe_subscriber_with_features(
+        &mut st,
+        text_tx,
+        Arc::new(OutputGate::new()),
+        false,
+        ObserveFeatures {
+            replay_end: true,
+            ..Default::default()
+        },
+    );
+    assert!(matches!(
+        drain(&text_rx).as_slice(),
+        [DaemonMsg::Size(_), DaemonMsg::Snapshot(text), DaemonMsg::Progress(None), DaemonMsg::ReplayEnd]
+            if text == b"retained text"
+    ));
+
+    fan_out_output(
+        &mut st,
+        b"live text",
+        vec![
+            GraphicsFrame::Graphics(image),
+            GraphicsFrame::TransportFull,
+            GraphicsFrame::Output(b"live text".to_vec()),
+        ],
+        &OutputGate::new(),
+    );
+    assert!(matches!(
+        drain(&text_rx).as_slice(),
+        [DaemonMsg::Output(text)] if text == b"live text"
+    ));
+    assert!(matches!(
+        drain(&graphics_rx).as_slice(),
+        [DaemonMsg::Graphics(_), DaemonMsg::Error(_)]
     ));
 }
 

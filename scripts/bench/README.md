@@ -4,7 +4,9 @@
 用于对比 lyrel 与 Alacritty、Ghostty 和 Kitty 的可复现吞吐量、FPS 和内存基准测试，遵循
 [moktavizen/terminal-benchmark](https://github.com/moktavizen/terminal-benchmark)
 的方法。
-仅支持 macOS（驱动脚本使用 `/Applications` 路径、BSD `ps` 和 `pkill`）。
+吞吐量、帧率和内存的跨终端对比脚本使用 macOS 的 `/Applications` 路径、BSD `ps` 和 `pkill`。
+
+Lyrel 工作台的测量范围、进程计数器与工单见[性能覆盖表](workbench-coverage.md)。单项入口包括 [Windows 回显探针](terminal-echo.md)、[桌面会话恢复](desktop-restore-434.md)、[工作区文件搜索](workspace-search.md)和[结构树与表格编辑](structured-documents.md)。
 
 <a id="what-it-measures"></a>
 ## 测量内容
@@ -89,3 +91,34 @@ fps 的定义保持不变——从火焰开始运行起的总帧数 / 经过的�
 - DOOM-fire 的 FPS 同时受生产端调度、PTY 排空和终端消费影响，不应直接等同于绘制性能。
 - `cat` 的完成时间反映输出排空，不代表所有文字已显示；分析持续吞吐和渲染延迟时须分别测量。
 - lyrel 内存包含 GUI 与守护进程；对比时保持冷启动、空闲时间和配置一致。
+
+## #441 长文档编辑回放（Windows／macOS）
+
+用 `rustc --edition 2024 scripts/bench/document_history_441.rs -o <生成器路径>` 编译夹具生成器，再执行 `<生成器路径> <新的用例目录>`。每轮用不同目录，父目录需已存在。`replace.md` 与 `typing.md` 的原始字节相同，各为 1,048,576 B，含 UTF-8 BOM、CRLF/LF 混合行尾、非 BMP 字符和无末尾换行。用 Windows 的 `fc.exe /b` 或 macOS 的 `cmp` 与 `expected/` 中对应文件逐字节比较。
+
+为当前 Release 候选创建隔离配置和专用 daemon，并关闭 PATH 安装、更新检查和自动下载。通过 `lyrel-app --config-dir <隔离配置目录> --open-path <夹具绝对路径>` 打开首个用例。随后可通过文件侧面板打开同一目录中的其他夹具。保持默认 Markdown 即时编辑、下述键序列、窗口布局、缩放和显示刷新率一致。编辑历史测量时使用英文键盘，系统 IME 验收单独执行。参见[配置隔离说明](../../docs/customization/settings.mdx)。
+
+1. `replace.md` 从第 2 行第 1 列开始，每行选中开头 `a` 并输入一次 `x`。Windows 可先 `Ctrl+G` 输入 `2:1` 确认，随后用 `Shift+Right`、`x`。每次输入显示后，用 `Down`、`Home` 到下一行，再选区、输入。第 2–101 行各改 1 次。只把每次 `x` 到显示正确行的新字形计入输入样本。最后保存并比较 `replace-100.bin`。
+2. 用编辑器的普通 Undo 连续撤销 100 次。每步恢复对应的 `a` 单字符选区，光标在选区末尾。第 50 次和第 100 次分别保存并比较 `replace-050.bin` 和 `original.bin`。再 Redo 100 次，每步变回 `x` 并折叠选区至字后。第 50 次和第 100 次分别保存并比较 `replace-050.bin` 和 `replace-100.bin`。耗尽时再执行对应命令没有效果。
+3. `typing.md` 同样从第 2 行第 1 列开始，无选区。连续发送 100 次单键 `x`，期间不移动光标、不粘贴、不执行其他编辑。每次输入后光标前进一个字符，按已显示的 `x` 数核对帧与输入的对应关系。保存并比较 `typing-100.bin`。一次 Undo 恢复 `original.bin` 和行首光标。一次 Redo 恢复全部输入，光标在最后一个 `x` 后。两次均保存比较。
+4. 在替换完成的 `replace.md` 首行选中 `🎉`，通过实际系统中文 IME 提交“你好”，检查候选、提交后的光标和 `ime-commit.bin`。一次 Undo 恢复原字节和该字符之后的光标。再次选中 `🎉` 并触发预编辑，用 Escape 取消，保存后仍为 `replace-100.bin`。执行 Redo 应能恢复已提交的“你好”。保存、关闭最后一个视图，再重开检查字节和新会话历史。
+
+在保留硬件窗口内交替运行基线和候选。记录提交、构建 profile、硬件、系统、显示、回放命令、固定输入节奏、样本数和轮间波动。每种输入先采空闲，再采已打开文档、编辑期峰值、最后一次输入显示后仍保留历史时的值，随后保存并在关闭最后视图后按同一延迟采样。同一实例用新的夹具副本重复打开、编辑、关闭，记录回落和后续增长。采集 GUI 和 daemon 的进程 CPU、平台内存计数器与适用 GPU 计数器，配合显示事件报告输入 p50/p95 和未匹配样本。分别报告替换与连续输入的保留历史内存增量、事务数和相对打开文档时的增量每事务。验收保存及 IME 过程另记，避开输入采样窗口。
+
+可在预备阶段运行 native 字形消费者，Windows 使用 `pwsh scripts/cargo-windows.ps1 test --release --locked -p lyrel --features native-markdown-tests --test native_markdown -- document_history_441`，macOS 使用同参数的 `cargo test`。它经工作台输入处理器、Undo/Redo、Host 保存和关闭走一遍同一夹具，并断言各事务的选择、光标、精确保存字节及 IME 回调结果。实窗首个正确显示帧、进程计数器、专用 daemon 和系统 IME 以 Release 实窗回放为验收来源。
+
+## CLI capture 与 exec（#436）
+
+在预留机器上的专用测试账户运行。准备对应版本的 Release `lyrel`、`lyrel-server`，以及一份 Release `cli_e2e` 驱动。每轮交替替换待测版本的 CLI 和 server，驱动保持相同。在 Windows 使用 Git Bash 并通过 `scripts/cargo-windows.ps1` 构建和暂存 ConPTY 文件。
+
+```bash
+cargo build --locked --release -p lyrel-cli -p lyrel-server
+cargo test --locked --release -p lyrel-cli --test cli_e2e --no-run
+"$workload_exe" --capture-exec-workload "$revision" "$cli" "$server" "$bash" > "$samples"
+```
+
+`$workload_exe` 取 `cargo test --no-run` 报出的 `cli_e2e` 路径。其余路径分别指向待测 CLI、server 和 Bash。Linux 用上述 headless 入口。在 Windows 或 macOS 的专用桌面会话中，另用相同版本的 `lyrel-app`，在命令末尾加 `--gui "$app"`。测量时保持目标窗格可见、窗口大小固定且没有其他输入。可另跑一轮 `--gui "$app" --inspect`，在计时结束后观察 `verified.last_display_line` 指定的最后一行。
+
+每次命令启动独立 daemon 和窗格并输出一轮 JSONL。`workload` 提供版本、进程 ID、终端几何和负载大小。`sample` 按操作记录 CLI 启动到输出及退出的耗时，成功的 `exec` 还记录到 PTY 命令进程开始的耗时。`verified` 必须出现，表示编号字节序列、完整命令输出、退出状态和同一窗格可继续执行命令均通过。比较时保留原始记录、固定预热次数并报告各操作的样本量、中位数、p95 和波动。资源数据按 daemon、CLI、GUI 和生产进程分别归属。
+
+准备空闲样本时，驱动等到种子命令结束且 Bash 输出下一个完整提示符，再退订准备阶段的观察连接。`seed_prompt.observed_end_to_prompt_ns` 记录观察端收到命令结束到收到提示符末尾的时间，`observed_prompt_wait_after_cli_ns` 记录种子 CLI 返回后余下的等待。二者包括 PTY 和 daemon 的交付时间。`exec_idle` 单独从受测 CLI 进程启动计时。

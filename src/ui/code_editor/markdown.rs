@@ -6,6 +6,8 @@
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod foundation;
 #[cfg(feature = "native-markdown-tests")]
+mod history_441;
+#[cfg(feature = "native-markdown-tests")]
 mod mermaid_host_tests;
 #[cfg(any(test, feature = "native-markdown-tests"))]
 mod resources_tests;
@@ -52,4 +54,8 @@ pub(crate) fn native_cases() -> impl Iterator<Item = crate::native_markdown::Cas
         ])
         .chain(super::saving::native_cases())
         .chain(super::markdown_formula::native_cases())
+        .chain([crate::native_markdown::Case::new(
+            "ui::code_editor::markdown::history_441::document_history_441",
+            history_441::document_history_441,
+        )])
 }

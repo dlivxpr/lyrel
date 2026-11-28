@@ -1,7 +1,7 @@
 //! 共享文档是唯一可编辑权威；presentation 只持有不可变 revision 快照。
 use gpui_kit::{Context, EntityId, EventEmitter, WeakEntity};
 use lyrel_document::text::{EncodeError, LineEnding, TextFormat};
-use std::{ops::Range, sync::Arc};
+use std::{borrow::Cow, ops::Range, sync::Arc};
 
 /// A block of source lines moved within one edit: the source range being
 /// replaced, the line spans to put there, and whether the moved block is
@@ -20,6 +20,17 @@ pub struct SourceSnapshot {
     format: TextFormat,
 }
 impl SourceSnapshot {
+    fn new(text: String, format: TextFormat) -> Self {
+        let (normalized, endings) = normalize_input(&text, LineEnding::Lf);
+        Self {
+            text: Arc::new(match normalized {
+                Cow::Borrowed(_) => text,
+                Cow::Owned(normalized) => normalized,
+            }),
+            endings: Arc::new(endings),
+            format,
+        }
+    }
     pub fn text(&self) -> &str {
         &self.text
     }
@@ -121,21 +132,111 @@ impl DocumentEvent {
     }
 }
 
+struct EndingSplice {
+    row: usize,
+    removed: Box<[LineEnding]>,
+    inserted: Box<[LineEnding]>,
+}
+
+struct SourceSplice {
+    edit: SourceEdit,
+    endings: Option<EndingSplice>,
+}
+
+impl SourceSplice {
+    fn apply(&self, snapshot: &mut SourceSnapshot, reverse: bool) -> SourceEdit {
+        let edit = if reverse {
+            self.edit.inverse()
+        } else {
+            self.edit.clone()
+        };
+        // Representation-only edits share one text fragment for both sides.
+        if !Arc::ptr_eq(&edit.removed, &edit.inserted) {
+            Arc::make_mut(&mut snapshot.text).replace_range(edit.range(), edit.inserted());
+        }
+        if let Some(endings) = &self.endings {
+            let (removed, inserted) = if reverse {
+                (&endings.inserted, &endings.removed)
+            } else {
+                (&endings.removed, &endings.inserted)
+            };
+            Arc::make_mut(&mut snapshot.endings).splice(
+                endings.row..endings.row + removed.len(),
+                inserted.iter().copied(),
+            );
+        }
+        edit
+    }
+}
+
+fn apply_splices(
+    snapshot: &mut Arc<SourceSnapshot>,
+    splices: &[SourceSplice],
+    reverse: bool,
+) -> Vec<SourceEdit> {
+    if splices.is_empty() {
+        return Vec::new();
+    }
+    let snapshot = Arc::make_mut(snapshot);
+    if reverse {
+        splices
+            .iter()
+            .rev()
+            .map(|splice| splice.apply(snapshot, true))
+            .collect()
+    } else {
+        splices
+            .iter()
+            .map(|splice| splice.apply(snapshot, false))
+            .collect()
+    }
+}
+
+struct FormatChange {
+    before: TextFormat,
+    after: TextFormat,
+    // Explicit newline conversion replaces the full representation, never the source text.
+    endings: Option<(Arc<Vec<LineEnding>>, Arc<Vec<LineEnding>>)>,
+}
+
+impl FormatChange {
+    fn apply(&self, snapshot: &mut SourceSnapshot, reverse: bool) {
+        snapshot.format = if reverse { self.before } else { self.after };
+        if let Some((before, after)) = &self.endings {
+            snapshot.endings = Arc::clone(if reverse { before } else { after });
+        }
+    }
+}
+
+enum HistoryChange {
+    Source(Vec<SourceSplice>),
+    Format(FormatChange),
+}
+
+impl HistoryChange {
+    fn apply(&self, snapshot: &mut Arc<SourceSnapshot>, reverse: bool) -> Vec<SourceEdit> {
+        match self {
+            Self::Source(splices) => apply_splices(snapshot, splices, reverse),
+            Self::Format(change) => {
+                change.apply(Arc::make_mut(snapshot), reverse);
+                Vec::new()
+            }
+        }
+    }
+}
+
 struct HistoryEntry {
-    before: Arc<SourceSnapshot>,
-    after: Arc<SourceSnapshot>,
     before_caret: usize,
     after_caret: usize,
     selection: Option<(Range<usize>, Range<usize>)>,
-    edits: Vec<SourceEdit>,
+    change: HistoryChange,
     origin: EntityId,
 }
 struct Composition {
     owner: WeakEntity<crate::EditorState>,
-    before: Arc<SourceSnapshot>,
     before_caret: usize,
     range: Range<usize>,
-    edits: Vec<SourceEdit>,
+    splices: Vec<SourceSplice>,
 }
 
 /// 文档身份、源文、逐行行尾、编码策略、history 与 revision 共同存活。
@@ -143,6 +244,7 @@ struct Composition {
 pub struct Document {
     current: Arc<SourceSnapshot>,
     revision: u64,
+    // The latest undo entry ends at `current` unless a preedit has uncommitted splices.
     undo: Vec<HistoryEntry>,
     redo: Vec<HistoryEntry>,
     composition: Option<Composition>,
@@ -150,13 +252,8 @@ pub struct Document {
 impl EventEmitter<DocumentEvent> for Document {}
 impl Document {
     pub fn new(text: String, format: TextFormat) -> Self {
-        let (text, endings) = normalize_input(&text, LineEnding::Lf);
         Self {
-            current: Arc::new(SourceSnapshot {
-                text: Arc::new(text),
-                endings: Arc::new(endings),
-                format,
-            }),
+            current: Arc::new(SourceSnapshot::new(text, format)),
             revision: 0,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -210,23 +307,26 @@ impl Document {
         caret: usize,
         cx: &mut Context<Self>,
     ) {
-        if self.current.format == format {
+        let before = self.current.format;
+        if before == format {
             return;
         }
-        let before = self.current.clone();
-        let mut after = (*before).clone();
-        if after.format.line_ending != format.line_ending {
-            after.endings = Arc::new(vec![format.line_ending; after.endings.len()]);
-        }
-        after.format = format;
-        self.current = Arc::new(after);
-        self.undo.push(HistoryEntry {
+        let change = FormatChange {
             before,
-            after: self.current.clone(),
+            after: format,
+            endings: (before.line_ending != format.line_ending).then(|| {
+                (
+                    self.current.endings.clone(),
+                    Arc::new(vec![format.line_ending; self.current.endings.len()]),
+                )
+            }),
+        };
+        change.apply(Arc::make_mut(&mut self.current), false);
+        self.undo.push(HistoryEntry {
             before_caret: caret,
             after_caret: caret,
             selection: None,
-            edits: Vec::new(),
+            change: HistoryChange::Format(change),
             origin,
         });
         self.redo.clear();
@@ -234,17 +334,13 @@ impl Document {
     }
     pub fn reload(&mut self, text: String, format: TextFormat, cx: &mut Context<Self>) {
         let old_len = self.source().len();
-        let (text, endings) = normalize_input(&text, LineEnding::Lf);
+        let snapshot = SourceSnapshot::new(text, format);
         let edit = SourceEdit {
             range: 0..old_len,
             removed: self.source().into(),
-            inserted: text.as_str().into(),
+            inserted: snapshot.text().into(),
         };
-        self.current = Arc::new(SourceSnapshot {
-            text: Arc::new(text),
-            endings: Arc::new(endings),
-            format,
-        });
+        self.current = Arc::new(snapshot);
         self.undo.clear();
         self.redo.clear();
         self.composition = None;
@@ -263,29 +359,20 @@ impl Document {
             self.composition.is_none(),
             "composition must be finalized before another command"
         );
-        let before = self.current.clone();
-        let edit = self.splice(range, text);
-        if let Some(edit) = edit {
+        if let Some((splice, edit)) = self.splice(range, text) {
             let after_caret = edit.range.start + edit.inserted.len();
             if coalesce
-                && self.undo.last().is_some_and(|entry| {
-                    !entry.edits.is_empty()
-                        && entry.origin == origin
-                        && Arc::ptr_eq(&entry.after, &before)
-                })
+                && let Some(entry) = self.undo.last_mut().filter(|entry| entry.origin == origin)
+                && let HistoryChange::Source(splices) = &mut entry.change
             {
-                let entry = self.undo.last_mut().unwrap();
-                entry.after = self.current.clone();
                 entry.after_caret = after_caret;
-                entry.edits.push(edit.clone());
+                splices.push(splice);
             } else {
                 self.undo.push(HistoryEntry {
-                    before,
-                    after: self.current.clone(),
                     before_caret,
                     after_caret,
                     selection: None,
-                    edits: vec![edit.clone()],
+                    change: HistoryChange::Source(vec![splice]),
                     origin,
                 });
             }
@@ -313,20 +400,17 @@ impl Document {
             );
             end = range.start;
         }
-        let before = self.current.clone();
-        let edits: Vec<_> = replacements
+        let (splices, edits): (Vec<_>, Vec<_>) = replacements
             .into_iter()
             .filter_map(|(range, text)| self.splice(range, &text))
-            .collect();
+            .unzip();
         if !edits.is_empty() {
             let after_caret = edits.iter().fold(caret, |at, edit| edit.map_offset(at));
             self.undo.push(HistoryEntry {
-                before,
-                after: self.current.clone(),
                 before_caret: caret,
                 after_caret,
                 selection: None,
-                edits: edits.clone(),
+                change: HistoryChange::Source(splices),
                 origin,
             });
             self.redo.clear();
@@ -340,8 +424,7 @@ impl Document {
         cx: &mut Context<Self>,
     ) -> Option<(Arc<SourceSnapshot>, Range<usize>)> {
         let entry = self.undo.pop()?;
-        let edits = entry.edits.iter().rev().map(SourceEdit::inverse).collect();
-        self.current = entry.before.clone();
+        let edits = entry.change.apply(&mut self.current, true);
         let caret = entry
             .selection
             .as_ref()
@@ -358,8 +441,7 @@ impl Document {
         cx: &mut Context<Self>,
     ) -> Option<(Arc<SourceSnapshot>, Range<usize>)> {
         let entry = self.redo.pop()?;
-        let edits = entry.edits.clone();
-        self.current = entry.after.clone();
+        let edits = entry.change.apply(&mut self.current, false);
         let caret = entry
             .selection
             .as_ref()
@@ -382,19 +464,18 @@ impl Document {
         if self.composition.is_none() {
             self.composition = Some(Composition {
                 owner,
-                before: self.current.clone(),
                 before_caret: caret,
                 range: range.clone(),
-                edits: Vec::new(),
+                splices: Vec::new(),
             });
         }
         assert_eq!(self.composition.as_ref().unwrap().owner.entity_id(), origin);
         if text.is_empty() {
             self.finish_composition(origin, true, caret, cx);
-        } else if let Some(edit) = self.splice(range.clone(), text) {
+        } else if let Some((splice, edit)) = self.splice(range.clone(), text) {
             let composition = self.composition.as_mut().unwrap();
             composition.range = range.start..range.start + edit.inserted.len();
-            composition.edits.push(edit.clone());
+            composition.splices.push(splice);
             self.publish(Some(origin), vec![edit], cx);
         }
         self.current.clone()
@@ -411,22 +492,14 @@ impl Document {
         };
         assert_eq!(composition.owner.entity_id(), origin);
         if cancel {
-            self.current = composition.before;
-            let edits = composition
-                .edits
-                .iter()
-                .rev()
-                .map(SourceEdit::inverse)
-                .collect();
+            let edits = apply_splices(&mut self.current, &composition.splices, true);
             self.publish(Some(origin), edits, cx);
-        } else if !composition.edits.is_empty() {
+        } else if !composition.splices.is_empty() {
             self.undo.push(HistoryEntry {
-                before: composition.before,
-                after: self.current.clone(),
                 before_caret: composition.before_caret,
                 after_caret: caret,
                 selection: None,
-                edits: composition.edits,
+                change: HistoryChange::Source(composition.splices),
                 origin,
             });
             self.redo.clear();
@@ -476,16 +549,13 @@ impl Document {
             inserted.pop();
             endings.pop();
         }
-        let before = self.current.clone();
-        if let Some(edit) = self.splice_exact(range, inserted, endings) {
+        if let Some((splice, edit)) = self.splice_exact(range, &inserted, endings) {
             let after_caret = edit.map_offset(caret);
             self.undo.push(HistoryEntry {
-                before,
-                after: self.current.clone(),
                 before_caret: caret,
                 after_caret,
                 selection: None,
-                edits: vec![edit.clone()],
+                change: HistoryChange::Source(vec![splice]),
                 origin,
             });
             self.redo.clear();
@@ -500,11 +570,14 @@ impl Document {
         after: Range<usize>,
         coalesced: bool,
     ) {
-        if let Some(entry) = self
-            .undo
-            .last_mut()
-            .filter(|entry| entry.origin == origin && Arc::ptr_eq(&entry.after, &self.current))
+        if self
+            .composition
+            .as_ref()
+            .is_some_and(|composition| !composition.splices.is_empty())
         {
+            return;
+        }
+        if let Some(entry) = self.undo.last_mut().filter(|entry| entry.origin == origin) {
             let before = if coalesced {
                 entry
                     .selection
@@ -518,43 +591,57 @@ impl Document {
             entry.selection = Some((before, after));
         }
     }
-    fn splice(&mut self, range: Range<usize>, text: &str) -> Option<SourceEdit> {
+    fn splice(&mut self, range: Range<usize>, text: &str) -> Option<(SourceSplice, SourceEdit)> {
         let (inserted, endings) = normalize_input(text, self.current.format.line_ending);
-        self.splice_exact(range, inserted, endings)
+        self.splice_exact(range, &inserted, endings)
     }
     fn splice_exact(
         &mut self,
         range: Range<usize>,
-        inserted: String,
+        inserted: &str,
         endings: Vec<LineEnding>,
-    ) -> Option<SourceEdit> {
+    ) -> Option<(SourceSplice, SourceEdit)> {
         assert!(
             range.start <= range.end
                 && self.source().is_char_boundary(range.start)
                 && self.source().is_char_boundary(range.end)
         );
-        let start_row = self.source()[..range.start]
-            .bytes()
-            .filter(|&b| b == b'\n')
-            .count();
-        let removed_lines = self.source()[range.clone()]
-            .bytes()
-            .filter(|&b| b == b'\n')
-            .count();
-        if self.source()[range.clone()] == inserted
-            && self.current.endings[start_row..start_row + removed_lines] == endings
-        {
+        let removed = &self.source()[range.clone()];
+        let removed_lines = removed.bytes().filter(|&b| b == b'\n').count();
+        let ending_splice = if removed_lines == 0 && endings.is_empty() {
+            None
+        } else {
+            let row = self.source()[..range.start]
+                .bytes()
+                .filter(|&b| b == b'\n')
+                .count();
+            let removed = &self.current.endings[row..row + removed_lines];
+            (removed != endings.as_slice()).then(|| EndingSplice {
+                row,
+                removed: removed.into(),
+                inserted: endings.into_boxed_slice(),
+            })
+        };
+        let text_changed = removed != inserted;
+        if !text_changed && ending_splice.is_none() {
             return None;
         }
-        let removed = Arc::from(&self.source()[range.clone()]);
-        let current = Arc::make_mut(&mut self.current);
-        Arc::make_mut(&mut current.text).replace_range(range.clone(), &inserted);
-        Arc::make_mut(&mut current.endings).splice(start_row..start_row + removed_lines, endings);
-        Some(SourceEdit {
-            range,
-            removed,
-            inserted: inserted.into(),
-        })
+        let removed: Arc<str> = removed.into();
+        let inserted = if text_changed {
+            inserted.into()
+        } else {
+            removed.clone()
+        };
+        let splice = SourceSplice {
+            edit: SourceEdit {
+                range,
+                removed,
+                inserted,
+            },
+            endings: ending_splice,
+        };
+        let edit = splice.apply(Arc::make_mut(&mut self.current), false);
+        Some((splice, edit))
     }
     fn publish(
         &mut self,
@@ -575,7 +662,7 @@ impl Document {
         cx.notify();
     }
 }
-fn normalize_input(text: &str, new_line: LineEnding) -> (String, Vec<LineEnding>) {
+fn normalize_input(text: &str, new_line: LineEnding) -> (Cow<'_, str>, Vec<LineEnding>) {
     let endings = text
         .match_indices('\n')
         .map(|(at, _)| {
@@ -588,9 +675,9 @@ fn normalize_input(text: &str, new_line: LineEnding) -> (String, Vec<LineEnding>
         .collect();
     (
         if text.contains("\r\n") {
-            text.replace("\r\n", "\n")
+            Cow::Owned(text.replace("\r\n", "\n"))
         } else {
-            text.to_owned()
+            Cow::Borrowed(text)
         },
         endings,
     )

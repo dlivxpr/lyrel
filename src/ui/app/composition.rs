@@ -620,7 +620,14 @@ impl LyrelApp {
             .flex_col()
             .bg(window_bg)
             .text_color(cx.theme().foreground)
-            .on_modifiers_changed(cx.listener(Self::on_modifiers_changed));
+            .on_modifiers_changed(cx.listener(Self::on_modifiers_changed))
+            .when(self.workspace_input.is_some(), |root| {
+                root.capture_key_down(cx.listener(Self::capture_workspace_key_down))
+                    .capture_key_up(cx.listener(Self::capture_workspace_key_up))
+                    .capture_any_mouse_down(cx.listener(|this, _, _, _| {
+                        this.workspace_input = None;
+                    }))
+            });
         let root = Self::bind_window_actions(root, cx);
         let root = root
             .children(bg_image)

@@ -221,6 +221,14 @@ pub struct AttachFeatures {
     pub program_status: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ObserveFeatures {
+    pub pane_colors: bool,
+    pub glyph_state: bool,
+    pub program_status: bool,
+    pub replay_end: bool,
+}
+
 /// The launch half of [`DaemonPane::spawn`]: working directory, pty size and
 /// shell selection. Provenance (`owner`, `workspace`) and replay seeding
 /// (`restore`) stay separate spawn parameters.
@@ -596,6 +604,7 @@ impl DaemonPane {
                 glyphs: features.glyph_state,
                 glyph_render: features.glyph_render,
                 program: features.program_status,
+                replay_end: false,
             },
         )
     }
@@ -611,24 +620,24 @@ impl DaemonPane {
         pane_colors: bool,
         glyph_state: bool,
     ) -> Result<Option<u64>, String> {
-        self.observe_admitted_with_colors_glyphs_and_program(
+        self.observe_admitted_with_features(
             subscriber,
             gate,
             admission,
-            pane_colors,
-            glyph_state,
-            false,
+            ObserveFeatures {
+                pane_colors,
+                glyph_state,
+                ..ObserveFeatures::default()
+            },
         )
     }
 
-    pub fn observe_admitted_with_colors_glyphs_and_program(
+    pub fn observe_admitted_with_features(
         &self,
         subscriber: Arc<Sender<DaemonMsg>>,
         gate: Arc<OutputGate>,
         admission: GraphicsReplayAdmission,
-        pane_colors: bool,
-        glyph_state: bool,
-        program_status: bool,
+        features: ObserveFeatures,
     ) -> Result<Option<u64>, String> {
         let foreground = self.backend.foreground_command_running();
         let mut state = self.state.lock().unwrap();
@@ -641,10 +650,11 @@ impl DaemonPane {
             admission,
             SubscriberCaps {
                 foreground,
-                colors: pane_colors,
-                glyphs: glyph_state,
+                colors: features.pane_colors,
+                glyphs: features.glyph_state,
                 glyph_render: false,
-                program: program_status,
+                program: features.program_status,
+                replay_end: features.replay_end,
             },
         )
     }
@@ -1363,28 +1373,27 @@ impl DaemonPane {
         pane_colors: bool,
         glyph_state: bool,
     ) -> u64 {
-        self.observe_with_colors_glyphs_and_program(observer, gate, pane_colors, glyph_state, false)
+        self.observe_with_features(
+            observer,
+            gate,
+            ObserveFeatures {
+                pane_colors,
+                glyph_state,
+                ..ObserveFeatures::default()
+            },
+        )
     }
 
-    pub fn observe_with_colors_glyphs_and_program(
+    pub fn observe_with_features(
         &self,
         observer: Sender<DaemonMsg>,
         gate: Arc<OutputGate>,
-        pane_colors: bool,
-        glyph_state: bool,
-        program_status: bool,
+        features: ObserveFeatures,
     ) -> u64 {
         let foreground_command = self.backend.foreground_command_running();
         let mut st = self.state.lock().unwrap();
-        let id = observe_subscriber_with_features(
-            &mut st,
-            observer,
-            gate,
-            foreground_command,
-            pane_colors,
-            glyph_state,
-            program_status,
-        );
+        let id =
+            observe_subscriber_with_features(&mut st, observer, gate, foreground_command, features);
         let nudge = redraw_nudge(
             &mut st,
             self.runs_foreground_program(foreground_command),
@@ -1930,6 +1939,7 @@ fn attach_subscriber_with_features(
             glyphs: features.glyph_state,
             glyph_render: features.glyph_render,
             program: features.program_status,
+            replay_end: false,
         },
     )
 }
@@ -1947,9 +1957,10 @@ fn observe_subscriber(
         observer,
         gate,
         foreground_command,
-        pane_colors,
-        false,
-        false,
+        ObserveFeatures {
+            pane_colors,
+            ..ObserveFeatures::default()
+        },
     )
 }
 
@@ -1958,9 +1969,7 @@ fn observe_subscriber_with_features(
     observer: impl Into<Arc<Sender<DaemonMsg>>>,
     gate: Arc<OutputGate>,
     foreground_command: bool,
-    pane_colors: bool,
-    glyph_state: bool,
-    program_status: bool,
+    features: ObserveFeatures,
 ) -> u64 {
     let (subscriptions, graphics, replay) = st.subscription_parts();
     subscriptions.observe(
@@ -1970,10 +1979,11 @@ fn observe_subscriber_with_features(
         gate,
         SubscriberCaps {
             foreground: foreground_command,
-            colors: pane_colors,
-            glyphs: glyph_state,
+            colors: features.pane_colors,
+            glyphs: features.glyph_state,
             glyph_render: false,
-            program: program_status,
+            program: features.program_status,
+            replay_end: features.replay_end,
         },
     )
 }
